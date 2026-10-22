@@ -13,6 +13,7 @@ import '@m3e/web/dialog';
 import '@m3e/web/search';
 import '@m3e/web/fab';
 import '@m3e/web/expansion-panel';
+import '@m3e/web/switch';
 import { M3eSnackbar } from '@m3e/web/snackbar';
 import { api, Unauthorized } from './api.js';
 
@@ -61,7 +62,14 @@ const VIEWS = [
   { id: 'trash', label: 'Trash', icon: 'delete' },
 ];
 
-const ACTION_ICONS = { calendar: 'event', reminder: 'alarm', todo: 'check_circle', open_url: 'open_in_new', copy: 'content_copy' };
+const ACTION_ICONS = {
+  calendar: 'event',
+  reminder: 'alarm',
+  todo: 'check_circle',
+  open_url: 'open_in_new',
+  copy: 'content_copy',
+  price_drop: 'trending_down',
+};
 
 function relativeDay(ts) {
   const d = new Date(ts);
@@ -750,6 +758,29 @@ function entityRows(entities) {
     .join('');
 }
 
+/** The page a price watch would check: where it was captured, else the first link found in it. */
+const watchableUrl = (c) =>
+  (/^https?:\/\//.test(c.source_url ?? '') && c.source_url) || (c.entities?.urls ?? []).find((u) => /^https?:\/\//.test(u)) || null;
+
+function priceWatchHtml(c) {
+  const w = c.price_watch;
+  const url = w?.url ?? watchableUrl(c);
+  // Offer it for products, or anything with a price and a link to check.
+  if (!url || !(w || c.kind === 'product' || c.entities?.prices?.length)) return '';
+  const money = (p) => (p == null ? '' : `${w?.currency ? `${w.currency} ` : '$'}${p.toFixed(2)}`);
+  let status = 'Checks the page twice a day and tells you when the price drops.';
+  if (w?.last_error) status = `Last check failed: ${w.last_error}`;
+  else if (w?.last_price != null) {
+    const lowest = w.lowest_price != null && w.lowest_price < w.last_price ? ` · lowest ${money(w.lowest_price)}` : '';
+    const first = w.first_price != null && w.first_price !== w.last_price ? ` · was ${money(w.first_price)}` : '';
+    status = `Now ${money(w.last_price)}${lowest}${first} · checked ${relativeDay(w.last_checked_at).toLowerCase()} ${timeOf(w.last_checked_at)}`;
+  } else if (w) status = 'Watching. First check is on its way.';
+  return `<div class="price-watch">
+  <m3e-switch id="d-watch" ${w ? 'checked' : ''} aria-label="Watch price"></m3e-switch>
+  <div><div class="price-watch-title">${ic('trending_down')}Watch price</div><div class="muted small">${esc(status)}</div></div>
+</div>`;
+}
+
 function renderDetail(c) {
   const busy = c.status === 'pending' || c.status === 'processing';
   const kind = KINDS[c.kind];
@@ -784,6 +815,7 @@ function renderDetail(c) {
         ? `<div class="entity">${ic('public')}<span class="entity-label">Page</span><span><a href="${esc(c.source_url)}" target="_blank" rel="noopener noreferrer">${esc(c.source_url)}</a></span></div>`
         : ''
     }${entityRows(c.entities)}</div>
+    ${priceWatchHtml(c)}
     <div class="detail-collections">
       <span class="entity-label">Collections</span>
       <div class="collection-chips">
@@ -817,6 +849,16 @@ function renderDetail(c) {
   </div>
 </div>`;
 
+  $('d-watch')?.addEventListener('change', async () => {
+    try {
+      const updated = await api.patch(c.id, { watch_price: $('d-watch').checked });
+      c.price_watch = updated.price_watch;
+      toast(c.price_watch ? 'Watching the price' : 'Stopped watching');
+    } catch (err) {
+      toast(err.message);
+    }
+    renderDetail(c);
+  });
   $('d-collections')?.addEventListener('change', () =>
     setCollections(c, [].concat($('d-collections').value ?? [])),
   );
@@ -870,6 +912,7 @@ async function runAction(a) {
   }
   switch (a.type) {
     case 'open_url':
+    case 'price_drop':
       if (/^https?:\/\//.test(p.url)) window.open(p.url, '_blank', 'noopener');
       break;
     case 'copy':

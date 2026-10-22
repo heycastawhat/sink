@@ -92,6 +92,9 @@ Extraction schema (LLM output):
 - `GET /api/health`
 - `POST /api/captures/bulk`: one change (flags, tags, collections) across many captures.
 - `/api/collections` CRUD.
+- Price watch: `PATCH /captures/:id {watch_price}` on products with a link. Server re-checks every
+  `SINK_PRICE_CHECK_HOURS` (12) reading the page's JSON-LD / meta price, refuses LAN/loopback hosts on every redirect
+  hop, and records a `price_drop` action on a drop over 1%. `GET /api/alerts` lists them; the phone notifies once each.
 - `/mcp`: MCP (Streamable HTTP, stateless) for AI assistants, same bearer tokens. Tools: search_captures,
   get_capture (optionally with the image), list_collections, upcoming_reminders, update_capture, create_collection.
   Tokens minted from the web client's "Connect an AI assistant" dialog (`POST /api/auth/tokens`).

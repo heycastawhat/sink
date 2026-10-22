@@ -5,6 +5,7 @@ import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
+import androidx.compose.material.icons.automirrored.outlined.TrendingDown
 import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Category
@@ -42,6 +43,7 @@ fun actionIcon(type: String): ImageVector = when (type) {
     "todo" -> Icons.Outlined.CheckCircle
     "open_url" -> Icons.AutoMirrored.Outlined.OpenInNew
     "copy" -> Icons.Outlined.ContentCopy
+    "price_drop" -> Icons.AutoMirrored.Outlined.TrendingDown
     else -> Icons.Outlined.Bolt
 }
 

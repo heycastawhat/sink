@@ -14,6 +14,7 @@ import { parseExtraction, localIso, utcOffset, type ExtractInput } from "./ai/ex
 import { toFtsQuery } from "./routes/captures";
 import { VectorIndex, fuse, type Embedder } from "./semantic";
 import { Backups } from "./backup";
+import { PriceWatcher, extractPrice, assertPublicUrl } from "./prices";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
 
@@ -520,6 +521,86 @@ describe("mcp", () => {
     expect(res.status).toBe(201);
     const minted = ((await res.json()) as any).token;
     expect((await rpc(minted, "tools/list")).status).toBe(200);
+  });
+});
+
+describe("price watch", () => {
+  const page = (body: string) => `<html><head>${body}</head><body>…</body></html>`;
+
+  test("reads prices from JSON-LD, graphs, aggregate offers, meta and microdata", () => {
+    expect(
+      extractPrice(page(`<script type="application/ld+json">{"@type":"Product","offers":{"@type":"Offer","price":"129.00","priceCurrency":"NZD"}}</script>`)),
+    ).toEqual({ price: 129, currency: "NZD" });
+    expect(
+      extractPrice(
+        page(`<script type="application/ld+json">broken</script><script type="application/ld+json">{"@graph":[{"@type":"WebPage"},{"@type":["Product"],"offers":[{"@type":"AggregateOffer","lowPrice":49.5,"priceCurrency":"AUD"}]}]}</script>`),
+      ),
+    ).toEqual({ price: 49.5, currency: "AUD" });
+    expect(extractPrice(page(`<meta property="product:price:amount" content="1,299.99"><meta property="product:price:currency" content="USD">`))).toEqual({
+      price: 1299.99,
+      currency: "USD",
+    });
+    expect(extractPrice(`<span itemprop="price" content="15.00">$15</span>`)).toEqual({ price: 15, currency: null });
+    expect(extractPrice(page("<title>no price here</title>"))).toBeNull();
+  });
+
+  test("refuses LAN and loopback pages", async () => {
+    for (const url of ["http://192.168.86.245:8787/", "http://127.0.0.1/", "http://10.0.0.1", "http://[::1]/", "file:///etc/passwd"]) {
+      await expect(assertPublicUrl(url)).rejects.toThrow();
+    }
+    expect((await assertPublicUrl("https://93.184.215.14/item")).hostname).toBe("93.184.215.14");
+  });
+
+  test("watch, check, drop becomes an alert; errors and private redirects are recorded", async () => {
+    const token = await login();
+    const send = (path: string, body: unknown) =>
+      setup.app.request(path, {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const plain = ((await (await upload(token, {}, 1)).json()) as any).id;
+    expect((await send(`/api/captures/${plain}`, { watch_price: true })).status).toBe(400);
+
+    const id = ((await (await upload(token, { source_url: "https://shop.example/kettle" }, 2)).json()) as any).id;
+    const watched = (await (await send(`/api/captures/${id}`, { watch_price: true })).json()) as any;
+    expect(watched.price_watch).toMatchObject({ url: "https://shop.example/kettle", last_price: null });
+
+    let price = "100.00";
+    let redirect: string | null = null;
+    const fakeFetch = (async () =>
+      redirect
+        ? new Response(null, { status: 302, headers: { location: redirect } })
+        : new Response(page(`<meta property="product:price:amount" content="${price}"><meta property="product:price:currency" content="NZD">`))) as unknown as typeof fetch;
+    // Pretend shop.example is public; anything else goes through the real check.
+    const checkUrl = async (u: string) => (new URL(u).hostname === "shop.example" ? new URL(u) : assertPublicUrl(u));
+    const watcher = new PriceWatcher(setup.db, 12 * 3600_000, fakeFetch, checkUrl);
+
+    const t0 = Date.now();
+    expect(await watcher.tick(t0)).toBe(1);
+    expect(await watcher.tick(t0 + 1000)).toBe(0); // not due again yet
+    price = "99.50"; // under 1%: not a drop
+    await watcher.tick(t0 + 14 * 3600_000);
+    price = "79.00";
+    await watcher.tick(t0 + 28 * 3600_000);
+
+    const detail = (await (await get(token, `/api/captures/${id}`)).json()) as any;
+    expect(detail.price_watch).toMatchObject({ first_price: 100, last_price: 79, lowest_price: 79, currency: "NZD", last_error: null });
+    expect(detail.price_watch.history.map((h: any) => h.price)).toEqual([100, 99.5, 79]);
+    const drop = detail.actions.find((a: any) => a.type === "price_drop");
+    expect(drop.label).toBe("Price dropped to NZD 79.00 (was NZD 99.50)");
+
+    const alerts = ((await (await get(token, "/api/alerts")).json()) as any).alerts;
+    expect(alerts.map((a: any) => a.id)).toEqual([drop.id]);
+
+    redirect = "http://192.168.1.1/admin";
+    await watcher.tick(t0 + 42 * 3600_000);
+    const blocked = ((await (await get(token, `/api/captures/${id}`)).json()) as any).price_watch;
+    expect(blocked.last_error).toBe("not a public address");
+    expect(blocked.last_price).toBe(79);
+
+    await send(`/api/captures/${id}`, { watch_price: false });
+    expect(((await (await get(token, `/api/captures/${id}`)).json()) as any).price_watch).toBeNull();
   });
 });
 

@@ -7,6 +7,7 @@ import { enqueue } from "../worker";
 import { newId, now } from "../db";
 import { KINDS } from "../ai/extract";
 import { fuse, type VectorIndex } from "../semantic";
+import { watchUrl, type PriceWatch } from "../prices";
 
 type CaptureRow = Record<string, unknown> & {
   id: string;
@@ -23,7 +24,7 @@ const COLUMNS = `c.id, c.created_at, c.updated_at, c.source, c.app_package, c.im
   c.mime, c.width, c.height, c.note_text, c.ocr_text, c.status, c.error, c.kind, c.title, c.summary,
   c.tags, c.entities, c.model, c.pinned, c.reviewed_at, c.archived_at, c.deleted_at, c.source_url`;
 
-function serialize(row: CaptureRow, actions?: ActionRow[], collections?: string[]) {
+function serialize(row: CaptureRow, actions?: ActionRow[], collections?: string[], priceWatch?: object | null) {
   const { image_path, thumb_path, ...rest } = row;
   return {
     ...rest,
@@ -34,6 +35,7 @@ function serialize(row: CaptureRow, actions?: ActionRow[], collections?: string[
     thumb_url: `/api/media/${row.id}/thumb`,
     ...(actions && { actions: actions.map((a) => ({ ...a, payload: JSON.parse(a.payload) })) }),
     ...(collections && { collections }),
+    ...(priceWatch !== undefined && { price_watch: priceWatch }),
   };
 }
 
@@ -74,6 +76,7 @@ const patchBody = z
     deleted: z.boolean(),
     // Full membership: collection ids the capture belongs to after the patch.
     collections: z.array(z.string().max(60)).max(100),
+    watch_price: z.boolean(),
   })
   .partial();
 
@@ -103,8 +106,17 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
       .query<{ collection_id: string }, [string]>("SELECT collection_id FROM capture_collections WHERE capture_id = ?")
       .all(id)
       .map((r) => r.collection_id);
-  // Detail view: capture with its actions and collection ids.
-  const full = (id: string) => serialize(getCapture(id)!, getActions(id), getCollections(id));
+  const getPriceWatch = (id: string) => {
+    const w = db.query<PriceWatch, [string]>("SELECT * FROM price_watches WHERE capture_id = ?").get(id);
+    if (!w) return null;
+    const history = db
+      .query<{ at: number; price: number }, [string]>("SELECT at, price FROM price_points WHERE capture_id = ? ORDER BY at DESC LIMIT 60")
+      .all(id)
+      .reverse();
+    return { ...w, history };
+  };
+  // Detail view: capture with its actions, collection ids and price watch.
+  const full = (id: string) => serialize(getCapture(id)!, getActions(id), getCollections(id), getPriceWatch(id));
 
   app.post("/captures", async (c) => {
     const length = Number(c.req.header("content-length") ?? 0);
@@ -322,7 +334,16 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
         .get(JSON.stringify(ids))!.n;
       if (known !== ids.length) return c.json({ error: "unknown collection" }, 400);
     }
+    const url = b.watch_price ? watchUrl(getCapture(id)!) : null;
+    if (b.watch_price && !url) return c.json({ error: "no link to watch" }, 400);
     db.transaction(() => {
+      if (b.watch_price === false) db.query("DELETE FROM price_watches WHERE capture_id = ?").run(id);
+      if (url) {
+        db.query(
+          `INSERT INTO price_watches (capture_id, url, next_check_at, created_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(capture_id) DO UPDATE SET url = excluded.url`,
+        ).run(id, url, now(), now());
+      }
       if (b.collections !== undefined) {
         db.query("DELETE FROM capture_collections WHERE capture_id = ?").run(id);
         for (const col of new Set(b.collections))
@@ -457,6 +478,19 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
       )
       .all(now());
     return c.json({ reminders: rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) })) });
+  });
+
+  // Things the phone should notify about straight away (price drops), newest first.
+  app.get("/alerts", (c) => {
+    const since = now() - 14 * 24 * 60 * 60 * 1000;
+    const rows = db
+      .query<ActionRow & { capture_title: string | null }, [number]>(
+        `SELECT a.*, c.title AS capture_title FROM actions a JOIN captures c ON c.id = a.capture_id
+         WHERE a.type = 'price_drop' AND a.state = 'suggested' AND a.created_at >= ? AND c.deleted_at IS NULL
+         ORDER BY a.created_at DESC LIMIT 50`,
+      )
+      .all(since);
+    return c.json({ alerts: rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) })) });
   });
 
   app.get("/media/:id/:variant{original|thumb}", async (c) => {

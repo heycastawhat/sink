@@ -42,6 +42,9 @@ export const config = {
   backupDir: join(dataDir, "backups"),
   backupKeep: Number(env("SINK_BACKUP_KEEP", "7")),
 
+  // How often each watched product page is re-checked.
+  priceCheckHours: Number(env("SINK_PRICE_CHECK_HOURS", "12")),
+
   maxUploadBytes: Number(env("SINK_MAX_UPLOAD_MB", "25")) * 1024 * 1024,
 
   ai: {

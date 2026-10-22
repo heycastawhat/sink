@@ -56,9 +56,37 @@ data class Capture(
     val actions: List<Action>? = null,
     /** Collection ids; only on the detail fetch. */
     val collections: List<String>? = null,
+    @SerialName("price_watch") val priceWatch: PriceWatch? = null,
 ) {
     val busy get() = status == "pending" || status == "processing"
 }
+
+@Serializable
+data class PriceWatch(
+    val url: String,
+    val currency: String? = null,
+    @SerialName("first_price") val firstPrice: Double? = null,
+    @SerialName("last_price") val lastPrice: Double? = null,
+    @SerialName("lowest_price") val lowestPrice: Double? = null,
+    @SerialName("last_checked_at") val lastCheckedAt: Long? = null,
+    @SerialName("last_error") val lastError: String? = null,
+) {
+    fun money(p: Double) = "${currency?.let { "$it " } ?: "$"}${"%.2f".format(p)}"
+}
+
+/** Something to notify about now, e.g. a watched price dropping. */
+@Serializable
+data class Alert(
+    val id: String,
+    @SerialName("capture_id") val captureId: String,
+    val type: String,
+    val label: String,
+    val payload: JsonObject = JsonObject(emptyMap()),
+    @SerialName("capture_title") val captureTitle: String? = null,
+)
+
+@Serializable
+private data class AlertList(val alerts: List<Alert>)
 
 @Serializable
 data class SinkCollection(
@@ -190,6 +218,8 @@ class Api(private val session: Session) {
         call(request("/api/collections/$id").patch(jsonBody(buildJsonObject { put("name", name) })).build()) { json.decodeFromString(it) }
 
     suspend fun deleteCollection(id: String) = call(request("/api/collections/$id").delete().build()) { }
+
+    suspend fun alerts(): List<Alert> = call(request("/api/alerts").build()) { json.decodeFromString<AlertList>(it).alerts }
 
     suspend fun reminders(): List<Reminder> =
         call(request("/api/reminders").build()) { json.decodeFromString<ReminderList>(it).reminders }

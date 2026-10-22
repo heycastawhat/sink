@@ -9,6 +9,7 @@ import { LocalEmbedder, VectorIndex } from "./semantic";
 import { join } from "node:path";
 import { createApp } from "./app";
 import { Backups } from "./backup";
+import { PriceWatcher } from "./prices";
 
 const db = openDb(config.dbPath);
 const media = new MediaStore(config.mediaDir);
@@ -26,6 +27,8 @@ const app = createApp({ db, media, auth, oidc, index, provider, config });
 worker.start();
 const backups = new Backups(db, config.backupDir, config.backupKeep);
 backups.start();
+const prices = new PriceWatcher(db, config.priceCheckHours * 60 * 60 * 1000);
+prices.start();
 // Load the embedding model now (downloads once into data/models) so the first search isn't slow.
 index.embedder.embed(["warm up"], "query").catch((err) => console.warn(`[semantic] model load failed: ${err.message}`));
 
@@ -44,6 +47,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     worker.stop();
     backups.stop();
+    prices.stop();
     server.stop();
     db.close();
     process.exit(0);

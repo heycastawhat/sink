@@ -119,6 +119,28 @@ const migrations: string[] = [
   `
   ALTER TABLE captures ADD COLUMN source_url TEXT;
   `,
+  // Price watch: opt-in per product capture, checked on a timer, history kept for the detail view.
+  `
+  CREATE TABLE price_watches (
+    capture_id TEXT PRIMARY KEY REFERENCES captures(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    currency TEXT,
+    first_price REAL,
+    last_price REAL,
+    lowest_price REAL,
+    last_checked_at INTEGER,
+    next_check_at INTEGER NOT NULL,
+    last_error TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX price_watches_due ON price_watches(next_check_at);
+  CREATE TABLE price_points (
+    capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+    at INTEGER NOT NULL,
+    price REAL NOT NULL
+  );
+  CREATE INDEX price_points_capture ON price_points(capture_id, at);
+  `,
 ];
 
 export function openDb(path: string): Database {

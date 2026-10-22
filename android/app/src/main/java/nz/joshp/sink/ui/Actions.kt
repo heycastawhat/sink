@@ -27,7 +27,7 @@ fun runAction(context: Context, action: Action): Boolean {
             Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, p.str("text") ?: action.label),
             "Add to…",
         )
-        "open_url" -> {
+        "open_url", "price_drop" -> {
             val url = p.str("url") ?: return false
             if (!url.startsWith("http://") && !url.startsWith("https://")) return false
             Intent(Intent.ACTION_VIEW, Uri.parse(url))

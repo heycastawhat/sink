@@ -8,11 +8,14 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import nz.joshp.sink.R
+import nz.joshp.sink.data.Alert
 import nz.joshp.sink.data.Reminder
+import nz.joshp.sink.data.str
 import nz.joshp.sink.ui.MainActivity
 import java.text.DateFormat
 import java.util.Date
@@ -24,6 +27,7 @@ import java.util.Date
 object Reminders {
     const val CHANNEL_OFFERS = "reminder_offers"
     const val CHANNEL_DUE = "reminders_due"
+    const val CHANNEL_ALERTS = "price_drops"
 
     // Alarms fire within this window after the due time. Inexact alarms need no special permission.
     private const val WINDOW_MS = 5 * 60 * 1000L
@@ -38,6 +42,11 @@ object Reminders {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_DUE, "Reminders", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Reminders you set from screenshots"
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ALERTS, "Price drops", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "A product you're watching got cheaper"
             },
         )
     }
@@ -113,6 +122,30 @@ object Reminders {
             .addAction(0, "Snooze 1h", receiverIntent(context, ReminderReceiver.ACTION_SNOOZE, r))
             .build()
         NotificationManagerCompat.from(context).notify(notificationId(r.id), n)
+    }
+
+    /** A watched price dropped: tap opens the shop page, the action opens the capture. */
+    fun alert(context: Context, a: Alert) {
+        if (!canNotify(context)) return
+        val id = notificationId(a.id)
+        val url = a.payload.str("url")?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+        val tap = url?.let {
+            PendingIntent.getActivity(
+                context,
+                id,
+                Intent(Intent.ACTION_VIEW, Uri.parse(it)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+        } ?: openCapture(context, a.captureId, id)
+        val n = NotificationCompat.Builder(context, CHANNEL_ALERTS)
+            .setSmallIcon(R.drawable.ic_tile)
+            .setContentTitle(a.label)
+            .setContentText(a.captureTitle ?: "A product you're watching in Sink")
+            .setContentIntent(tap)
+            .setAutoCancel(true)
+            .addAction(0, "Open in Sink", openCapture(context, a.captureId, id + 1))
+            .build()
+        NotificationManagerCompat.from(context).notify(id, n)
     }
 
     fun dismiss(context: Context, actionId: String) {

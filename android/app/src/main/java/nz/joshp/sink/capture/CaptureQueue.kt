@@ -1,6 +1,5 @@
 package nz.joshp.sink.capture
 
-import nz.joshp.sink.widget.SinkWidget
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
@@ -28,6 +27,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import nz.joshp.sink.reminders.ReminderSync
+import nz.joshp.sink.widget.SinkWidget
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException

@@ -638,6 +638,22 @@ main {
   padding-top: 8px;
 }
 
+.price-watch {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.price-watch-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
 .detail-collections {
   display: flex;
   flex-direction: column;

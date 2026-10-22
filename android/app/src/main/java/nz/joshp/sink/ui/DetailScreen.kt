@@ -27,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Label
+import androidx.compose.material.icons.automirrored.outlined.TrendingDown
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.AlarmOn
 import androidx.compose.material.icons.outlined.Archive
@@ -61,6 +62,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -280,6 +282,16 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                     }
                 }
 
+                full?.let { f ->
+                    PriceWatchRow(f) { on ->
+                        scope.launch {
+                            val updated = vm.patch(f.id, buildJsonObject { put("watch_price", on) })
+                            if (updated != null) full = updated
+                            else snackbar.showSnackbar("Couldn't change the price watch")
+                        }
+                    }
+                }
+
                 CollectionPicker(vm, listState.collections, full?.collections.orEmpty()) { ids ->
                     scope.launch {
                         val updated = vm.setCollections(c.id, ids)
@@ -387,4 +399,38 @@ private fun StatusBanner(icon: ImageVector?, text: String, error: Boolean) {
         }
     }
     Spacer(Modifier.height(0.dp))
+}
+
+/** The page a price watch checks: where it was captured, else the first link found in it. */
+private fun watchableUrl(c: Capture): String? =
+    c.sourceUrl?.takeIf { it.startsWith("http") } ?: c.entities["urls"].orEmpty().firstOrNull { it.startsWith("http") }
+
+@Composable
+private fun PriceWatchRow(c: Capture, onToggle: (Boolean) -> Unit) {
+    val w = c.priceWatch
+    // Offered for products, or anything with a price and a link to check.
+    if (watchableUrl(c) == null || !(w != null || c.kind == "product" || c.entities["prices"].orEmpty().isNotEmpty())) return
+    val status = when {
+        w == null -> "Checks the page twice a day and tells you when the price drops."
+        w.lastError != null -> "Last check failed: ${w.lastError}"
+        w.lastPrice != null -> buildString {
+            append("Now ${w.money(w.lastPrice)}")
+            w.lowestPrice?.takeIf { it < w.lastPrice }?.let { append(" · lowest ${w.money(it)}") }
+            w.firstPrice?.takeIf { it != w.lastPrice }?.let { append(" · was ${w.money(it)}") }
+            w.lastCheckedAt?.let { append(" · checked ${relativeDay(it).lowercase()} ${timeOf(it)}") }
+        }
+        else -> "Watching. First check is on its way."
+    }
+    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.AutoMirrored.Outlined.TrendingDown, null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Watch price", style = MaterialTheme.typography.titleSmall)
+                Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(checked = w != null, onCheckedChange = onToggle)
+        }
+    }
 }
