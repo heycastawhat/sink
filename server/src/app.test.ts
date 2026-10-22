@@ -347,6 +347,55 @@ describe("captures", () => {
   });
 });
 
+describe("collections", () => {
+  const send = (token: string, method: string, path: string, body?: unknown) =>
+    setup.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  test("create, rename, file captures, filter, count, delete", async () => {
+    const token = await login();
+    const a = ((await (await upload(token, {}, 1)).json()) as any).id;
+    const b = ((await (await upload(token, {}, 2)).json()) as any).id;
+
+    const created = await send(token, "POST", "/api/collections", { name: " Trip " });
+    expect(created.status).toBe(201);
+    const trip = (await created.json()) as any;
+    expect(trip).toMatchObject({ name: "Trip", count: 0, cover_url: null });
+    expect((await send(token, "POST", "/api/collections", { name: "trip" })).status).toBe(409);
+    expect((await send(token, "POST", "/api/collections", { name: "" })).status).toBe(400);
+    const gifts = (await (await send(token, "POST", "/api/collections", { name: "Gifts" })).json()) as any;
+
+    const patched = (await (await send(token, "PATCH", `/api/captures/${a}`, { collections: [trip.id, gifts.id] })).json()) as any;
+    expect(patched.collections.sort()).toEqual([trip.id, gifts.id].sort());
+    await send(token, "PATCH", `/api/captures/${b}`, { collections: [trip.id] });
+    expect((await send(token, "PATCH", `/api/captures/${b}`, { collections: ["nope"] })).status).toBe(400);
+    expect(((await (await get(token, `/api/captures/${b}`)).json()) as any).collections).toEqual([trip.id]);
+
+    const inTrip = (await (await get(token, `/api/captures?collection=${trip.id}`)).json()) as any;
+    expect(inTrip.items.map((i: any) => i.id).sort()).toEqual([a, b].sort());
+    const inGifts = (await (await get(token, `/api/captures?collection=${gifts.id}`)).json()) as any;
+    expect(inGifts.items.map((i: any) => i.id)).toEqual([a]);
+
+    // Trashed captures drop out of counts.
+    await send(token, "PATCH", `/api/captures/${b}`, { deleted: true });
+    let list = ((await (await get(token, "/api/collections")).json()) as any).collections;
+    expect(list.map((c: any) => [c.name, c.count])).toEqual([["Gifts", 1], ["Trip", 1]]);
+    expect(list[1].cover_url).toBe(`/api/media/${a}/thumb`);
+
+    expect((await send(token, "PATCH", `/api/collections/${trip.id}`, { name: "gifts" })).status).toBe(409);
+    expect(((await (await send(token, "PATCH", `/api/collections/${trip.id}`, { name: "Japan" })).json()) as any).name).toBe("Japan");
+
+    expect((await send(token, "DELETE", `/api/collections/${gifts.id}`)).status).toBe(200);
+    expect((await send(token, "DELETE", `/api/collections/${gifts.id}`)).status).toBe(404);
+    expect(((await (await get(token, `/api/captures/${a}`)).json()) as any).collections).toEqual([trip.id]);
+    list = ((await (await get(token, "/api/collections")).json()) as any).collections;
+    expect(list.map((c: any) => c.name)).toEqual(["Japan"]);
+  });
+});
+
 describe("reminders", () => {
   test("future reminders are listed, accepted and snoozed; past ones are not", async () => {
     const token = await login();

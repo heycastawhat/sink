@@ -280,6 +280,14 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                     }
                 }
 
+                CollectionPicker(vm, listState.collections, full?.collections.orEmpty()) { ids ->
+                    scope.launch {
+                        val updated = vm.setCollections(c.id, ids)
+                        if (updated != null) full = full?.copy(collections = updated.collections)
+                        else snackbar.showSnackbar("Couldn't update collections")
+                    }
+                }
+
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },

@@ -66,6 +66,8 @@ const timeOf = (ts) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numer
 const state = {
   view: 'all',
   kind: '',
+  collection: '',
+  collections: [],
   q: '',
   items: [],
   cursor: null,
@@ -95,6 +97,7 @@ function showLogin() {
 function showApp() {
   $('login').hidden = true;
   $('app').hidden = false;
+  loadCollections();
   reload();
 }
 
@@ -151,9 +154,83 @@ $('kinds').innerHTML = Object.entries(KINDS)
   .join('');
 
 $('kinds').addEventListener('change', () => {
-  const selected = $('kinds').querySelector('m3e-filter-chip[selected]');
-  state.kind = selected?.getAttribute('value') ?? '';
+  // `selected` attributes reflect a render late; the set's value is current.
+  state.kind = $('kinds').value ?? '';
   reload();
+});
+
+// ---------- collections ----------
+
+async function loadCollections() {
+  try {
+    state.collections = (await api.collections()).collections;
+  } catch (err) {
+    if (err instanceof Unauthorized) return showLogin();
+    return toast(err.message);
+  }
+  // The open filter may have been deleted elsewhere.
+  if (state.collection && !state.collections.some((c) => c.id === state.collection)) {
+    state.collection = '';
+    reload();
+  }
+  renderCollections();
+}
+
+function renderCollections() {
+  $('collections').innerHTML = state.collections
+    .map(
+      (c) =>
+        `<m3e-filter-chip value="${esc(c.id)}"${c.id === state.collection ? ' selected' : ''}>${ic('folder', 'icon')}${esc(c.name)}<span class="chip-count">${c.count}</span></m3e-filter-chip>`,
+    )
+    .join('');
+  $('collections').hidden = !state.collections.length;
+  $('collection-rename').hidden = $('collection-delete').hidden = !state.collection;
+}
+
+async function newCollection() {
+  const name = prompt('Name the collection')?.trim();
+  if (!name) return null;
+  try {
+    const created = await api.createCollection(name);
+    await loadCollections();
+    return created;
+  } catch (err) {
+    toast(err.message === 'name taken' ? `“${name}” already exists` : err.message);
+    return null;
+  }
+}
+
+$('collections').addEventListener('change', () => {
+  state.collection = $('collections').value ?? '';
+  $('collection-rename').hidden = $('collection-delete').hidden = !state.collection;
+  reload();
+});
+
+$('collection-new').addEventListener('click', newCollection);
+
+$('collection-rename').addEventListener('click', async () => {
+  const current = state.collections.find((c) => c.id === state.collection);
+  if (!current) return;
+  const name = prompt('Rename collection', current.name)?.trim();
+  if (!name || name === current.name) return;
+  try {
+    await api.renameCollection(current.id, name);
+    await loadCollections();
+  } catch (err) {
+    toast(err.message === 'name taken' ? `“${name}” already exists` : err.message);
+  }
+});
+
+$('collection-delete').addEventListener('click', async () => {
+  const current = state.collections.find((c) => c.id === state.collection);
+  if (!current || !confirm(`Delete “${current.name}”? The captures in it stay in the sink.`)) return;
+  try {
+    await api.deleteCollection(current.id);
+    toast('Collection deleted');
+    await loadCollections();
+  } catch (err) {
+    toast(err.message);
+  }
 });
 
 let searchTimer;
@@ -184,7 +261,7 @@ function reload() {
   state.done = false;
   $('grid').innerHTML = '';
   $('digest').hidden = state.view !== 'digest';
-  $('kinds').hidden = state.view === 'digest';
+  $('kinds').hidden = $('collections-bar').hidden = state.view === 'digest';
   if (state.view === 'digest') loadDigest();
   else loadMore();
 }
@@ -195,7 +272,7 @@ async function loadMore() {
   $('loading').hidden = false;
   const gen = state.generation;
   try {
-    const res = await api.list({ q: state.q, kind: state.kind, view: state.view, cursor: state.cursor });
+    const res = await api.list({ q: state.q, kind: state.kind, collection: state.collection, view: state.view, cursor: state.cursor });
     if (gen !== state.generation) return;
     state.items.push(...res.items);
     state.cursor = res.next_cursor;
@@ -265,7 +342,9 @@ function renderGrid() {
   if (empty) {
     const [title, body] = state.q
       ? ['Nothing matches', `No luck for “${state.q}”. Try fewer words.`]
-      : state.view === 'trash'
+      : state.collection
+        ? ['Nothing in here yet', 'Open a capture and file it into this collection.']
+        : state.view === 'trash'
         ? ['Trash is empty', 'Deleted things land here first.']
         : state.view === 'archived'
           ? ['Archive is empty', 'Archive things you are done with but want to keep.']
@@ -478,6 +557,22 @@ function renderDetail(c) {
         ? `<div class="entity">${ic('public')}<span class="entity-label">Page</span><span><a href="${esc(c.source_url)}" target="_blank" rel="noopener noreferrer">${esc(c.source_url)}</a></span></div>`
         : ''
     }${entityRows(c.entities)}</div>
+    <div class="detail-collections">
+      <span class="entity-label">Collections</span>
+      <div class="collection-chips">
+        ${
+          state.collections.length
+            ? `<m3e-filter-chip-set id="d-collections" multi aria-label="Collections">${state.collections
+                .map(
+                  (col) =>
+                    `<m3e-filter-chip value="${esc(col.id)}"${c.collections?.includes(col.id) ? ' selected' : ''}>${esc(col.name)}</m3e-filter-chip>`,
+                )
+                .join('')}</m3e-filter-chip-set>`
+            : ''
+        }
+        <m3e-assist-chip id="d-collection-new">${ic('add', 'icon')}New</m3e-assist-chip>
+      </div>
+    </div>
     <m3e-form-field variant="outlined" class="full">
       <label slot="label" for="d-note">Your note</label>
       <textarea id="d-note" rows="2">${esc(c.note_text ?? '')}</textarea>
@@ -494,6 +589,15 @@ function renderDetail(c) {
     ${c.model ? `<p class="muted small">Read by ${esc(c.model)}</p>` : ''}
   </div>
 </div>`;
+
+  $('d-collections')?.addEventListener('change', () =>
+    setCollections(c, [].concat($('d-collections').value ?? [])),
+  );
+  $('d-collection-new').addEventListener('click', async () => {
+    const created = await newCollection();
+    if (created) await setCollections(c, [...(c.collections ?? []), created.id]);
+    renderDetail(c);
+  });
 
   const trashed = c.deleted_at != null;
   $('detail-actions').innerHTML = trashed
@@ -513,6 +617,19 @@ $('detail-body').addEventListener('click', async (e) => {
   const action = state.current.actions.find((a) => a.id === chip.dataset.action);
   if (action) await runAction(action);
 });
+
+async function setCollections(c, ids) {
+  try {
+    const updated = await api.patch(c.id, { collections: ids });
+    c.collections = updated.collections;
+    loadCollections();
+    // Filed out of the collection being browsed.
+    if (state.collection && !c.collections.includes(state.collection)) removeItem(c.id);
+  } catch (err) {
+    toast(`Couldn't update collections: ${err.message}`);
+    renderDetail(c);
+  }
+}
 
 async function runAction(a) {
   const p = a.payload ?? {};
@@ -641,8 +758,12 @@ async function doUpload() {
   let ok = 0;
   for (const f of files) {
     try {
-      const created = await api.upload(f, note);
+      let created = await api.upload(f, note);
       ok++;
+      // Stashing while browsing a collection files it there.
+      if (state.collection && !created.collections?.includes(state.collection)) {
+        created = await api.patch(created.id, { collections: [...(created.collections ?? []), state.collection] });
+      }
       if (state.view === 'all' && !state.q && !state.kind) {
         state.items.unshift(created);
         renderGrid();
@@ -651,6 +772,7 @@ async function doUpload() {
       toast(`${f.name}: ${err.message}`);
     }
   }
+  if (ok && state.collection) loadCollections();
   if (ok) toast(ok === 1 ? 'Stashed. AI is reading it.' : `Stashed ${ok}. AI is reading them.`);
 }
 

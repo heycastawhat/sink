@@ -4,6 +4,7 @@ import { serveStatic } from "hono/bun";
 import { secureHeaders } from "hono/secure-headers";
 import { Auth, authRoutes, requireAuth, type AuthEnv } from "./auth";
 import { captureRoutes } from "./routes/captures";
+import { collectionRoutes } from "./routes/collections";
 import type { MediaStore } from "./media";
 import type { Provider } from "./ai/provider";
 import type { Config } from "./config";
@@ -34,6 +35,7 @@ export function createApp(deps: {
   const api = new Hono<AuthEnv>();
   api.use("*", requireAuth(auth));
   api.route("/", captureRoutes(db, media, config.maxUploadBytes, index));
+  api.route("/", collectionRoutes(db));
   app.route("/api", api);
 
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));

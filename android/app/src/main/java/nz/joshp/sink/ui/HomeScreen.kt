@@ -187,6 +187,8 @@ fun HomeScreen(vm: SinkViewModel, serverUrl: String, onOpen: (String) -> Unit, o
                 }
             }
 
+            CollectionsRow(vm, state.collections, state.collection)
+
             AnimatedVisibility(uploading > 0) {
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -212,6 +214,7 @@ fun HomeScreen(vm: SinkViewModel, serverUrl: String, onOpen: (String) -> Unit, o
                     state.items.isEmpty() && state.done -> EmptyState(
                         when {
                             state.query.isNotBlank() -> "Nothing matches"
+                            state.collection != null -> "Nothing in here yet"
                             state.view == View.Trash -> "Trash is empty"
                             state.view == View.Archived -> "Archive is empty"
                             state.view == View.Pinned -> "No pins yet"
@@ -219,6 +222,7 @@ fun HomeScreen(vm: SinkViewModel, serverUrl: String, onOpen: (String) -> Unit, o
                         },
                         when {
                             state.query.isNotBlank() -> "Try fewer words."
+                            state.collection != null -> "Open a capture and file it into this collection."
                             state.view == View.All -> "Take a screenshot, or share any image to Sink."
                             else -> ""
                         },

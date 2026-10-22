@@ -32,6 +32,11 @@ export const api = {
   reminders: () => request('/reminders'),
   digest: () => request('/digest'),
 
+  collections: () => request('/collections'),
+  createCollection: (name) => request('/collections', json('POST', { name })),
+  renameCollection: (id, name) => request(`/collections/${id}`, json('PATCH', { name })),
+  deleteCollection: (id) => request(`/collections/${id}`, { method: 'DELETE' }),
+
   upload: (file, note) => {
     const form = new FormData();
     form.set('image', file);

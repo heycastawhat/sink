@@ -23,7 +23,7 @@ const COLUMNS = `c.id, c.created_at, c.updated_at, c.source, c.app_package, c.im
   c.mime, c.width, c.height, c.note_text, c.ocr_text, c.status, c.error, c.kind, c.title, c.summary,
   c.tags, c.entities, c.model, c.pinned, c.reviewed_at, c.archived_at, c.deleted_at, c.source_url`;
 
-function serialize(row: CaptureRow, actions?: ActionRow[]) {
+function serialize(row: CaptureRow, actions?: ActionRow[], collections?: string[]) {
   const { image_path, thumb_path, ...rest } = row;
   return {
     ...rest,
@@ -33,6 +33,7 @@ function serialize(row: CaptureRow, actions?: ActionRow[]) {
     image_url: `/api/media/${row.id}/original`,
     thumb_url: `/api/media/${row.id}/thumb`,
     ...(actions && { actions: actions.map((a) => ({ ...a, payload: JSON.parse(a.payload) })) }),
+    ...(collections && { collections }),
   };
 }
 
@@ -71,6 +72,8 @@ const patchBody = z
     reviewed: z.boolean(),
     archived: z.boolean(),
     deleted: z.boolean(),
+    // Full membership: collection ids the capture belongs to after the patch.
+    collections: z.array(z.string().max(60)).max(100),
   })
   .partial();
 
@@ -95,6 +98,13 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
     db
       .query<ActionRow, [string]>("SELECT * FROM actions WHERE capture_id = ? ORDER BY created_at")
       .all(id);
+  const getCollections = (id: string) =>
+    db
+      .query<{ collection_id: string }, [string]>("SELECT collection_id FROM capture_collections WHERE capture_id = ?")
+      .all(id)
+      .map((r) => r.collection_id);
+  // Detail view: capture with its actions and collection ids.
+  const full = (id: string) => serialize(getCapture(id)!, getActions(id), getCollections(id));
 
   app.post("/captures", async (c) => {
     const length = Number(c.req.header("content-length") ?? 0);
@@ -117,7 +127,7 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
       const existing = db
         .query<{ id: string }, [string]>("SELECT id FROM captures WHERE client_id = ?")
         .get(f.client_id);
-      if (existing) return c.json(serialize(getCapture(existing.id)!, getActions(existing.id)), 200);
+      if (existing) return c.json(full(existing.id), 200);
     }
 
     const bytes = new Uint8Array(await image.arrayBuffer());
@@ -135,7 +145,7 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
         // The note changes what the AI should make of it.
         enqueue(db, duplicate.id);
       }
-      return c.json(serialize(getCapture(duplicate.id)!, getActions(duplicate.id)), 200);
+      return c.json(full(duplicate.id), 200);
     }
 
     const id = newId();
@@ -174,7 +184,7 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
       enqueue(db, id);
     })();
 
-    return c.json(serialize(getCapture(id)!, []), 201);
+    return c.json(serialize(getCapture(id)!, [], []), 201);
   });
 
   app.get("/captures", async (c) => {
@@ -279,7 +289,7 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
   app.get("/captures/:id", (c) => {
     const row = getCapture(c.req.param("id"));
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.json(serialize(row, getActions(row.id)));
+    return c.json(full(row.id));
   });
 
   app.patch("/captures/:id", async (c) => {
@@ -305,12 +315,26 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
     if (b.reviewed !== undefined) set("reviewed_at", stamp(b.reviewed));
     if (b.archived !== undefined) set("archived_at", stamp(b.archived));
     if (b.deleted !== undefined) set("deleted_at", stamp(b.deleted));
-    if (sets.length) {
-      set("updated_at", now());
-      db.query(`UPDATE captures SET ${sets.join(", ")} WHERE id = ?`).run(...params, id);
-      if (index && (b.title !== undefined || b.note_text !== undefined || b.tags !== undefined)) enqueue(db, id, "embed");
+    if (b.collections !== undefined) {
+      const ids = [...new Set(b.collections)];
+      const known = db
+        .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM collections WHERE id IN (SELECT value FROM json_each(?))")
+        .get(JSON.stringify(ids))!.n;
+      if (known !== ids.length) return c.json({ error: "unknown collection" }, 400);
     }
-    return c.json(serialize(getCapture(id)!, getActions(id)));
+    db.transaction(() => {
+      if (b.collections !== undefined) {
+        db.query("DELETE FROM capture_collections WHERE capture_id = ?").run(id);
+        for (const col of new Set(b.collections))
+          db.query("INSERT INTO capture_collections (capture_id, collection_id) VALUES (?, ?)").run(id, col);
+      }
+      if (sets.length) {
+        set("updated_at", now());
+        db.query(`UPDATE captures SET ${sets.join(", ")} WHERE id = ?`).run(...params, id);
+      }
+    })();
+    if (index && (b.title !== undefined || b.note_text !== undefined || b.tags !== undefined)) enqueue(db, id, "embed");
+    return c.json(full(id));
   });
 
   // Soft delete goes through PATCH {deleted: true}; this is the permanent purge from trash.
@@ -327,7 +351,7 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
     const id = c.req.param("id");
     if (!getCapture(id)) return c.json({ error: "not found" }, 404);
     enqueue(db, id);
-    return c.json(serialize(getCapture(id)!, getActions(id)), 202);
+    return c.json(full(id), 202);
   });
 
   app.patch("/actions/:id", async (c) => {

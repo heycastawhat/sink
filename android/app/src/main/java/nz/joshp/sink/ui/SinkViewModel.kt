@@ -15,12 +15,16 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import nz.joshp.sink.SinkApp
 import nz.joshp.sink.capture.UPLOAD_TAG
 import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.Capture
+import nz.joshp.sink.data.SinkCollection
 
 enum class View(val id: String, val label: String) {
     All("all", "Sink"),
@@ -32,6 +36,8 @@ enum class View(val id: String, val label: String) {
 data class SinkState(
     val view: View = View.All,
     val kind: String? = null,
+    val collection: String? = null,
+    val collections: List<SinkCollection> = emptyList(),
     val query: String = "",
     val items: List<Capture> = emptyList(),
     val cursor: String? = null,
@@ -60,6 +66,7 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         reload()
+        loadCollections()
         // When the queue drains, new captures exist on the server.
         viewModelScope.launch {
             uploading.collect { n ->
@@ -78,6 +85,11 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setKind(kind: String?) {
         _state.update { it.copy(kind = if (it.kind == kind) null else kind) }
+        reload()
+    }
+
+    fun setCollection(id: String?) {
+        _state.update { it.copy(collection = if (it.collection == id) null else id) }
         reload()
     }
 
@@ -110,7 +122,7 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value
         _state.update { it.copy(loading = true) }
         try {
-            val page = api.list(s.query, s.kind, s.view.id, if (reset) null else s.cursor)
+            val page = api.list(s.query, s.kind, s.collection, s.view.id, if (reset) null else s.cursor)
             _state.update {
                 it.copy(
                     items = if (reset) page.items else it.items + page.items,
@@ -153,6 +165,47 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
 
     fun remove(id: String) {
         _state.update { s -> s.copy(items = s.items.filterNot { it.id == id }) }
+    }
+
+    // ---- collections ----
+
+    fun loadCollections() {
+        viewModelScope.launch {
+            val list = runCatching { api()?.collections() }.getOrNull() ?: return@launch
+            val gone = _state.value.collection?.let { id -> list.none { it.id == id } } == true
+            _state.update { it.copy(collections = list, collection = if (gone) null else it.collection) }
+            if (gone) reload()
+        }
+    }
+
+    suspend fun createCollection(name: String): Result<SinkCollection> = collectionCall {
+        it.createCollection(name).also { loadCollections() }
+    }
+
+    suspend fun renameCollection(id: String, name: String): Result<SinkCollection> = collectionCall {
+        it.renameCollection(id, name).also { loadCollections() }
+    }
+
+    suspend fun deleteCollection(id: String): Result<Unit> = collectionCall {
+        it.deleteCollection(id)
+        loadCollections()
+    }
+
+    private suspend fun <T> collectionCall(block: suspend (Api) -> T): Result<T> {
+        val api = api() ?: return Result.failure(IllegalStateException("Signed out"))
+        return runCatching { block(api) }.recoverCatching { e ->
+            throw if (e is ApiException && e.code == 409) IllegalArgumentException("That name's taken") else e
+        }
+    }
+
+    /** Sets the full membership; drops the card if it left the collection being browsed. */
+    suspend fun setCollections(id: String, ids: List<String>): Capture? {
+        val body = buildJsonObject { put("collections", JsonArray(ids.map(::JsonPrimitive))) }
+        val updated = runCatching { api()?.patch(id, body) }.getOrNull() ?: return null
+        replace(updated)
+        _state.value.collection?.let { if (it !in updated.collections.orEmpty()) remove(id) }
+        loadCollections()
+        return updated
     }
 
     // ---- detail ----

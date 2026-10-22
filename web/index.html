@@ -53,6 +53,16 @@
         <nav class="filters">
           <m3e-button-group id="views" variant="connected" size="small"></m3e-button-group>
           <m3e-filter-chip-set id="kinds" aria-label="Kind"></m3e-filter-chip-set>
+          <div id="collections-bar" class="collections-bar">
+            <m3e-filter-chip-set id="collections" aria-label="Collection"></m3e-filter-chip-set>
+            <m3e-icon-button id="collection-rename" hidden aria-label="Rename collection">
+              <m3e-icon name="edit"></m3e-icon>
+            </m3e-icon-button>
+            <m3e-icon-button id="collection-delete" hidden aria-label="Delete collection">
+              <m3e-icon name="delete"></m3e-icon>
+            </m3e-icon-button>
+            <m3e-assist-chip id="collection-new"><m3e-icon slot="icon" name="create_new_folder"></m3e-icon>New collection</m3e-assist-chip>
+          </div>
         </nav>
 
         <main>
