@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sink</title>
+    <meta name="theme-color" content="#6750A4" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wdth,wght@8..144,25..151,100..1000&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <m3e-theme id="theme" color="#6750A4" variant="tonal-spot" motion="expressive" scheme="auto">
+      <!-- Login -->
+      <section id="login" class="login" hidden>
+        <div class="login-card">
+          <m3e-shape name="7-sided-cookie" class="login-logo"></m3e-shape>
+          <m3e-heading variant="headline" size="medium">Sink</m3e-heading>
+          <p class="muted">Everything but the kitchen sink. Well, including it.</p>
+          <p id="login-error" class="error" hidden></p>
+          <m3e-button id="login-submit" variant="filled" size="medium">
+            <m3e-icon slot="icon" name="key"></m3e-icon>Sign in with authentik
+          </m3e-button>
+        </div>
+      </section>
+
+      <!-- App -->
+      <div id="app" hidden>
+        <header class="topbar">
+          <a class="brand" href="#">
+            <m3e-shape id="logo" name="7-sided-cookie"></m3e-shape>
+            <span><b>Sink</b></span>
+          </a>
+          <m3e-search-bar class="search" clearable>
+            <m3e-icon name="search" slot="leading"></m3e-icon>
+            <input id="search" slot="input" placeholder="Search the sink" aria-label="Search" />
+          </m3e-search-bar>
+          <div class="top-actions">
+            <m3e-icon-button id="dark-toggle" toggle aria-label="Dark mode">
+              <m3e-icon name="dark_mode"></m3e-icon>
+              <m3e-icon slot="selected" name="light_mode"></m3e-icon>
+            </m3e-icon-button>
+            <m3e-icon-button id="logout" aria-label="Log out">
+              <m3e-icon name="logout"></m3e-icon>
+            </m3e-icon-button>
+          </div>
+        </header>
+
+        <nav class="filters">
+          <m3e-button-group id="views" variant="connected" size="small"></m3e-button-group>
+          <m3e-filter-chip-set id="kinds" aria-label="Kind"></m3e-filter-chip-set>
+        </nav>
+
+        <main>
+          <section id="digest" class="digest" hidden></section>
+          <div id="grid" class="grid"></div>
+          <div id="empty" class="empty" hidden>
+            <m3e-shape name="ghost-ish" class="empty-shape"></m3e-shape>
+            <m3e-heading variant="title" size="large" id="empty-title">Sink's empty</m3e-heading>
+            <p class="muted" id="empty-body">Drop a screenshot anywhere, paste one, or hit the button.</p>
+          </div>
+          <div id="more" class="more"><m3e-loading-indicator hidden id="loading"></m3e-loading-indicator></div>
+        </main>
+
+        <m3e-fab id="upload-fab" extended variant="primary-container" size="large" aria-label="Add screenshot">
+          <m3e-icon name="add_photo_alternate"></m3e-icon>
+          <span slot="label">Stash it</span>
+        </m3e-fab>
+        <input id="file-input" type="file" accept="image/*" multiple hidden />
+
+        <div id="dropzone" class="dropzone" hidden>
+          <m3e-shape name="very-sunny" class="drop-shape"></m3e-shape>
+          <m3e-heading variant="headline" size="small">Drop to stash</m3e-heading>
+        </div>
+      </div>
+
+      <!-- Upload note -->
+      <m3e-dialog id="upload-dialog" dismissible>
+        <span slot="header">Why are you saving this?</span>
+        <div class="upload-body">
+          <div id="upload-previews" class="upload-previews"></div>
+          <m3e-form-field variant="outlined" class="full">
+            <label slot="label" for="upload-note">Note (optional)</label>
+            <textarea id="upload-note" rows="2" placeholder="e.g. book this before Friday"></textarea>
+          </m3e-form-field>
+        </div>
+        <div slot="actions" end>
+          <m3e-button id="upload-cancel">Cancel</m3e-button>
+          <m3e-button id="upload-go" variant="filled">Stash</m3e-button>
+        </div>
+      </m3e-dialog>
+
+      <!-- Detail -->
+      <m3e-dialog id="detail" dismissible class="detail-dialog">
+        <span slot="header" id="detail-header"></span>
+        <div id="detail-body" class="detail"></div>
+        <div slot="actions" id="detail-actions" class="detail-actions"></div>
+      </m3e-dialog>
+    </m3e-theme>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
