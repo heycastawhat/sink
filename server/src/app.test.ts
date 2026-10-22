@@ -13,6 +13,9 @@ import { ProviderError, type Provider } from "./ai/provider";
 import { parseExtraction, localIso, utcOffset, type ExtractInput } from "./ai/extract";
 import { toFtsQuery } from "./routes/captures";
 import { VectorIndex, fuse, type Embedder } from "./semantic";
+import { Backups } from "./backup";
+import { readdirSync } from "node:fs";
+import { Database } from "bun:sqlite";
 
 /** Embeds by concept so synonyms land together, the way a real model would. */
 class FakeEmbedder implements Embedder {
@@ -501,6 +504,25 @@ describe("semantic search", () => {
   test("fuse ranks agreement first", () => {
     expect(fuse(["a", "b", "c"], ["c", "a"])[0]).toBe("a");
     expect(fuse([], ["x"])).toEqual(["x"]);
+  });
+});
+
+describe("backups", () => {
+  test("one snapshot per day, oldest pruned, snapshot is a readable copy", async () => {
+    const token = await login();
+    await upload(token, { note: "keep me" });
+    const dir = mkdtempSync(join(tmpdir(), "sink-backup-"));
+    const backups = new Backups(setup.db, dir, 2);
+    const path = backups.run(new Date("2026-10-20T12:00:00Z"))!;
+    expect(backups.run(new Date("2026-10-20T18:00:00Z"))).toBeNull();
+    backups.run(new Date("2026-10-21T12:00:00Z"));
+    backups.run(new Date("2026-10-22T12:00:00Z"));
+    expect(readdirSync(dir).sort()).toEqual(["sink-2026-10-21.db", "sink-2026-10-22.db"]);
+
+    const copy = new Database(join(dir, "sink-2026-10-22.db"), { readonly: true });
+    expect(copy.query<{ note_text: string }, []>("SELECT note_text FROM captures").get()!.note_text).toBe("keep me");
+    copy.close();
+    expect(path).toEndWith("sink-2026-10-20.db");
   });
 });
 

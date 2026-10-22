@@ -38,6 +38,10 @@ export const config = {
   // Where the user lives: AI resolves "Friday 9am" and writes dates in this zone.
   timeZone: env("SINK_TIMEZONE", "Pacific/Auckland")!,
 
+  // Daily database snapshots in data/backups; how many to keep (0 turns them off).
+  backupDir: join(dataDir, "backups"),
+  backupKeep: Number(env("SINK_BACKUP_KEEP", "7")),
+
   maxUploadBytes: Number(env("SINK_MAX_UPLOAD_MB", "25")) * 1024 * 1024,
 
   ai: {

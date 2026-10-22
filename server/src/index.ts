@@ -8,6 +8,7 @@ import { Worker } from "./worker";
 import { LocalEmbedder, VectorIndex } from "./semantic";
 import { join } from "node:path";
 import { createApp } from "./app";
+import { Backups } from "./backup";
 
 const db = openDb(config.dbPath);
 const media = new MediaStore(config.mediaDir);
@@ -23,6 +24,8 @@ const worker = new Worker(db, media, provider, config.worker, config.ai.maxImage
 
 const app = createApp({ db, media, auth, oidc, index, provider, config });
 worker.start();
+const backups = new Backups(db, config.backupDir, config.backupKeep);
+backups.start();
 // Load the embedding model now (downloads once into data/models) so the first search isn't slow.
 index.embedder.embed(["warm up"], "query").catch((err) => console.warn(`[semantic] model load failed: ${err.message}`));
 
@@ -40,6 +43,7 @@ console.log(
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     worker.stop();
+    backups.stop();
     server.stop();
     db.close();
     process.exit(0);
