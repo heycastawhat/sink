@@ -1,5 +1,6 @@
 package nz.joshp.sink.capture
 
+import nz.joshp.sink.widget.SinkWidget
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
@@ -131,6 +132,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             CaptureQueue.sidecar(path).delete()
             // The AI may find a deadline in it; check for reminder suggestions once it has had a look.
             ReminderSync.soon(applicationContext)
+            SinkWidget.refresh(applicationContext)
             Result.success()
         } catch (e: ApiException) {
             when {

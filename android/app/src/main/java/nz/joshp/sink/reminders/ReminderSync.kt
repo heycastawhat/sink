@@ -1,5 +1,6 @@
 package nz.joshp.sink.reminders
 
+import nz.joshp.sink.widget.SinkWidget
 import android.content.Context
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -64,6 +65,8 @@ class ReminderSyncWorker(context: Context, params: WorkerParameters) : Coroutine
         }
         // Forget ids the server no longer lists so the set doesn't grow forever.
         ReminderSync.saveOffered(applicationContext, offered.intersect(reminders.map { it.id }.toSet()))
+        // Runs shortly after each upload too, by which time the AI has titled it.
+        SinkWidget.refresh(applicationContext)
         return Result.success()
     }
 }

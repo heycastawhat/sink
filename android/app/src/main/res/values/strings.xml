@@ -4,4 +4,5 @@
     <string name="tile_label">Stash screen</string>
     <string name="accessibility_label">Sink capture</string>
     <string name="accessibility_description">Lets Sink take a screenshot when you tap the Stash tile or accessibility button. It does not read or store anything else on screen.</string>
+    <string name="widget_description">Coming-up reminders and your latest captures</string>
 </resources>

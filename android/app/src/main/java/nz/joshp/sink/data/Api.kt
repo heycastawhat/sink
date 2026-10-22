@@ -144,13 +144,14 @@ class Api(private val session: Session) {
 
     private fun jsonBody(obj: JsonObject) = obj.toString().toRequestBody("application/json".toMediaType())
 
-    suspend fun list(q: String?, kind: String?, collection: String?, view: String, cursor: String?): Page {
+    suspend fun list(q: String?, kind: String?, collection: String?, view: String, cursor: String?, limit: Int? = null): Page {
         val url = (base + "/api/captures").toHttpUrl().newBuilder().apply {
             if (!q.isNullOrBlank()) addQueryParameter("q", q)
             if (kind != null) addQueryParameter("kind", kind)
             if (collection != null) addQueryParameter("collection", collection)
             addQueryParameter("view", view)
             if (cursor != null) addQueryParameter("cursor", cursor)
+            if (limit != null) addQueryParameter("limit", limit.toString())
         }.build()
         val req = Request.Builder().url(url).header("Authorization", "Bearer ${session.token}").build()
         return call(req) { json.decodeFromString<Page>(it) }

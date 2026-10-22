@@ -62,4 +62,6 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.okhttp)
     implementation(libs.mlkit.text)
+    implementation(libs.glance.appwidget)
+    implementation(libs.glance.material3)
 }
