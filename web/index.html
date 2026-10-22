@@ -130,9 +130,18 @@
         <span slot="header">Connect an AI assistant</span>
         <div class="connect-body">
           <p class="muted">
-            Lets Claude Code (or any MCP client) search your sink, read captures and file them into collections.
-            Each client gets its own token, which you can revoke here.
+            Lets an assistant search your sink, read captures and file them into collections.
           </p>
+          <m3e-heading variant="title" size="small">Claude, ChatGPT, Poke and other apps</m3e-heading>
+          <p class="small">
+            Add a custom connector (MCP server) with this URL. You'll sign in here and approve it; no token to copy.
+          </p>
+          <div class="connect-row">
+            <pre id="connect-url" class="connect-command connect-url"></pre>
+            <m3e-icon-button id="connect-url-copy" aria-label="Copy connector URL"><m3e-icon name="content_copy"></m3e-icon></m3e-icon-button>
+          </div>
+          <m3e-heading variant="title" size="small">Claude Code</m3e-heading>
+          <p class="small">The same URL works with <code>claude mcp add --transport http</code>, or create a token for a fixed header:</p>
           <div class="connect-row">
             <m3e-form-field variant="outlined" class="full">
               <label slot="label" for="connect-name">Client name</label>

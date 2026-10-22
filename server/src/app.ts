@@ -2,10 +2,12 @@ import type { Database } from "bun:sqlite";
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { secureHeaders } from "hono/secure-headers";
-import { Auth, authRoutes, requireAuth, type AuthEnv } from "./auth";
+import { Auth, authRoutes, requestOrigin, requireAuth, type AuthEnv } from "./auth";
 import { captureRoutes } from "./routes/captures";
 import { collectionRoutes } from "./routes/collections";
 import { handleMcp, type ApiFetch } from "./mcp";
+import { oauthRoutes } from "./oauth";
+import { cors } from "hono/cors";
 import type { MediaStore } from "./media";
 import type { Provider } from "./ai/provider";
 import type { Config } from "./config";
@@ -41,11 +43,27 @@ export function createApp(deps: {
 
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
-  // MCP for AI assistants (e.g. `claude mcp add --transport http sink <origin>/mcp --header "Authorization: Bearer …"`).
-  app.all("/mcp", requireAuth(auth), (c) => {
-    const credentials = { authorization: c.req.header("authorization") ?? "", cookie: c.req.header("cookie") ?? "" };
+  // MCP for AI assistants. Connectors (claude.ai, ChatGPT, Poke) sign in through OAuth; Claude Code can also
+  // take a token from the web's Connect panel as a bearer header. Called cross-origin, so CORS on these.
+  const mcpCors = cors({
+    origin: "*",
+    allowHeaders: ["authorization", "content-type", "mcp-protocol-version", "mcp-session-id", "last-event-id"],
+    exposeHeaders: ["www-authenticate", "mcp-session-id"],
+  });
+  for (const path of ["/mcp", "/.well-known/*", "/oauth/token", "/oauth/register", "/oauth/revoke"]) app.use(path, mcpCors);
+  app.route("/", oauthRoutes(db, auth, config.publicUrls));
+
+  app.all("/mcp", async (c) => {
+    // Bearer only (no session cookie), and a 401 that points clients at the OAuth metadata.
+    const header = c.req.header("authorization") ?? "";
+    if (!header.startsWith("Bearer ") || !auth.verify(header.slice(7))) {
+      const origin = config.publicUrls.includes(requestOrigin(c)) ? requestOrigin(c) : config.publicUrls[0];
+      return c.json({ error: "unauthorized" }, 401, {
+        "www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
+      });
+    }
     const api: ApiFetch = (path, init) =>
-      Promise.resolve(app.request(path, { ...init, headers: { ...(init?.headers as Record<string, string>), ...credentials } }));
+      Promise.resolve(app.request(path, { ...init, headers: { ...(init?.headers as Record<string, string>), authorization: header } }));
     return handleMcp(c.req.raw, api, config.timeZone ?? "Pacific/Auckland");
   });
 

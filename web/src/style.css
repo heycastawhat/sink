@@ -443,6 +443,11 @@ main {
   word-break: break-all;
 }
 
+.connect-url {
+  flex: 1;
+  margin: 0;
+}
+
 .connect-tokens {
   display: flex;
   flex-direction: column;

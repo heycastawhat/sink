@@ -154,7 +154,7 @@ async function renderTokens() {
     $('connect-tokens').innerHTML = tokens
       .map(
         (t) => `<div class="token-row">
-  ${ic(/claude|mcp|code/i.test(t.name) ? 'hub' : 'devices')}
+  ${ic(/\(MCP\)|claude|mcp|code/i.test(t.name) ? 'hub' : 'devices')}
   <span>${esc(t.name)}${t.id === me.tokenId ? ' <span class="muted">(this browser)</span>' : ''}</span>
   <span class="spacer"></span>
   <span class="muted">used ${esc(ago(t.last_used_at))}</span>
@@ -168,6 +168,7 @@ async function renderTokens() {
 }
 
 $('connect-open').addEventListener('click', () => {
+  $('connect-url').textContent = `${location.origin}/mcp`;
   $('connect-result').hidden = true;
   $('connect-command').textContent = '';
   renderTokens();
@@ -186,6 +187,11 @@ $('connect-create').addEventListener('click', async () => {
   } catch (err) {
     toast(err.message);
   }
+});
+
+$('connect-url-copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText($('connect-url').textContent);
+  toast('Copied');
 });
 
 $('connect-copy').addEventListener('click', async () => {

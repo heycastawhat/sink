@@ -89,6 +89,8 @@ type Pending = {
   client: "web" | "android";
   device: string;
   appChallenge?: string;
+  // Web: same-origin path to land on after signing in (e.g. back to an OAuth consent page).
+  next?: string;
   created: number;
 };
 
@@ -99,6 +101,8 @@ const startQuery = z.object({
   device: z.string().max(100).optional(),
   // Android: S256 of a verifier only the app holds, so an intercepted hand-back code is useless.
   challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
+  // A local path only: "/x", never "//host" or "/\host", so it can't become an open redirect.
+  next: z.string().max(2000).regex(/^\/(?![\/\\])/).optional(),
 });
 
 const exchangeBody = z.object({
@@ -137,6 +141,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
       client: q.data.client,
       device: q.data.device ?? (q.data.client === "android" ? "Android" : "Web"),
       appChallenge: q.data.challenge,
+      next: q.data.next,
       created: now(),
     };
     pending.set(state, entry);
@@ -195,7 +200,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
       path: "/",
       maxAge: COOKIE_MAX_AGE,
     });
-    return c.redirect(`${entry.origin}/`, 302);
+    return c.redirect(`${entry.origin}${entry.next ?? "/"}`, 302);
   });
 
   // Android swaps the one-time hand-back code (plus its PKCE verifier) for a device token.

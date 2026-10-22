@@ -141,6 +141,22 @@ const migrations: string[] = [
   );
   CREATE INDEX price_points_capture ON price_points(capture_id, at);
   `,
+  // OAuth for MCP connectors: registered clients and refresh tokens (revoking the access token drops its refresh).
+  `
+  CREATE TABLE oauth_clients (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    secret_hash TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE oauth_refresh (
+    token_hash TEXT PRIMARY KEY,
+    token_id TEXT NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export function openDb(path: string): Database {

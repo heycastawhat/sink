@@ -97,7 +97,9 @@ Extraction schema (LLM output):
   hop, and records a `price_drop` action on a drop over 1%. `GET /api/alerts` lists them; the phone notifies once each.
 - `/mcp`: MCP (Streamable HTTP, stateless) for AI assistants, same bearer tokens. Tools: search_captures,
   get_capture (optionally with the image), list_collections, upcoming_reminders, update_capture, create_collection.
-  Tokens minted from the web client's "Connect an AI assistant" dialog (`POST /api/auth/tokens`).
+  Connectors (claude.ai, ChatGPT, Poke) use OAuth 2.1 served by Sink itself: RFC 8414/9728 discovery, dynamic
+  client registration, code + PKCE S256, rotating refresh tokens; sign-in is the authentik login, then a consent page.
+  Claude Code can use the same URL, or a token minted in the web "Connect an AI assistant" dialog (`POST /api/auth/tokens`).
 - Auth: authentik OIDC (see Decisions). `GET /api/auth/oidc/start`, `/oidc/callback`,
   `POST /oidc/exchange` (Android), `/logout`, `/me`, `/tokens`.
 

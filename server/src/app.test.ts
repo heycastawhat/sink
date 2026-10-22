@@ -524,6 +524,107 @@ describe("mcp", () => {
   });
 });
 
+describe("oauth for mcp connectors", () => {
+  const verifier = "v".repeat(50);
+  const listTools = (token: string) =>
+    setup.app.request("/mcp", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+  const form = (body: Record<string, string>, headers: Record<string, string> = {}) => ({
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+    body: new URLSearchParams(body).toString(),
+  });
+  const register = async (body: object) => setup.app.request("/oauth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  /** Plays the connector: authorize as the signed-in user, approve, return the code. */
+  async function approve(clientId: string, redirect: string, cookie: string, decision = "allow") {
+    const q = new URLSearchParams({ response_type: "code", client_id: clientId, redirect_uri: redirect, code_challenge: s256(verifier), code_challenge_method: "S256", state: "xyz" });
+    const consent = await setup.app.request(`/oauth/authorize?${q}`, { headers: { cookie } });
+    expect(consent.status).toBe(200);
+    const request = (await consent.text()).match(/name="request" value="([^"]+)"/)![1]!;
+    const res = await setup.app.request("/oauth/authorize", form({ request, decision }, { cookie }));
+    expect(res.status).toBe(302);
+    return new URL(res.headers.get("location")!);
+  }
+
+  test("discovery, registration, consent, code + PKCE, refresh rotation", async () => {
+    const unauth = await setup.app.request("/mcp", { method: "POST" });
+    expect(unauth.status).toBe(401);
+    expect(unauth.headers.get("www-authenticate")).toBe(`Bearer resource_metadata="${PUBLIC}/.well-known/oauth-protected-resource/mcp"`);
+    const resource = (await (await setup.app.request("/.well-known/oauth-protected-resource/mcp")).json()) as any;
+    expect(resource).toMatchObject({ resource: `${PUBLIC}/mcp`, authorization_servers: [PUBLIC] });
+    const meta = (await (await setup.app.request("/.well-known/oauth-authorization-server")).json()) as any;
+    expect(meta).toMatchObject({ issuer: PUBLIC, registration_endpoint: `${PUBLIC}/oauth/register`, code_challenge_methods_supported: ["S256"] });
+
+    const redirect = "https://claude.ai/api/mcp/auth_callback";
+    expect((await register({ redirect_uris: ["http://evil.example/cb"] })).status).toBe(400);
+    const reg = await register({ redirect_uris: [redirect], client_name: "Claude" });
+    expect(reg.status).toBe(201);
+    const client = ((await reg.json()) as any).client_id;
+
+    // Signed out: off to authentik, coming back to this exact authorize URL.
+    const q = new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: redirect, code_challenge: s256(verifier), code_challenge_method: "S256" });
+    const toLogin = await setup.app.request(`/oauth/authorize?${q}`);
+    expect(toLogin.status).toBe(302);
+    const loginUrl = new URL(toLogin.headers.get("location")!, PUBLIC);
+    expect(loginUrl.pathname).toBe("/api/auth/oidc/start");
+    expect(loginUrl.searchParams.get("next")).toBe(`/oauth/authorize?${q}`);
+    // A registered client can't be sent somewhere else.
+    expect((await setup.app.request(`/oauth/authorize?${new URLSearchParams({ ...Object.fromEntries(q), redirect_uri: "https://evil.example/" })}`)).status).toBe(400);
+
+    const cookie = `sink_session=${await login()}`;
+    const back = await approve(client, redirect, cookie);
+    expect(back.origin + back.pathname).toBe(redirect);
+    expect(back.searchParams.get("state")).toBe("xyz");
+    const code = back.searchParams.get("code")!;
+
+    expect((await setup.app.request("/oauth/token", form({ grant_type: "authorization_code", code, client_id: client, code_verifier: "w".repeat(50), redirect_uri: redirect }))).status).toBe(400);
+    // That failed attempt burned the code.
+    const code2 = (await approve(client, redirect, cookie)).searchParams.get("code")!;
+    const tok = (await (await setup.app.request("/oauth/token", form({ grant_type: "authorization_code", code: code2, client_id: client, code_verifier: verifier, redirect_uri: redirect }))).json()) as any;
+    expect(tok.token_type).toBe("Bearer");
+    expect((await listTools(tok.access_token)).status).toBe(200);
+    expect((await setup.app.request("/oauth/token", form({ grant_type: "authorization_code", code: code2, client_id: client, code_verifier: verifier }))).status).toBe(400);
+
+    const names = setup.auth.listTokens().map((t: any) => t.name);
+    expect(names).toContain("Claude (MCP)");
+
+    const refreshed = (await (await setup.app.request("/oauth/token", form({ grant_type: "refresh_token", refresh_token: tok.refresh_token, client_id: client }))).json()) as any;
+    expect((await listTools(refreshed.access_token)).status).toBe(200);
+    expect((await listTools(tok.access_token)).status).toBe(401);
+    expect((await setup.app.request("/oauth/token", form({ grant_type: "refresh_token", refresh_token: tok.refresh_token, client_id: client }))).status).toBe(400);
+
+    await setup.app.request("/oauth/revoke", form({ token: refreshed.refresh_token }));
+    expect((await listTools(refreshed.access_token)).status).toBe(401);
+  });
+
+  test("deny, confidential clients, and no open redirect after login", async () => {
+    const cookie = `sink_session=${await login()}`;
+    const redirect = "https://chatgpt.com/connector_platform_oauth_redirect";
+    const reg = (await (await register({ redirect_uris: [redirect], client_name: "ChatGPT", token_endpoint_auth_method: "client_secret_basic" })).json()) as any;
+    expect(reg.client_secret).toBeString();
+
+    expect((await approve(reg.client_id, redirect, cookie, "deny")).searchParams.get("error")).toBe("access_denied");
+
+    const code = (await approve(reg.client_id, redirect, cookie)).searchParams.get("code")!;
+    const body = { grant_type: "authorization_code", code, code_verifier: verifier, redirect_uri: redirect };
+    expect((await setup.app.request("/oauth/token", form({ ...body, client_id: reg.client_id }))).status).toBe(401);
+    const basic = `Basic ${Buffer.from(`${reg.client_id}:${reg.client_secret}`).toString("base64")}`;
+    const tok = (await (await setup.app.request("/oauth/token", form(body, { authorization: basic }))).json()) as any;
+    expect((await listTools(tok.access_token)).status).toBe(200);
+
+    const { callback } = await signIn(`client=web&next=${encodeURIComponent("/oauth/authorize?client_id=x&state=1")}`);
+    expect(callback.headers.get("location")).toBe(`${PUBLIC}/oauth/authorize?client_id=x&state=1`);
+
+    for (const next of ["//evil.example/", "/\\evil.example", "https://evil.example/"]) {
+      expect((await setup.app.request(`/api/auth/oidc/start?next=${encodeURIComponent(next)}`)).status).toBe(400);
+    }
+  });
+});
+
 describe("price watch", () => {
   const page = (body: string) => `<html><head>${body}</head><body>…</body></html>`;
 
