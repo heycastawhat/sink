@@ -1,5 +1,19 @@
-import '@m3e/web/all';
-import { M3eSnackbar } from '@m3e/web/all';
+// Only the components the page uses; '@m3e/web/all' doubles the bundle.
+import '@m3e/web/theme';
+import '@m3e/web/button';
+import '@m3e/web/button-group';
+import '@m3e/web/icon';
+import '@m3e/web/icon-button';
+import '@m3e/web/heading';
+import '@m3e/web/shape';
+import '@m3e/web/loading-indicator';
+import '@m3e/web/form-field';
+import '@m3e/web/chips';
+import '@m3e/web/dialog';
+import '@m3e/web/search';
+import '@m3e/web/fab';
+import '@m3e/web/expansion-panel';
+import { M3eSnackbar } from '@m3e/web/snackbar';
 import { api, Unauthorized } from './api.js';
 
 // ---------- helpers ----------
