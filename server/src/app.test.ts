@@ -448,6 +448,81 @@ describe("bulk", () => {
   });
 });
 
+describe("mcp", () => {
+  let rpcId = 0;
+  const rpc = async (token: string | null, method: string, params: unknown = {}) => {
+    const res = await setup.app.request("/mcp", {
+      method: "POST",
+      headers: {
+        ...(token && { authorization: `Bearer ${token}` }),
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-06-18",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
+    });
+    return { status: res.status, body: (await res.json().catch(() => null)) as any };
+  };
+  const call = async (token: string, name: string, args: unknown = {}) => {
+    const { body } = await rpc(token, "tools/call", { name, arguments: args });
+    const result = body.result;
+    return { result, data: result.isError ? null : JSON.parse(result.content[0].text) };
+  };
+
+  test("needs a token", async () => {
+    expect((await rpc(null, "tools/list")).status).toBe(401);
+  });
+
+  test("initialize, list tools, search, get with image, update by collection name", async () => {
+    const token = await login();
+    const init = await rpc(token, "initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "test", version: "1" },
+    });
+    expect(init.body.result.serverInfo.name).toBe("sink");
+
+    const tools = (await rpc(token, "tools/list")).body.result.tools.map((t: any) => t.name);
+    expect(tools).toEqual(
+      expect.arrayContaining(["search_captures", "get_capture", "list_collections", "update_capture", "create_collection", "upcoming_reminders"]),
+    );
+
+    const id = ((await (await upload(token, { note: "laneway tickets" })).json()) as any).id;
+    await setup.worker.tick();
+
+    const search = await call(token, "search_captures", { query: "laneway" });
+    expect(search.data.results.map((r: any) => r.id)).toEqual([id]);
+    expect(search.data.results[0].title).toBe("Laneway gig");
+
+    const got = await call(token, "get_capture", { id, include_image: true });
+    expect(got.data.note_text).toBe("laneway tickets");
+    expect(got.result.content[1]).toMatchObject({ type: "image", mimeType: "image/jpeg" });
+
+    await call(token, "create_collection", { name: "Gigs" });
+    const updated = await call(token, "update_capture", { id, add_to_collections: ["gigs"], pinned: true });
+    expect(updated.data.updated.pinned).toBe(true);
+    expect((await call(token, "get_capture", { id })).data.collections).toEqual(["Gigs"]);
+    expect((await call(token, "list_collections")).data.collections).toMatchObject([{ name: "Gigs", count: 1 }]);
+    expect((await call(token, "search_captures", { collection: "Gigs" })).data.results).toHaveLength(1);
+
+    const bad = await call(token, "update_capture", { id, add_to_collections: ["nope"] });
+    expect(bad.result.isError).toBe(true);
+    expect(bad.result.content[0].text).toContain("Existing: Gigs");
+  });
+
+  test("tokens can be minted for other clients", async () => {
+    const token = await login();
+    const res = await setup.app.request("/api/auth/tokens", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Claude Code" }),
+    });
+    expect(res.status).toBe(201);
+    const minted = ((await res.json()) as any).token;
+    expect((await rpc(minted, "tools/list")).status).toBe(200);
+  });
+});
+
 describe("reminders", () => {
   test("future reminders are listed, accepted and snoozed; past ones are not", async () => {
     const token = await login();

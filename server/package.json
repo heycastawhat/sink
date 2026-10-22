@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.1",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "hono": "^4.13.13",
     "sharp": "^0.35.5",
     "zod": "^4.6.7"

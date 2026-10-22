@@ -135,6 +135,63 @@ window.addEventListener('unhandledrejection', (e) => {
   }
 });
 
+// ---------- connect an AI assistant (MCP) ----------
+
+const connect = $('connect');
+
+async function renderTokens() {
+  try {
+    const [{ tokens }, me] = await Promise.all([api.tokens(), api.me()]);
+    const ago = (ts) => (ts ? `${relativeDay(ts)} ${timeOf(ts)}` : 'never');
+    $('connect-tokens').innerHTML = tokens
+      .map(
+        (t) => `<div class="token-row">
+  ${ic(/claude|mcp|code/i.test(t.name) ? 'hub' : 'devices')}
+  <span>${esc(t.name)}${t.id === me.tokenId ? ' <span class="muted">(this browser)</span>' : ''}</span>
+  <span class="spacer"></span>
+  <span class="muted">used ${esc(ago(t.last_used_at))}</span>
+  ${t.id === me.tokenId ? '' : `<m3e-icon-button data-revoke="${esc(t.id)}" aria-label="Revoke ${esc(t.name)}">${ic('delete')}</m3e-icon-button>`}
+</div>`,
+      )
+      .join('');
+  } catch (err) {
+    $('connect-tokens').textContent = err.message;
+  }
+}
+
+$('connect-open').addEventListener('click', () => {
+  $('connect-result').hidden = true;
+  $('connect-command').textContent = '';
+  renderTokens();
+  connect.show();
+});
+$('connect-close').addEventListener('click', () => connect.hide());
+
+$('connect-create').addEventListener('click', async () => {
+  const name = $('connect-name').value.trim() || 'MCP client';
+  try {
+    const { token } = await api.createToken(name);
+    $('connect-command').textContent =
+      `claude mcp add --transport http --scope user sink ${location.origin}/mcp \\\n  --header "Authorization: Bearer ${token}"`;
+    $('connect-result').hidden = false;
+    renderTokens();
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$('connect-copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText($('connect-command').textContent);
+  toast('Copied');
+});
+
+$('connect-tokens').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-revoke]');
+  if (!btn || !confirm('Revoke this token? That device or client gets signed out.')) return;
+  await api.revokeToken(btn.dataset.revoke).catch((err) => toast(err.message));
+  renderTokens();
+});
+
 // ---------- theme ----------
 
 const theme = $('theme');

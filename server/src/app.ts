@@ -5,6 +5,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { Auth, authRoutes, requireAuth, type AuthEnv } from "./auth";
 import { captureRoutes } from "./routes/captures";
 import { collectionRoutes } from "./routes/collections";
+import { handleMcp, type ApiFetch } from "./mcp";
 import type { MediaStore } from "./media";
 import type { Provider } from "./ai/provider";
 import type { Config } from "./config";
@@ -18,7 +19,7 @@ export function createApp(deps: {
   oidc: Oidc;
   index?: VectorIndex;
   provider: Provider;
-  config: Pick<Config, "secureCookies" | "maxUploadBytes" | "webDir" | "publicUrls">;
+  config: Pick<Config, "secureCookies" | "maxUploadBytes" | "webDir" | "publicUrls"> & Partial<Pick<Config, "timeZone">>;
 }) {
   const { db, media, auth, oidc, index, provider, config } = deps;
   const app = new Hono<AuthEnv>();
@@ -39,6 +40,14 @@ export function createApp(deps: {
   app.route("/api", api);
 
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
+
+  // MCP for AI assistants (e.g. `claude mcp add --transport http sink <origin>/mcp --header "Authorization: Bearer …"`).
+  app.all("/mcp", requireAuth(auth), (c) => {
+    const credentials = { authorization: c.req.header("authorization") ?? "", cookie: c.req.header("cookie") ?? "" };
+    const api: ApiFetch = (path, init) =>
+      Promise.resolve(app.request(path, { ...init, headers: { ...(init?.headers as Record<string, string>), ...credentials } }));
+    return handleMcp(c.req.raw, api, config.timeZone ?? "Pacific/Auckland");
+  });
 
   if (config.webDir) {
     app.use("/*", serveStatic({ root: config.webDir }));

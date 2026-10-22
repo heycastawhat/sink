@@ -19,6 +19,9 @@ const json = (method, body) => ({
 export const api = {
   me: () => request('/auth/me'),
   logout: () => request('/auth/logout', { method: 'POST' }),
+  tokens: () => request('/auth/tokens'),
+  createToken: (name) => request('/auth/tokens', json('POST', { name })),
+  revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
 
   list: (params) => {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ''));

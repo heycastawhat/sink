@@ -411,6 +411,55 @@ main {
 }
 
 /* ---------- FAB + drop ---------- */
+/* ---------- connect (MCP) ---------- */
+#connect {
+  --m3e-dialog-max-height: 92vh;
+}
+
+.connect-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 560px;
+}
+
+.connect-body p {
+  margin: 0;
+}
+
+.connect-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.connect-command {
+  margin: 6px 0 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--md-sys-color-surface-container-highest);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.connect-tokens {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.token-row .muted {
+  font-size: 12px;
+}
+
 /* ---------- multi-select ---------- */
 .select-box {
   position: absolute;

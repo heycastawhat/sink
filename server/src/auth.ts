@@ -46,6 +46,10 @@ export class Auth {
     return row.id;
   }
 
+  subjectOf(tokenId: string): string | null {
+    return this.db.query<{ subject: string | null }, [string]>("SELECT subject FROM tokens WHERE id = ?").get(tokenId)?.subject ?? null;
+  }
+
   revoke(tokenId: string) {
     this.db.query("DELETE FROM tokens WHERE id = ?").run(tokenId);
   }
@@ -214,6 +218,14 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
   app.get("/me", requireAuth(auth), (c) => c.json({ ok: true, tokenId: c.get("tokenId") }));
 
   app.get("/tokens", requireAuth(auth), (c) => c.json({ tokens: auth.listTokens() }));
+
+  // Named tokens for other clients (an MCP client like Claude Code); same account as the caller.
+  app.post("/tokens", requireAuth(auth), async (c) => {
+    const parsed = z.object({ name: z.string().trim().min(1).max(60) }).safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid body" }, 400);
+    const subject = auth.subjectOf(c.get("tokenId")) ?? "";
+    return c.json({ token: auth.issueToken(parsed.data.name, subject) }, 201);
+  });
 
   app.delete("/tokens/:id", requireAuth(auth), (c) => {
     auth.revoke(c.req.param("id"));

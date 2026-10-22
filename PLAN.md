@@ -90,6 +90,11 @@ Extraction schema (LLM output):
 - `PATCH /api/actions/:id`
 - `GET /api/digest`: unreviewed + due items
 - `GET /api/health`
+- `POST /api/captures/bulk`: one change (flags, tags, collections) across many captures.
+- `/api/collections` CRUD.
+- `/mcp`: MCP (Streamable HTTP, stateless) for AI assistants, same bearer tokens. Tools: search_captures,
+  get_capture (optionally with the image), list_collections, upcoming_reminders, update_capture, create_collection.
+  Tokens minted from the web client's "Connect an AI assistant" dialog (`POST /api/auth/tokens`).
 - Auth: authentik OIDC (see Decisions). `GET /api/auth/oidc/start`, `/oidc/callback`,
   `POST /oidc/exchange` (Android), `/logout`, `/me`, `/tokens`.
 
