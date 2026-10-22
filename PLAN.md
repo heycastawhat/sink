@@ -132,11 +132,12 @@ Same stack as `~/material`. No framework unless it starts to hurt; plain modules
 
 - `Dockerfile`: multi-stage. Build web with Bun, then runtime `oven/bun:slim` + tesseract.
 - `docker-compose.yml`: one service, volume `./data:/data`, env file, port 8787.
+- Deploy: rsync repo (minus `data/`, `.env`, `node_modules`, `dist`, `android`) to `josh@192.168.86.245:~/sink`, then `docker compose up -d --build` there. No git checkout on thonk.
 - Add to thonk's Docker host; public access via Cloudflare tunnel (same pattern as
   `meow.110463.xyz`) or LAN-only to start.
 - Ollama optional: separate container, `SINK_OLLAMA_URL=http://ollama:11434`, same network.
   Remember thonk's containers must talk by container name, not host IP.
-- Backup = copy `/data` (SQLite `.backup` nightly into `/data/backups`).
+- Backup = copy `/data`. Server writes a daily `VACUUM INTO` snapshot to `/data/backups` (keeps `SINK_BACKUP_KEEP`, default 7).
 
 ## Repo layout
 
@@ -163,7 +164,7 @@ sink/
 
 - Name: **Sink**.
 - Seed color: **`#6750A4`** (M3 baseline purple, same as the M3 playground). Dynamic color still wins on Android 12+ if enabled in settings.
-- AI: OpenRouter default. thonk GPU unknown; check before investing in the Ollama provider.
+- AI: OpenRouter default. thonk has no discrete GPU (Intel UHD 620 only), so local Ollama vision is impractical there; only worth it pointed at another box with a GPU.
 - Public at `sink.notahomelab.xyz` via the existing Cloudflare tunnel on thonk.
 - Auth: **authentik only** (`auth.notahomelab.xyz`, provider/app slug `sink`, bound to user `josh`).
   OIDC code flow + PKCE on the server. Web gets an httpOnly cookie; Android opens a Custom Tab and
