@@ -399,6 +399,55 @@ describe("collections", () => {
   });
 });
 
+describe("bulk", () => {
+  const post = (token: string, body: unknown) =>
+    setup.app.request("/api/captures/bulk", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  test("tags, collections and flags across many captures", async () => {
+    const token = await login();
+    const ids: string[] = [];
+    for (let i = 1; i <= 3; i++) ids.push(((await (await upload(token, {}, i)).json()) as any).id);
+    await setup.app.request(`/api/captures/${ids[0]}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ tags: ["old", "keep"] }),
+    });
+    const col = (await (
+      await setup.app.request("/api/collections", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Trip" }),
+      })
+    ).json()) as any;
+
+    const res = await post(token, { ids: [ids[0], ids[1], "missing"], add_tags: ["Japan"], remove_tags: ["old"], add_collections: [col.id], pinned: true });
+    expect(((await res.json()) as any).updated).toBe(2);
+    const first = (await (await get(token, `/api/captures/${ids[0]}`)).json()) as any;
+    expect(first.tags).toEqual(["keep", "japan"]);
+    expect(first.pinned).toBe(true);
+    expect(first.collections).toEqual([col.id]);
+    const third = (await (await get(token, `/api/captures/${ids[2]}`)).json()) as any;
+    expect(third.pinned).toBe(false);
+
+    // Adding twice is harmless; removing takes it out.
+    await post(token, { ids: [ids[0]], add_collections: [col.id] });
+    await post(token, { ids: [ids[1]], remove_collections: [col.id] });
+    const inCol = (await (await get(token, `/api/captures?collection=${col.id}`)).json()) as any;
+    expect(inCol.items.map((i: any) => i.id)).toEqual([ids[0]]);
+
+    await post(token, { ids, archived: true });
+    expect(((await (await get(token, "/api/captures")).json()) as any).items).toHaveLength(0);
+    expect(((await (await get(token, "/api/captures?view=archived")).json()) as any).items).toHaveLength(3);
+
+    expect((await post(token, { ids: [ids[0]], add_collections: ["nope"] })).status).toBe(400);
+    expect((await post(token, { ids: [] })).status).toBe(400);
+  });
+});
+
 describe("reminders", () => {
   test("future reminders are listed, accepted and snoozed; past ones are not", async () => {
     const token = await login();

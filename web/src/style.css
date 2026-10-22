@@ -411,6 +411,89 @@ main {
 }
 
 /* ---------- FAB + drop ---------- */
+/* ---------- multi-select ---------- */
+.select-box {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--md-sys-color-on-primary);
+  background: color-mix(in srgb, var(--md-sys-color-shadow) 35%, transparent);
+  color: var(--md-sys-color-on-primary);
+  opacity: 0;
+  transition: opacity 120ms, background 120ms;
+}
+
+.select-box m3e-icon {
+  font-size: 20px;
+  visibility: hidden;
+}
+
+.card:hover .select-box,
+.card:focus-visible .select-box,
+.selecting .select-box {
+  opacity: 1;
+}
+
+.card.selected .select-box {
+  background: var(--md-sys-color-primary);
+  border-color: var(--md-sys-color-primary);
+}
+
+.card.selected .select-box m3e-icon {
+  visibility: visible;
+}
+
+.card.selected {
+  outline: 3px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.bulk-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100vw - 32px);
+  padding: 6px 10px 6px 6px;
+  border-radius: 28px;
+  transform: translateX(-50%);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--md-sys-color-shadow) 30%, transparent);
+  overflow-x: auto;
+  scrollbar-width: none;
+  --m3e-icon-button-icon-color: var(--md-sys-color-inverse-on-surface);
+  --m3e-text-button-label-text-color: var(--md-sys-color-inverse-primary);
+}
+
+.digest .select-box {
+  display: none;
+}
+
+.bulk-bar[hidden] {
+  display: none;
+}
+
+.bulk-count {
+  font-weight: 600;
+  white-space: nowrap;
+  padding-right: 4px;
+}
+
+.bulk-actions {
+  display: flex;
+  align-items: center;
+}
+
 #upload-fab {
   position: fixed;
   right: 24px;

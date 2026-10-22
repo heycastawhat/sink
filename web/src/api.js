@@ -27,6 +27,7 @@ export const api = {
   get: (id) => request(`/captures/${id}`),
   patch: (id, body) => request(`/captures/${id}`, json('PATCH', body)),
   purge: (id) => request(`/captures/${id}`, { method: 'DELETE' }),
+  bulk: (body) => request('/captures/bulk', json('POST', body)),
   reprocess: (id) => request(`/captures/${id}/reprocess`, { method: 'POST' }),
   setAction: (id, state) => request(`/actions/${id}`, json('PATCH', { state })),
   reminders: () => request('/reminders'),

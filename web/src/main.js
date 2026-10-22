@@ -89,6 +89,9 @@ const state = {
   loading: false,
   generation: 0,
   current: null,
+  // Multi-select: ids picked in the grid, and the last one clicked (for shift-click ranges).
+  selected: new Set(),
+  anchor: null,
 };
 
 // ---------- auth ----------
@@ -269,6 +272,7 @@ document.addEventListener('keydown', (e) => {
 // ---------- list ----------
 
 function reload() {
+  clearSelection();
   state.generation++;
   state.items = [];
   state.cursor = null;
@@ -310,8 +314,9 @@ function cardHtml(c) {
   const kind = KINDS[c.kind];
   const title = c.title || c.note_text || (busy ? 'Reading…' : 'Untitled');
   return `
-<article class="card${c.pinned ? ' pinned' : ''}" data-id="${c.id}" tabindex="0">
+<article class="card${c.pinned ? ' pinned' : ''}${state.selected.has(c.id) ? ' selected' : ''}" data-id="${c.id}" tabindex="0">
   <div class="thumb" style="aspect-ratio:${c.width}/${Math.min(c.height, c.width * 1.6)}">
+    <span class="select-box" data-select role="checkbox" aria-label="Select" aria-checked="${state.selected.has(c.id)}">${ic('check')}</span>
     <img src="${c.thumb_url}" alt="" loading="lazy" />
     ${busy ? '<div class="busy"><m3e-loading-indicator variant="contained"></m3e-loading-indicator></div>' : ''}
     ${c.pinned ? `<span class="pin">${ic('push_pin', '', ' filled')}</span>` : ''}
@@ -385,7 +390,11 @@ function removeItem(id) {
 
 $('grid').addEventListener('click', (e) => {
   const card = e.target.closest('.card');
-  if (card) openDetail(card.dataset.id);
+  if (!card) return;
+  // Once anything is selected, clicks select; the tick, shift or cmd/ctrl start it.
+  if (e.target.closest('[data-select]') || state.selected.size || e.shiftKey || e.metaKey || e.ctrlKey) {
+    toggleSelect(card.dataset.id, e.shiftKey);
+  } else openDetail(card.dataset.id);
 });
 $('grid').addEventListener('keydown', (e) => {
   const card = e.target.closest('.card');
@@ -393,6 +402,153 @@ $('grid').addEventListener('keydown', (e) => {
     e.preventDefault();
     openDetail(card.dataset.id);
   }
+});
+
+// ---------- multi-select ----------
+
+function toggleSelect(id, range) {
+  const ids = state.items.map((c) => c.id);
+  if (range && state.anchor && ids.includes(state.anchor)) {
+    const [a, b] = [ids.indexOf(state.anchor), ids.indexOf(id)].sort((x, y) => x - y);
+    for (const i of ids.slice(a, b + 1)) state.selected.add(i);
+  } else if (state.selected.has(id)) state.selected.delete(id);
+  else state.selected.add(id);
+  state.anchor = id;
+  renderSelection();
+}
+
+function clearSelection() {
+  state.selected.clear();
+  state.anchor = null;
+  renderSelection();
+}
+
+function renderSelection() {
+  for (const card of $('grid').querySelectorAll('.card')) {
+    const on = state.selected.has(card.dataset.id);
+    card.classList.toggle('selected', on);
+    card.querySelector('[data-select]')?.setAttribute('aria-checked', String(on));
+  }
+  const n = state.selected.size;
+  $('grid').classList.toggle('selecting', n > 0);
+  $('bulk-bar').hidden = n === 0;
+  $('upload-fab').hidden = n > 0;
+  if (!n) return;
+  $('bulk-count').textContent = `${n} selected`;
+  const picked = state.items.filter((c) => state.selected.has(c.id));
+  const allPinned = picked.length > 0 && picked.every((c) => c.pinned);
+  const button = (act, icon, label) =>
+    `<m3e-icon-button data-bulk="${act}" aria-label="${label}" title="${label}">${ic(icon)}</m3e-icon-button>`;
+  $('bulk-actions').innerHTML =
+    state.view === 'trash'
+      ? button('restore', 'restore_from_trash', 'Restore') + button('purge', 'delete_forever', 'Delete forever')
+      : [
+          button(allPinned ? 'unpin' : 'pin', allPinned ? 'keep_off' : 'push_pin', allPinned ? 'Unpin' : 'Pin'),
+          button('tag', 'sell', 'Add tag'),
+          button('collect', 'create_new_folder', 'Add to collection'),
+          state.collection ? button('uncollect', 'folder_off', 'Remove from this collection') : '',
+          state.view === 'archived' ? button('unarchive', 'unarchive', 'Unarchive') : button('archive', 'archive', 'Archive'),
+          button('delete', 'delete', 'Move to trash'),
+        ].join('');
+}
+
+async function bulk(body, message) {
+  const ids = [...state.selected];
+  try {
+    const { updated } = await api.bulk({ ids, ...body });
+    toast(message(updated));
+  } catch (err) {
+    return toast(err.message);
+  }
+  if (body.add_collections || body.remove_collections) loadCollections();
+  reload();
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+$('bulk-actions').addEventListener('click', async (e) => {
+  const act = e.target.closest('[data-bulk]')?.dataset.bulk;
+  switch (act) {
+    case 'pin':
+    case 'unpin':
+      return bulk({ pinned: act === 'pin' }, (n) => `${act === 'pin' ? 'Pinned' : 'Unpinned'} ${plural(n, 'capture')}`);
+    case 'archive':
+    case 'unarchive':
+      return bulk({ archived: act === 'archive' }, (n) => `${act === 'archive' ? 'Archived' : 'Unarchived'} ${plural(n, 'capture')}`);
+    case 'delete':
+      return bulk({ deleted: true }, (n) => `Moved ${plural(n, 'capture')} to trash`);
+    case 'restore':
+      return bulk({ deleted: false }, (n) => `Restored ${plural(n, 'capture')}`);
+    case 'tag': {
+      const tags = (prompt('Add tags (comma separated)') ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+      if (tags.length) bulk({ add_tags: tags }, (n) => `Tagged ${plural(n, 'capture')}`);
+      return;
+    }
+    case 'uncollect': {
+      const name = state.collections.find((c) => c.id === state.collection)?.name ?? 'collection';
+      return bulk({ remove_collections: [state.collection] }, (n) => `Took ${plural(n, 'capture')} out of ${name}`);
+    }
+    case 'collect':
+      return openBulkCollect();
+    case 'purge': {
+      const ids = [...state.selected];
+      if (!confirm(`Delete ${plural(ids.length, 'capture')} forever? This cannot be undone.`)) return;
+      let gone = 0;
+      for (const id of ids) {
+        try {
+          await api.purge(id);
+          gone++;
+        } catch {
+          /* counted below */
+        }
+      }
+      toast(gone === ids.length ? `Deleted ${plural(gone, 'capture')}` : `Deleted ${gone} of ${ids.length}`);
+      return reload();
+    }
+  }
+});
+
+$('bulk-clear').addEventListener('click', clearSelection);
+$('bulk-all').addEventListener('click', () => {
+  for (const c of state.items) state.selected.add(c.id);
+  renderSelection();
+});
+
+document.addEventListener('keydown', (e) => {
+  if ($('app').hidden || e.target.closest('input, textarea') || state.view === 'digest') return;
+  if (e.key === 'Escape' && state.selected.size) clearSelection();
+  if (e.key === 'a' && (e.metaKey || e.ctrlKey) && state.items.length) {
+    e.preventDefault();
+    for (const c of state.items) state.selected.add(c.id);
+    renderSelection();
+  }
+});
+
+const bulkCollect = $('bulk-collect');
+
+async function openBulkCollect() {
+  if (!state.collections.length) {
+    const created = await newCollection();
+    if (created) bulk({ add_collections: [created.id] }, (n) => `Added ${plural(n, 'capture')} to ${created.name}`);
+    return;
+  }
+  $('bulk-collect-chips').innerHTML = `<m3e-filter-chip-set id="bulk-collect-set" multi aria-label="Collections">${state.collections
+    .map((col) => `<m3e-filter-chip value="${esc(col.id)}">${esc(col.name)}</m3e-filter-chip>`)
+    .join('')}</m3e-filter-chip-set><m3e-assist-chip id="bulk-collect-new">${ic('add', 'icon')}New</m3e-assist-chip>`;
+  bulkCollect.show();
+}
+
+$('bulk-collect-chips').addEventListener('click', async (e) => {
+  if (!e.target.closest('#bulk-collect-new')) return;
+  bulkCollect.hide();
+  const created = await newCollection();
+  if (created) bulk({ add_collections: [created.id] }, (n) => `Added ${plural(n, 'capture')} to ${created.name}`);
+});
+$('bulk-collect-cancel').addEventListener('click', () => bulkCollect.hide());
+$('bulk-collect-go').addEventListener('click', () => {
+  const ids = [].concat($('bulk-collect-set')?.value ?? []);
+  bulkCollect.hide();
+  if (ids.length) bulk({ add_collections: ids }, (n) => `Filed ${plural(n, 'capture')}`);
 });
 
 // Poll captures the AI is still working on.

@@ -347,6 +347,78 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
     return c.json({ ok: true });
   });
 
+  // Multi-select on web: one change applied to many captures, all or nothing.
+  app.post("/captures/bulk", async (c) => {
+    const tagList = z.array(z.string().trim().min(1).max(40)).max(20);
+    const idList = z.array(z.string().max(60)).max(100);
+    const parsed = z
+      .object({
+        ids: z.array(z.string().max(60)).min(1).max(500),
+        pinned: z.boolean().optional(),
+        reviewed: z.boolean().optional(),
+        archived: z.boolean().optional(),
+        deleted: z.boolean().optional(),
+        add_tags: tagList.optional(),
+        remove_tags: tagList.optional(),
+        add_collections: idList.optional(),
+        remove_collections: idList.optional(),
+      })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid body" }, 400);
+    const b = parsed.data;
+    const ids = [...new Set(b.ids)];
+
+    if (b.add_collections?.length) {
+      const known = db
+        .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM collections WHERE id IN (SELECT value FROM json_each(?))")
+        .get(JSON.stringify([...new Set(b.add_collections)]))!.n;
+      if (known !== new Set(b.add_collections).size) return c.json({ error: "unknown collection" }, 400);
+    }
+
+    const sets: string[] = [];
+    const params: (number | null)[] = [];
+    const stamp = (col: string, flag: boolean) => {
+      sets.push(`${col} = ?`);
+      params.push(flag ? now() : null);
+    };
+    if (b.pinned !== undefined) {
+      sets.push("pinned = ?");
+      params.push(b.pinned ? 1 : 0);
+    }
+    if (b.reviewed !== undefined) stamp("reviewed_at", b.reviewed);
+    if (b.archived !== undefined) stamp("archived_at", b.archived);
+    if (b.deleted !== undefined) stamp("deleted_at", b.deleted);
+    const addTags = (b.add_tags ?? []).map((t) => t.toLowerCase());
+    const removeTags = new Set((b.remove_tags ?? []).map((t) => t.toLowerCase()));
+    const tagsChange = addTags.length > 0 || removeTags.size > 0;
+
+    let updated = 0;
+    db.transaction(() => {
+      const rows = db
+        .query<{ id: string; tags: string }, [string]>("SELECT id, tags FROM captures WHERE id IN (SELECT value FROM json_each(?))")
+        .all(JSON.stringify(ids));
+      updated = rows.length;
+      for (const row of rows) {
+        const rowSets = [...sets];
+        const rowParams: (string | number | null)[] = [...params];
+        if (tagsChange) {
+          const tags = [...new Set([...(JSON.parse(row.tags) as string[]), ...addTags])].filter((t) => !removeTags.has(t));
+          rowSets.push("tags = ?");
+          rowParams.push(JSON.stringify(tags));
+        }
+        if (rowSets.length) {
+          db.query(`UPDATE captures SET ${rowSets.join(", ")}, updated_at = ? WHERE id = ?`).run(...rowParams, now(), row.id);
+        }
+        for (const col of new Set(b.add_collections ?? []))
+          db.query("INSERT OR IGNORE INTO capture_collections (capture_id, collection_id) VALUES (?, ?)").run(row.id, col);
+        for (const col of new Set(b.remove_collections ?? []))
+          db.query("DELETE FROM capture_collections WHERE capture_id = ? AND collection_id = ?").run(row.id, col);
+        if (index && tagsChange) enqueue(db, row.id, "embed");
+      }
+    })();
+    return c.json({ updated });
+  });
+
   app.post("/captures/:id/reprocess", (c) => {
     const id = c.req.param("id");
     if (!getCapture(id)) return c.json({ error: "not found" }, 404);

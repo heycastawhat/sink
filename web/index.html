@@ -82,6 +82,14 @@
         </m3e-fab>
         <input id="file-input" type="file" accept="image/*" multiple hidden />
 
+        <div id="bulk-bar" class="bulk-bar" hidden role="toolbar" aria-label="Selected captures">
+          <m3e-icon-button id="bulk-clear" aria-label="Clear selection"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
+          <span id="bulk-count" class="bulk-count"></span>
+          <span class="spacer"></span>
+          <m3e-button id="bulk-all" variant="text" size="small">Select all</m3e-button>
+          <div id="bulk-actions" class="bulk-actions"></div>
+        </div>
+
         <div id="dropzone" class="dropzone" hidden>
           <m3e-shape name="very-sunny" class="drop-shape"></m3e-shape>
           <m3e-heading variant="headline" size="small">Drop to stash</m3e-heading>
@@ -101,6 +109,16 @@
         <div slot="actions" end>
           <m3e-button id="upload-cancel">Cancel</m3e-button>
           <m3e-button id="upload-go" variant="filled">Stash</m3e-button>
+        </div>
+      </m3e-dialog>
+
+      <!-- Bulk: file selected captures into collections -->
+      <m3e-dialog id="bulk-collect" dismissible>
+        <span slot="header">Add to collections</span>
+        <div class="collection-chips" id="bulk-collect-chips"></div>
+        <div slot="actions" end>
+          <m3e-button id="bulk-collect-cancel">Cancel</m3e-button>
+          <m3e-button id="bulk-collect-go" variant="filled">Add</m3e-button>
         </div>
       </m3e-dialog>
 
