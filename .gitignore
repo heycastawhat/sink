@@ -1,5 +1,7 @@
 node_modules/
-data/
+# Runtime data (compose volume, or server run from its own dir). Not the Android data package.
+/data/
+/server/data/
 .env
 *.log
 dist/
