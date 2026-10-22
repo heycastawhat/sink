@@ -51,7 +51,8 @@ fun CollectionsRow(vm: SinkViewModel, collections: List<SinkCollection>, selecte
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.padding(top = 4.dp),
     ) {
-        items(collections, key = { it.id }) { col ->
+        // No keys: keyed items make the row stay anchored on "New" when collections load in.
+        items(collections) { col ->
             FilterChip(
                 selected = col.id == selected,
                 onClick = { vm.setCollection(col.id) },
@@ -60,10 +61,10 @@ fun CollectionsRow(vm: SinkViewModel, collections: List<SinkCollection>, selecte
             )
         }
         if (current != null) {
-            item(key = "rename") { IconButton(onClick = { naming = current }) { Icon(Icons.Outlined.Edit, "Rename collection") } }
-            item(key = "delete") { IconButton(onClick = { deleting = current }) { Icon(Icons.Outlined.Delete, "Delete collection") } }
+            item { IconButton(onClick = { naming = current }) { Icon(Icons.Outlined.Edit, "Rename collection") } }
+            item { IconButton(onClick = { deleting = current }) { Icon(Icons.Outlined.Delete, "Delete collection") } }
         }
-        item(key = "new") {
+        item {
             AssistChip(
                 onClick = { creating = true },
                 label = { Text("New collection") },

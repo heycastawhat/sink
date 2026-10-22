@@ -24,10 +24,12 @@ import nz.joshp.sink.capture.UPLOAD_TAG
 import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.Capture
+import nz.joshp.sink.data.Page
 import nz.joshp.sink.data.SinkCollection
 
 enum class View(val id: String, val label: String) {
     All("all", "Sink"),
+    Review("digest", "Review"),
     Pinned("pinned", "Pinned"),
     Archived("archived", "Archive"),
     Trash("trash", "Trash"),
@@ -122,7 +124,9 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value
         _state.update { it.copy(loading = true) }
         try {
-            val page = api.list(s.query, s.kind, s.collection, s.view.id, if (reset) null else s.cursor)
+            // Review is one short list from the digest; filters and paging don't apply.
+            val page = if (s.view == View.Review) Page(api.digest())
+            else api.list(s.query, s.kind, s.collection, s.view.id, if (reset) null else s.cursor)
             _state.update {
                 it.copy(
                     items = if (reset) page.items else it.items + page.items,
@@ -206,6 +210,18 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
         _state.value.collection?.let { if (it !in updated.collections.orEmpty()) remove(id) }
         loadCollections()
         return updated
+    }
+
+    /** Review: keep (seen, stays in the sink) or archive. */
+    fun review(id: String, archive: Boolean) {
+        remove(id)
+        viewModelScope.launch {
+            val body = buildJsonObject {
+                put("reviewed", JsonPrimitive(true))
+                if (archive) put("archived", JsonPrimitive(true))
+            }
+            runCatching { api()?.patch(id, body) }
+        }
     }
 
     // ---- detail ----

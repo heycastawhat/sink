@@ -35,6 +35,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Delete
@@ -49,6 +51,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -59,6 +62,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.ToggleButton
@@ -83,6 +87,7 @@ import nz.joshp.sink.data.Capture
 
 private val VIEW_ICONS = mapOf(
     View.All to Icons.Outlined.Inventory2,
+    View.Review to Icons.Outlined.AutoAwesome,
     View.Pinned to Icons.Outlined.PushPin,
     View.Archived to Icons.Outlined.Archive,
     View.Trash to Icons.Outlined.Delete,
@@ -172,8 +177,8 @@ fun HomeScreen(vm: SinkViewModel, serverUrl: String, onOpen: (String) -> Unit, o
                 }
             }
 
-            // Kinds
-            LazyRow(
+            // Kinds (the review list ignores filters, so they hide there)
+            if (state.view != View.Review) LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -187,7 +192,7 @@ fun HomeScreen(vm: SinkViewModel, serverUrl: String, onOpen: (String) -> Unit, o
                 }
             }
 
-            CollectionsRow(vm, state.collections, state.collection)
+            if (state.view != View.Review) CollectionsRow(vm, state.collections, state.collection)
 
             AnimatedVisibility(uploading > 0) {
                 Surface(
@@ -213,6 +218,7 @@ fun HomeScreen(vm: SinkViewModel, serverUrl: String, onOpen: (String) -> Unit, o
                     state.items.isEmpty() && state.error != null -> EmptyState("Can't reach the sink", "${state.error}\n$serverUrl")
                     state.items.isEmpty() && state.done -> EmptyState(
                         when {
+                            state.view == View.Review -> "All caught up"
                             state.query.isNotBlank() -> "Nothing matches"
                             state.collection != null -> "Nothing in here yet"
                             state.view == View.Trash -> "Trash is empty"
@@ -221,13 +227,14 @@ fun HomeScreen(vm: SinkViewModel, serverUrl: String, onOpen: (String) -> Unit, o
                             else -> "Sink's empty"
                         },
                         when {
+                            state.view == View.Review -> "Nothing from this week left to look at."
                             state.query.isNotBlank() -> "Try fewer words."
                             state.collection != null -> "Open a capture and file it into this collection."
                             state.view == View.All -> "Take a screenshot, or share any image to Sink."
                             else -> ""
                         },
                     )
-                    else -> CaptureGrid(state, grid, onOpen)
+                    else -> CaptureGrid(state, grid, onOpen, onReview = if (state.view == View.Review) vm::review else null)
                 }
             }
         }
@@ -240,6 +247,7 @@ private fun CaptureGrid(
     state: SinkState,
     grid: androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState,
     onOpen: (String) -> Unit,
+    onReview: ((String, Boolean) -> Unit)? = null,
 ) {
     // Day headers when browsing by date; search results are ranked so they stay flat.
     val groups = remember(state.items, state.query) {
@@ -265,7 +273,24 @@ private fun CaptureGrid(
                     )
                 }
             }
-            items(items, key = { it.id }) { c -> CaptureCard(c, onClick = { onOpen(c.id) }, Modifier.animateItem()) }
+            items(items, key = { it.id }) { c ->
+                if (onReview == null) CaptureCard(c, onClick = { onOpen(c.id) }, Modifier.animateItem())
+                else Column(Modifier.animateItem(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CaptureCard(c, onClick = { onOpen(c.id) })
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilledTonalButton(onClick = { onReview(c.id, false) }, Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 8.dp)) {
+                            Icon(Icons.Outlined.Check, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Keep")
+                        }
+                        TextButton(onClick = { onReview(c.id, true) }, Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 8.dp)) {
+                            Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Archive")
+                        }
+                    }
+                }
+            }
         }
         if (state.loading && state.items.isNotEmpty()) {
             item(span = StaggeredGridItemSpan.FullLine) {

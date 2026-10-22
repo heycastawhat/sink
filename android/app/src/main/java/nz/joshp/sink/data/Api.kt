@@ -89,6 +89,9 @@ data class Reminder(
 private data class ReminderList(val reminders: List<Reminder>)
 
 @Serializable
+private data class Digest(val unreviewed: List<Capture>)
+
+@Serializable
 data class Page(val items: List<Capture>, @SerialName("next_cursor") val nextCursor: String? = null)
 
 @Serializable
@@ -172,6 +175,9 @@ class Api(private val session: Session) {
                 }),
             ).build(),
         ) { }
+
+    /** Last week's captures not looked at again yet. */
+    suspend fun digest(): List<Capture> = call(request("/api/digest").build()) { json.decodeFromString<Digest>(it).unreviewed }
 
     suspend fun collections(): List<SinkCollection> =
         call(request("/api/collections").build()) { json.decodeFromString<CollectionList>(it).collections }
