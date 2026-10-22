@@ -40,6 +40,7 @@ data class SinkState(
     val kind: String? = null,
     val collection: String? = null,
     val collections: List<SinkCollection> = emptyList(),
+    val reviewCount: Int = 0,
     val query: String = "",
     val items: List<Capture> = emptyList(),
     val cursor: String? = null,
@@ -69,6 +70,7 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
     init {
         reload()
         loadCollections()
+        refreshReviewCount()
         // When the queue drains, new captures exist on the server.
         viewModelScope.launch {
             uploading.collect { n ->
@@ -80,18 +82,23 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun api(): Api? = sinkApp.settings.session.first()?.let(::Api)
 
-    fun setView(view: View) {
-        _state.update { it.copy(view = view) }
+    /** What a screen shows: a view, optionally inside a collection. Called by each screen as it appears. */
+    fun show(view: View, collection: String? = null) {
+        val s = _state.value
+        if (s.view == view && s.collection == collection) return
+        _state.update { it.copy(view = view, collection = collection, kind = null, query = "") }
         reload()
+    }
+
+    fun refreshReviewCount() {
+        viewModelScope.launch {
+            val n = runCatching { api()?.digest()?.size }.getOrNull() ?: return@launch
+            _state.update { it.copy(reviewCount = n) }
+        }
     }
 
     fun setKind(kind: String?) {
         _state.update { it.copy(kind = if (it.kind == kind) null else kind) }
-        reload()
-    }
-
-    fun setCollection(id: String?) {
-        _state.update { it.copy(collection = if (it.collection == id) null else id) }
         reload()
     }
 
@@ -215,6 +222,7 @@ class SinkViewModel(app: Application) : AndroidViewModel(app) {
     /** Review: keep (seen, stays in the sink) or archive. */
     fun review(id: String, archive: Boolean) {
         remove(id)
+        _state.update { it.copy(reviewCount = (it.reviewCount - 1).coerceAtLeast(0)) }
         viewModelScope.launch {
             val body = buildJsonObject {
                 put("reviewed", JsonPrimitive(true))

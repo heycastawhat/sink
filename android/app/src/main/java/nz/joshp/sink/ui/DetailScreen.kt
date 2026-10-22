@@ -4,11 +4,14 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,8 +23,12 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -33,6 +40,7 @@ import androidx.compose.material.icons.outlined.AlarmOn
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.ErrorOutline
@@ -55,6 +63,8 @@ import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -77,10 +87,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
@@ -94,10 +109,10 @@ import nz.joshp.sink.data.Reminder
 import nz.joshp.sink.reminders.Reminders
 
 private val ENTITY_LABELS = mapOf(
-    "dates" to ("Dates" to Icons.Outlined.Event),
+    "dates" to ("When" to Icons.Outlined.Event),
     "urls" to ("Links" to Icons.Outlined.Link),
-    "prices" to ("Prices" to Icons.Outlined.Sell),
-    "addresses" to ("Places" to Icons.Outlined.Place),
+    "prices" to ("Price" to Icons.Outlined.Sell),
+    "addresses" to ("Where" to Icons.Outlined.Place),
     "people" to ("People" to Icons.Outlined.Person),
 )
 
@@ -109,7 +124,8 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
     var full by remember { mutableStateOf<Capture?>(null) }
     var title by remember { mutableStateOf(capture?.title ?: "") }
     var note by remember { mutableStateOf(capture?.note ?: "") }
-    var tags by remember { mutableStateOf(capture?.tags?.joinToString(", ") ?: "") }
+    var newTag by remember { mutableStateOf("") }
+    var showText by remember { mutableStateOf(false) }
     var confirmPurge by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -121,7 +137,6 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
         capture = fresh
         title = fresh.title ?: ""
         note = fresh.note ?: ""
-        tags = fresh.tags.joinToString(", ")
     }
     // Keep polling while the AI is still reading, so the page fills in live.
     LaunchedEffect(capture?.busy) {
@@ -131,7 +146,6 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                 full = fresh
                 capture = fresh
                 if (title.isBlank()) title = fresh.title ?: ""
-                if (tags.isBlank()) tags = fresh.tags.joinToString(", ")
                 vm.replace(fresh)
             }
         }
@@ -140,11 +154,10 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
     fun saveAndBack() {
         val c = full ?: capture
         if (c != null) {
-            val tagList = tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            // Tags save as they change; title and note save on the way out.
             val body = buildJsonObject {
                 if (title.trim() != (c.title ?: "")) put("title", title.trim())
                 if (note.trim() != (c.note ?: "")) put("note_text", note.trim())
-                if (tagList != c.tags) put("tags", JsonArray(tagList.map(::JsonPrimitive)))
             }
             if (body.isNotEmpty()) scope.launch { vm.patch(c.id, body) }
         }
@@ -157,14 +170,13 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    if (c != null) Text("${relativeDay(c.createdAt)}, ${timeOf(c.createdAt)}", style = MaterialTheme.typography.titleMedium)
-                },
+                title = {},
                 navigationIcon = { IconButton(onClick = ::saveAndBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
     ) { inner ->
         if (c == null) {
             Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
@@ -178,18 +190,34 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                     .imePadding()
                     .padding(horizontal = 16.dp)
                     .padding(bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                val kind = kindOf(c.kind)
+                val shot = RoundedCornerShape(22.dp)
                 AsyncImage(
                     model = CaptureImages.absolute(c.imageUrl),
                     contentDescription = "Screenshot",
                     contentScale = ContentScale.FillWidth,
+                    alignment = Alignment.TopCenter,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 560.dp)
-                        .clip(RoundedCornerShape(28.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                        .heightIn(max = 440.dp)
+                        .clip(shot)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), shot),
                 )
+
+                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    kind?.let {
+                        KindPill(it.icon, it.one, it.hue)
+                        Spacer(Modifier.width(10.dp))
+                    }
+                    Text(
+                        "${relativeDay(c.createdAt)}, ${timeOf(c.createdAt)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
 
                 if (c.busy) {
                     StatusBanner(null, "AI is reading this…", error = false)
@@ -197,14 +225,28 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                     StatusBanner(Icons.Outlined.ErrorOutline, "AI couldn't process this. ${c.error ?: ""}", error = true)
                 }
 
-                OutlinedTextField(
+                // The title is the heading itself; tap to edit.
+                BasicTextField(
                     value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Title") },
-                    textStyle = MaterialTheme.typography.titleLarge,
+                    onValueChange = { title = it.replace("\n", " ") },
+                    textStyle = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.2).sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     modifier = Modifier.fillMaxWidth(),
+                    decorationBox = { field ->
+                        Box {
+                            if (title.isEmpty()) {
+                                Text("Add a title", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            field()
+                        }
+                    },
                 )
-                c.summary?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+                c.summary?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 
                 val actions = full?.actions?.filter { it.state != "dismissed" }.orEmpty()
                 if (actions.isNotEmpty()) {
@@ -251,31 +293,31 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                     }
                 }
 
-                c.sourceUrl?.takeIf { it.startsWith("http") }?.let { url ->
-                    AssistChip(
-                        onClick = {
-                            runCatching {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                            }
-                        },
-                        label = { Text(Uri.parse(url).host ?: url, maxLines = 1) },
-                        leadingIcon = { Icon(Icons.Outlined.Public, null, Modifier.size(AssistChipDefaults.IconSize)) },
-                    )
-                }
-
+                // Facts the AI pulled out, plus the page it came from, in one card.
+                val page = c.sourceUrl?.takeIf { it.startsWith("http") }
                 val entities = c.entities.filterValues { it.isNotEmpty() }
-                if (entities.isNotEmpty()) {
+                if (page != null || entities.isNotEmpty()) {
+                    val ink = kind?.let { kindInk(it.hue) } ?: MaterialTheme.colorScheme.primary
                     Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
                         SelectionContainer {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                page?.let { url ->
+                                    Fact(Icons.Outlined.Public, "Page", ink) {
+                                        Text(
+                                            Uri.parse(url).host?.removePrefix("www.") ?: url,
+                                            style = MaterialTheme.typography.bodyMedium.copy(textDecoration = TextDecoration.Underline),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.clickable {
+                                                runCatching {
+                                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
                                 for ((key, values) in entities) {
                                     val (label, icon) = ENTITY_LABELS[key] ?: (key to Icons.AutoMirrored.Outlined.Label)
-                                    Row(verticalAlignment = Alignment.Top) {
-                                        Icon(icon, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                        Spacer(Modifier.width(10.dp))
-                                        Text(label, Modifier.width(64.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-                                        Text(values.joinToString(" · "), style = MaterialTheme.typography.bodyMedium)
-                                    }
+                                    Fact(icon, label, ink) { Text(values.joinToString("\n") { formatEntity(key, it) }, style = MaterialTheme.typography.bodyMedium) }
                                 }
                             }
                         }
@@ -292,6 +334,31 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                     }
                 }
 
+                SectionLabel("Your note", Modifier.padding(top = 10.dp))
+                BasicTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth(),
+                    decorationBox = { field ->
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 64.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                        ) {
+                            if (note.isEmpty()) {
+                                Text("Why did you save this?", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            field()
+                        }
+                    },
+                )
+
+                SectionLabel("Collections", Modifier.padding(top = 10.dp))
                 CollectionPicker(vm, listState.collections, full?.collections.orEmpty()) { ids ->
                     scope.launch {
                         val updated = vm.setCollections(c.id, ids)
@@ -300,23 +367,62 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                     }
                 }
 
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("Your note") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = tags,
-                    onValueChange = { tags = it },
-                    label = { Text("Tags (comma separated)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                SectionLabel("Tags", Modifier.padding(top = 10.dp))
+                val currentTags = (full ?: c).tags
+                fun saveTags(next: List<String>) {
+                    scope.launch {
+                        vm.patch(c.id, buildJsonObject { put("tags", JsonArray(next.map(::JsonPrimitive))) })?.let { full = it; capture = it }
+                    }
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    for (t in currentTags) {
+                        InputChip(
+                            selected = false,
+                            onClick = { saveTags(currentTags - t) },
+                            label = { Text(t) },
+                            trailingIcon = { Icon(Icons.Outlined.Close, "Remove $t", Modifier.size(InputChipDefaults.IconSize)) },
+                        )
+                    }
+                    BasicTextField(
+                        value = newTag,
+                        onValueChange = { v ->
+                            // A comma finishes a tag, like the web.
+                            if (v.endsWith(",")) {
+                                val t = v.dropLast(1).trim().lowercase()
+                                if (t.isNotEmpty() && t !in currentTags) saveTags(currentTags + t)
+                                newTag = ""
+                            } else newTag = v
+                        },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            val t = newTag.trim().lowercase()
+                            if (t.isNotEmpty() && t !in currentTags) saveTags(currentTags + t)
+                            newTag = ""
+                        }),
+                        modifier = Modifier.widthIn(min = 96.dp).padding(vertical = 10.dp),
+                        decorationBox = { field ->
+                            Box {
+                                if (newTag.isEmpty()) {
+                                    Text(if (currentTags.isEmpty()) "Add a tag" else "Add", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                field()
+                            }
+                        },
+                    )
+                }
+
                 c.ocrText?.let {
-                    Text("Text in image", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    TextButton(onClick = { showText = !showText }, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                        Text(if (showText) "Hide text in the image" else "Show text in the image")
+                    }
+                    if (showText) SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }
                 c.model?.let { Text("Read by $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
@@ -433,4 +539,28 @@ private fun PriceWatchRow(c: Capture, onToggle: (Boolean) -> Unit) {
             Switch(checked = w != null, onCheckedChange = onToggle)
         }
     }
+}
+
+@Composable
+private fun Fact(icon: ImageVector, label: String, ink: androidx.compose.ui.graphics.Color, value: @Composable () -> Unit) {
+    Row(verticalAlignment = Alignment.Top) {
+        Icon(icon, null, Modifier.size(20.dp), tint = ink)
+        Spacer(Modifier.width(10.dp))
+        Text(label, Modifier.width(64.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+        Box(Modifier.weight(1f)) { value() }
+    }
+}
+
+/** Dates read as dates, links without the https://www. noise. */
+private fun formatEntity(key: String, value: String): String = when (key) {
+    "dates" -> runCatching {
+        if (value.length <= 10) {
+            java.time.LocalDate.parse(value).format(java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM))
+        } else {
+            java.time.OffsetDateTime.parse(value).atZoneSameInstant(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.MEDIUM, java.time.format.FormatStyle.SHORT))
+        }
+    }.getOrDefault(value)
+    "urls" -> value.removePrefix("https://").removePrefix("http://").removePrefix("www.")
+    else -> value
 }

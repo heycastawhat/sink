@@ -88,8 +88,9 @@ class CaptureActivity : ComponentActivity() {
 
         setContent {
             val dynamic by app.settings.dynamicColor.collectAsState(initial = false)
+            val mode by app.settings.themeMode.collectAsState(initial = "auto")
             val session by app.settings.session.collectAsState(initial = Session("", ""))
-            SinkTheme(dynamicColor = dynamic) {
+            SinkTheme(dynamicColor = dynamic, mode = mode) {
                 if (session == null) {
                     LaunchedEffect(Unit) {
                         Toast.makeText(this@CaptureActivity, "Log in to Sink first", Toast.LENGTH_LONG).show()

@@ -16,23 +16,25 @@ import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Restaurant
 import androidx.compose.material.icons.outlined.ShoppingBag
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
 
-data class Kind(val id: String, val label: String, val icon: ImageVector)
+/** [hue] matches the web client's --kind colours so a kind looks the same everywhere. */
+data class Kind(val id: String, val label: String, val one: String, val icon: ImageVector, val hue: Color)
 
 val KINDS = listOf(
-    Kind("event", "Events", Icons.Outlined.Event),
-    Kind("receipt", "Receipts", Icons.AutoMirrored.Outlined.ReceiptLong),
-    Kind("product", "Products", Icons.Outlined.ShoppingBag),
-    Kind("place", "Places", Icons.Outlined.Place),
-    Kind("code", "Code", Icons.Outlined.Code),
-    Kind("article", "Articles", Icons.AutoMirrored.Outlined.Article),
-    Kind("message", "Messages", Icons.AutoMirrored.Outlined.Chat),
-    Kind("recipe", "Recipes", Icons.Outlined.Restaurant),
-    Kind("other", "Other", Icons.Outlined.Category),
+    Kind("event", "Events", "Event", Icons.Outlined.Event, Color(0xFFE4572E)),
+    Kind("receipt", "Receipts", "Receipt", Icons.AutoMirrored.Outlined.ReceiptLong, Color(0xFF2A9D5C)),
+    Kind("product", "Products", "Product", Icons.Outlined.ShoppingBag, Color(0xFFD08700)),
+    Kind("place", "Places", "Place", Icons.Outlined.Place, Color(0xFF10939B)),
+    Kind("code", "Code", "Code", Icons.Outlined.Code, Color(0xFF5B5FD6)),
+    Kind("article", "Articles", "Article", Icons.AutoMirrored.Outlined.Article, Color(0xFF2F7FD2)),
+    Kind("message", "Messages", "Message", Icons.AutoMirrored.Outlined.Chat, Color(0xFFD1458E)),
+    Kind("recipe", "Recipes", "Recipe", Icons.Outlined.Restaurant, Color(0xFFE0742A)),
+    Kind("other", "Other", "Other", Icons.Outlined.Category, Color(0xFF7B7B86)),
 )
 
 fun kindOf(id: String?) = KINDS.firstOrNull { it.id == id }

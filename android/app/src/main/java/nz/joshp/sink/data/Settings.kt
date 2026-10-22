@@ -20,6 +20,7 @@ class Settings(private val context: Context) {
         val token = stringPreferencesKey("token")
         val autoImport = booleanPreferencesKey("auto_import")
         val dynamicColor = booleanPreferencesKey("dynamic_color")
+        val themeMode = stringPreferencesKey("theme_mode")
         val floatingButton = booleanPreferencesKey("floating_button")
         val lastImportedAt = longPreferencesKey("last_imported_at")
         val pendingServer = stringPreferencesKey("pending_server")
@@ -37,6 +38,13 @@ class Settings(private val context: Context) {
     // Pixel Screenshots behaviour: on unless turned off.
     val autoImport: Flow<Boolean> = context.dataStore.data.map { it[Keys.autoImport] ?: true }
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[Keys.dynamicColor] ?: false }
+
+    /** "auto" follows the system; "light" / "dark" pin it. */
+    val themeMode: Flow<String> = context.dataStore.data.map { it[Keys.themeMode] ?: "auto" }
+
+    suspend fun setThemeMode(mode: String) {
+        context.dataStore.edit { it[Keys.themeMode] = mode }
+    }
 
     // Accessibility floating button. Off by default: hold-power (assistant) is the main way in.
     val floatingButton: Flow<Boolean> = context.dataStore.data.map { it[Keys.floatingButton] ?: false }

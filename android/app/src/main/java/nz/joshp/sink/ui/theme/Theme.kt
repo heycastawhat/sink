@@ -13,9 +13,15 @@ import androidx.compose.ui.platform.LocalContext
 @Composable
 fun SinkTheme(
     dynamicColor: Boolean = false,
-    dark: Boolean = isSystemInDarkTheme(),
+    // "auto", "light" or "dark", from settings.
+    mode: String = "auto",
     content: @Composable () -> Unit,
 ) {
+    val dark = when (mode) {
+        "light" -> false
+        "dark" -> true
+        else -> isSystemInDarkTheme()
+    }
     val context = LocalContext.current
     val colors = when {
         dynamicColor && dark -> dynamicDarkColorScheme(context)
