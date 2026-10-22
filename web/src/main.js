@@ -4,7 +4,6 @@ import '@m3e/web/button';
 import '@m3e/web/button-group';
 import '@m3e/web/icon';
 import '@m3e/web/icon-button';
-import '@m3e/web/heading';
 import '@m3e/web/shape';
 import '@m3e/web/loading-indicator';
 import '@m3e/web/form-field';
@@ -24,6 +23,8 @@ const esc = (s) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
 const toast = (msg, opts = {}) => M3eSnackbar.open(msg, { duration: 3000, ...opts });
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const isPhone = () => matchMedia('(max-width: 839px)').matches;
 
 const storage = {
   get(key) {
@@ -42,24 +43,25 @@ const storage = {
   },
 };
 
+// Each kind has its own hue (see --kind in style.css) so the grid scans by colour.
 const KINDS = {
-  event: { icon: 'event', label: 'Events' },
-  receipt: { icon: 'receipt_long', label: 'Receipts' },
-  product: { icon: 'shopping_bag', label: 'Products' },
-  place: { icon: 'place', label: 'Places' },
-  code: { icon: 'code', label: 'Code' },
-  article: { icon: 'article', label: 'Articles' },
-  message: { icon: 'chat', label: 'Messages' },
-  recipe: { icon: 'restaurant', label: 'Recipes' },
-  other: { icon: 'category', label: 'Other' },
+  event: { icon: 'event', label: 'Events', one: 'Event' },
+  receipt: { icon: 'receipt_long', label: 'Receipts', one: 'Receipt' },
+  product: { icon: 'shopping_bag', label: 'Products', one: 'Product' },
+  place: { icon: 'place', label: 'Places', one: 'Place' },
+  code: { icon: 'code', label: 'Code', one: 'Code' },
+  article: { icon: 'article', label: 'Articles', one: 'Article' },
+  message: { icon: 'chat', label: 'Messages', one: 'Message' },
+  recipe: { icon: 'restaurant', label: 'Recipes', one: 'Recipe' },
+  other: { icon: 'category', label: 'Other', one: 'Other' },
 };
 
 const VIEWS = [
-  { id: 'all', label: 'Sink', icon: 'inventory_2' },
-  { id: 'digest', label: 'Review', icon: 'auto_awesome' },
-  { id: 'pinned', label: 'Pinned', icon: 'push_pin' },
-  { id: 'archived', label: 'Archive', icon: 'archive' },
-  { id: 'trash', label: 'Trash', icon: 'delete' },
+  { id: 'all', label: 'Sink', icon: 'inventory_2', hash: '#/' },
+  { id: 'digest', label: 'Review', icon: 'auto_awesome', hash: '#/review' },
+  { id: 'pinned', label: 'Pinned', icon: 'push_pin', hash: '#/pinned' },
+  { id: 'archived', label: 'Archive', icon: 'archive', hash: '#/archive' },
+  { id: 'trash', label: 'Trash', icon: 'delete', hash: '#/trash' },
 ];
 
 const ACTION_ICONS = {
@@ -70,6 +72,15 @@ const ACTION_ICONS = {
   copy: 'content_copy',
   price_drop: 'trending_down',
 };
+
+const ACCENTS = [
+  { color: '#6750A4', name: 'Grape' },
+  { color: '#006A6A', name: 'Teal' },
+  { color: '#B3261E', name: 'Tomato' },
+  { color: '#8C5000', name: 'Amber' },
+  { color: '#386A20', name: 'Fern' },
+  { color: '#0061A4', name: 'Ocean' },
+];
 
 function relativeDay(ts) {
   const d = new Date(ts);
@@ -82,25 +93,30 @@ function relativeDay(ts) {
 }
 
 const timeOf = (ts) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const busyStatus = (c) => c.status === 'pending' || c.status === 'processing';
 
 // ---------- state ----------
 
 const state = {
+  // Route: one of VIEWS, 'settings' or 'library' (phone), optionally inside a collection.
   view: 'all',
-  kind: '',
   collection: '',
-  collections: [],
+  kind: '',
   q: '',
+  collections: [],
   items: [],
   cursor: null,
   done: false,
   loading: false,
   generation: 0,
   current: null,
+  reviewCount: 0,
   // Multi-select: ids picked in the grid, and the last one clicked (for shift-click ranges).
   selected: new Set(),
   anchor: null,
 };
+
+const listView = () => !['digest', 'settings', 'library'].includes(state.view);
 
 // ---------- auth ----------
 
@@ -123,16 +139,12 @@ function showApp() {
   $('login').hidden = true;
   $('app').hidden = false;
   loadCollections();
-  reload();
+  refreshReviewCount();
+  applyRoute();
 }
 
 $('login-submit').addEventListener('click', () => {
   location.href = '/api/auth/oidc/start?client=web';
-});
-
-$('logout').addEventListener('click', async () => {
-  await api.logout().catch(() => {});
-  showLogin();
 });
 
 // Any 401 anywhere drops back to login.
@@ -143,107 +155,114 @@ window.addEventListener('unhandledrejection', (e) => {
   }
 });
 
-// ---------- connect an AI assistant (MCP) ----------
-
-const connect = $('connect');
-
-async function renderTokens() {
-  try {
-    const [{ tokens }, me] = await Promise.all([api.tokens(), api.me()]);
-    const ago = (ts) => (ts ? `${relativeDay(ts)} ${timeOf(ts)}` : 'never');
-    $('connect-tokens').innerHTML = tokens
-      .map(
-        (t) => `<div class="token-row">
-  ${ic(/\(MCP\)|claude|mcp|code/i.test(t.name) ? 'hub' : 'devices')}
-  <span>${esc(t.name)}${t.id === me.tokenId ? ' <span class="muted">(this browser)</span>' : ''}</span>
-  <span class="spacer"></span>
-  <span class="muted">used ${esc(ago(t.last_used_at))}</span>
-  ${t.id === me.tokenId ? '' : `<m3e-icon-button data-revoke="${esc(t.id)}" aria-label="Revoke ${esc(t.name)}">${ic('delete')}</m3e-icon-button>`}
-</div>`,
-      )
-      .join('');
-  } catch (err) {
-    $('connect-tokens').textContent = err.message;
-  }
-}
-
-$('connect-open').addEventListener('click', () => {
-  $('connect-url').textContent = `${location.origin}/mcp`;
-  $('connect-result').hidden = true;
-  $('connect-command').textContent = '';
-  renderTokens();
-  connect.show();
-});
-$('connect-close').addEventListener('click', () => connect.hide());
-
-$('connect-create').addEventListener('click', async () => {
-  const name = $('connect-name').value.trim() || 'MCP client';
-  try {
-    const { token } = await api.createToken(name);
-    $('connect-command').textContent =
-      `claude mcp add --transport http --scope user sink ${location.origin}/mcp \\\n  --header "Authorization: Bearer ${token}"`;
-    $('connect-result').hidden = false;
-    renderTokens();
-  } catch (err) {
-    toast(err.message);
-  }
-});
-
-$('connect-url-copy').addEventListener('click', async () => {
-  await navigator.clipboard.writeText($('connect-url').textContent);
-  toast('Copied');
-});
-
-$('connect-copy').addEventListener('click', async () => {
-  await navigator.clipboard.writeText($('connect-command').textContent);
-  toast('Copied');
-});
-
-$('connect-tokens').addEventListener('click', async (e) => {
-  const btn = e.target.closest('[data-revoke]');
-  if (!btn || !confirm('Revoke this token? That device or client gets signed out.')) return;
-  await api.revokeToken(btn.dataset.revoke).catch((err) => toast(err.message));
-  renderTokens();
-});
-
 // ---------- theme ----------
 
 const theme = $('theme');
-const darkToggle = $('dark-toggle');
-const savedScheme = storage.get('scheme');
-if (savedScheme) {
-  theme.setAttribute('scheme', savedScheme);
-  darkToggle.selected = savedScheme === 'dark';
-} else {
-  darkToggle.selected = matchMedia('(prefers-color-scheme: dark)').matches;
-}
-darkToggle.addEventListener('change', () => {
-  const scheme = darkToggle.selected ? 'dark' : 'light';
+
+function applyTheme() {
+  const scheme = storage.get('scheme') ?? 'auto';
+  const accent = storage.get('accent') ?? ACCENTS[0].color;
   theme.setAttribute('scheme', scheme);
-  storage.set('scheme', scheme);
+  theme.setAttribute('color', accent);
+  document.querySelector('meta[name="theme-color"]').content = accent;
+}
+applyTheme();
+
+// ---------- routing ----------
+// Hash routes so reloads, the back button and links keep their place:
+// #/  #/review  #/pinned  #/archive  #/trash  #/c/<collection>  #/settings  #/library
+
+function parseHash() {
+  const path = location.hash.replace(/^#/, '') || '/';
+  const [, first = '', second = ''] = path.split('/');
+  if (first === 'c' && second) return { view: 'all', collection: decodeURIComponent(second) };
+  const view = VIEWS.find((v) => v.hash === `#/${first}`)?.id ?? (['settings', 'library'].includes(first) ? first : 'all');
+  return { view, collection: '' };
+}
+
+function applyRoute() {
+  const route = parseHash();
+  // Library is a phone page; on desktop the sidebar already is the library.
+  if (route.view === 'library' && !isPhone()) route.view = 'all';
+  const changed = route.view !== state.view || route.collection !== state.collection;
+  state.view = route.view;
+  state.collection = route.collection;
+  if (changed) closePanel();
+  renderChrome();
+  if (state.view === 'settings') renderSettings();
+  if (listView() || state.view === 'digest') reload();
+}
+
+window.addEventListener('hashchange', applyRoute);
+
+// Phone: the open capture is a history entry, so swipe-back / the back button closes it.
+window.addEventListener('popstate', () => {
+  if (!history.state?.capture && state.current && isPhone()) closePanel({ fromHistory: true });
 });
+
+/** Sidebar, tab bar, page title and which sections show, for the current route. */
+function renderChrome() {
+  const col = state.collections.find((c) => c.id === state.collection);
+  const view = VIEWS.find((v) => v.id === state.view);
+
+  $('nav-views').innerHTML = VIEWS.map(
+    (v) => `<a class="nav-item${!state.collection && state.view === v.id ? ' active' : ''}" href="${v.hash}">
+  ${ic(v.icon)}<span>${v.label}</span>${v.id === 'digest' && state.reviewCount ? `<b class="count">${state.reviewCount}</b>` : ''}
+</a>`,
+  ).join('');
+  $('nav-collections').innerHTML = state.collections.length
+    ? state.collections
+        .map(
+          (c) => `<a class="nav-item${c.id === state.collection ? ' active' : ''}" href="#/c/${encodeURIComponent(c.id)}">
+  ${ic('folder')}<span>${esc(c.name)}</span><b class="count">${c.count}</b>
+</a>`,
+        )
+        .join('')
+    : '<p class="nav-empty">Group captures for a trip, a gift list, anything.</p>';
+  document.querySelector('.nav-foot .nav-item').classList.toggle('active', state.view === 'settings');
+
+  const tab = state.collection || ['pinned', 'archived', 'trash'].includes(state.view) ? 'library' : state.view;
+  for (const a of document.querySelectorAll('.tabbar [data-tab]')) a.classList.toggle('active', a.dataset.tab === tab);
+  $('tab-badge').hidden = !state.reviewCount;
+  $('tab-badge').textContent = state.reviewCount;
+
+  const titles = { settings: 'Settings', library: 'Library' };
+  $('view-title').textContent = col?.name ?? titles[state.view] ?? (state.view === 'all' ? 'Sink' : view?.label ?? 'Sink');
+  $('view-sub').textContent = col ? plural(col.count, 'capture') : '';
+  $('collection-tools').hidden = !col;
+
+  const app = $('app');
+  app.dataset.view = state.view;
+  $('search-row').hidden = !listView();
+  $('kinds').hidden = !listView();
+  $('digest').hidden = state.view !== 'digest';
+  $('settings').hidden = state.view !== 'settings';
+  $('grid').hidden = $('more').hidden = !listView();
+  if (!listView()) $('empty').hidden = true;
+}
 
 // ---------- filters ----------
 
-$('views').innerHTML = VIEWS.map(
-  (v) => `<m3e-button toggle variant="tonal" data-view="${v.id}"${v.id === state.view ? ' selected' : ''}>${ic(v.icon, 'icon')}${v.label}</m3e-button>`,
-).join('');
-
-$('views').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-view]');
-  if (!btn) return;
-  state.view = btn.dataset.view;
-  for (const b of $('views').querySelectorAll('[data-view]')) b.selected = b === btn;
-  reload();
-});
-
 $('kinds').innerHTML = Object.entries(KINDS)
-  .map(([k, v]) => `<m3e-filter-chip value="${k}">${ic(v.icon, 'icon')}${v.label}</m3e-filter-chip>`)
+  .map(([k, v]) => `<m3e-filter-chip value="${k}" style="--kind: var(--kind-${k})">${ic(v.icon, 'icon')}${v.label}</m3e-filter-chip>`)
   .join('');
 
 $('kinds').addEventListener('change', () => {
   // `selected` attributes reflect a render late; the set's value is current.
   state.kind = $('kinds').value ?? '';
+  reload();
+});
+
+let searchTimer;
+$('search').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    state.q = $('search').value.trim();
+    reload();
+  }, 220);
+});
+document.querySelector('m3e-search-bar').addEventListener('clear', () => {
+  state.q = '';
   reload();
 });
 
@@ -256,23 +275,21 @@ async function loadCollections() {
     if (err instanceof Unauthorized) return showLogin();
     return toast(err.message);
   }
-  // The open filter may have been deleted elsewhere.
+  // The open collection may have been deleted elsewhere.
   if (state.collection && !state.collections.some((c) => c.id === state.collection)) {
-    state.collection = '';
-    reload();
+    location.hash = '#/';
+    return;
   }
-  renderCollections();
+  renderChrome();
 }
 
-function renderCollections() {
-  $('collections').innerHTML = state.collections
-    .map(
-      (c) =>
-        `<m3e-filter-chip value="${esc(c.id)}"${c.id === state.collection ? ' selected' : ''}>${ic('folder', 'icon')}${esc(c.name)}<span class="chip-count">${c.count}</span></m3e-filter-chip>`,
-    )
-    .join('');
-  $('collections').hidden = !state.collections.length;
-  $('collection-rename').hidden = $('collection-delete').hidden = !state.collection;
+async function refreshReviewCount() {
+  try {
+    state.reviewCount = (await api.digest()).unreviewed.length;
+    renderChrome();
+  } catch {
+    /* badge is a nicety */
+  }
 }
 
 async function newCollection() {
@@ -288,13 +305,10 @@ async function newCollection() {
   }
 }
 
-$('collections').addEventListener('change', () => {
-  state.collection = $('collections').value ?? '';
-  $('collection-rename').hidden = $('collection-delete').hidden = !state.collection;
-  reload();
+$('collection-new').addEventListener('click', async () => {
+  const created = await newCollection();
+  if (created) location.hash = `#/c/${encodeURIComponent(created.id)}`;
 });
-
-$('collection-new').addEventListener('click', newCollection);
 
 $('collection-rename').addEventListener('click', async () => {
   const current = state.collections.find((c) => c.id === state.collection);
@@ -315,28 +329,10 @@ $('collection-delete').addEventListener('click', async () => {
   try {
     await api.deleteCollection(current.id);
     toast('Collection deleted');
-    await loadCollections();
+    location.hash = '#/';
+    loadCollections();
   } catch (err) {
     toast(err.message);
-  }
-});
-
-let searchTimer;
-$('search').addEventListener('input', () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    state.q = $('search').value.trim();
-    reload();
-  }, 220);
-});
-document.querySelector('m3e-search-bar').addEventListener('clear', () => {
-  state.q = '';
-  reload();
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === '/' && !e.target.closest('input, textarea')) {
-    e.preventDefault();
-    $('search').focus();
   }
 });
 
@@ -349,14 +345,12 @@ function reload() {
   state.cursor = null;
   state.done = false;
   $('grid').innerHTML = '';
-  $('digest').hidden = state.view !== 'digest';
-  $('kinds').hidden = $('collections-bar').hidden = state.view === 'digest';
   if (state.view === 'digest') loadDigest();
-  else loadMore();
+  else if (listView()) loadMore();
 }
 
 async function loadMore() {
-  if (state.loading || state.done || state.view === 'digest') return;
+  if (state.loading || state.done || !listView()) return;
   state.loading = true;
   $('loading').hidden = false;
   const gen = state.generation;
@@ -381,51 +375,51 @@ async function loadMore() {
 new IntersectionObserver((entries) => entries[0].isIntersecting && loadMore(), { rootMargin: '600px' }).observe($('more'));
 
 function cardHtml(c) {
-  const busy = c.status === 'pending' || c.status === 'processing';
+  const busy = busyStatus(c);
   const kind = KINDS[c.kind];
   const title = c.title || c.note_text || (busy ? 'Reading…' : 'Untitled');
+  const classes = ['card', c.pinned && 'pinned', state.selected.has(c.id) && 'selected', state.current?.id === c.id && 'open'].filter(Boolean);
   return `
-<article class="card${c.pinned ? ' pinned' : ''}${state.selected.has(c.id) ? ' selected' : ''}" data-id="${c.id}" tabindex="0">
-  <div class="thumb" style="aspect-ratio:${c.width}/${Math.min(c.height, c.width * 1.6)}">
-    <span class="select-box" data-select role="checkbox" aria-label="Select" aria-checked="${state.selected.has(c.id)}">${ic('check')}</span>
+<article class="${classes.join(' ')}" data-id="${c.id}" tabindex="0" style="--kind: var(--kind-${c.kind ?? 'none'})">
+  <div class="thumb">
     <img src="${c.thumb_url}" alt="" loading="lazy" />
+    <span class="select-box" data-select role="checkbox" aria-label="Select" aria-checked="${state.selected.has(c.id)}">${ic('check')}</span>
+    ${c.pinned ? `<span class="pin" title="Pinned">${ic('push_pin', '', ' filled')}</span>` : ''}
     ${busy ? '<div class="busy"><m3e-loading-indicator variant="contained"></m3e-loading-indicator></div>' : ''}
-    ${c.pinned ? `<span class="pin">${ic('push_pin', '', ' filled')}</span>` : ''}
   </div>
   <div class="meta">
+    ${
+      c.status === 'failed'
+        ? `<span class="kind failed">${ic('error')}AI failed</span>`
+        : kind
+          ? `<span class="kind">${ic(kind.icon)}${kind.one}</span>`
+          : ''
+    }
     <div class="title">${esc(title)}</div>
     ${c.summary ? `<div class="summary">${esc(c.summary)}</div>` : ''}
-    <div class="foot">
-      ${kind ? `<span class="kind">${ic(kind.icon)}${esc(c.kind)}</span>` : ''}
-      ${c.status === 'failed' ? `<span class="kind failed">${ic('error')}AI failed</span>` : ''}
-      <span class="time">${timeOf(c.created_at)}</span>
-    </div>
+    <div class="time">${state.q ? `${esc(relativeDay(c.created_at))} · ` : ''}${timeOf(c.created_at)}</div>
   </div>
 </article>`;
 }
 
 function renderGrid() {
   const grid = $('grid');
-  // Group by day when browsing chronologically; search results are ranked, so no headers.
-  if (state.q) {
-    grid.innerHTML = `<div class="day-group"><div class="masonry">${state.items.map(cardHtml).join('')}</div></div>`;
-  } else {
-    const groups = new Map();
-    for (const c of state.items) {
-      const day = relativeDay(c.created_at);
-      if (!groups.has(day)) groups.set(day, []);
-      groups.get(day).push(c);
-    }
-    grid.innerHTML = [...groups]
-      .map(
-        ([day, items]) => `
-<div class="day-group">
-  <m3e-heading variant="title" size="medium" class="day">${esc(day)}</m3e-heading>
-  <div class="masonry">${items.map(cardHtml).join('')}</div>
-</div>`,
-      )
-      .join('');
+  // Day headers when browsing by date; search results are ranked, so they stay flat.
+  const groups = new Map();
+  for (const c of state.items) {
+    const day = state.q ? '' : relativeDay(c.created_at);
+    if (!groups.has(day)) groups.set(day, []);
+    groups.get(day).push(c);
   }
+  grid.innerHTML = [...groups]
+    .map(
+      ([day, items]) => `
+<section class="day-group">
+  ${day ? `<h2 class="day">${esc(day)}<span>${items.length}</span></h2>` : ''}
+  <div class="cards">${items.map(cardHtml).join('')}</div>
+</section>`,
+    )
+    .join('');
 
   const empty = state.items.length === 0 && state.done;
   $('empty').hidden = !empty;
@@ -435,12 +429,12 @@ function renderGrid() {
       : state.collection
         ? ['Nothing in here yet', 'Open a capture and file it into this collection.']
         : state.view === 'trash'
-        ? ['Trash is empty', 'Deleted things land here first.']
-        : state.view === 'archived'
-          ? ['Archive is empty', 'Archive things you are done with but want to keep.']
-          : state.view === 'pinned'
-            ? ['No pins yet', 'Pin the stuff you keep coming back to.']
-            : ["Sink's empty", 'Drop a screenshot anywhere, paste one, or hit the button.'];
+          ? ['Trash is empty', 'Deleted things land here first.']
+          : state.view === 'archived'
+            ? ['Archive is empty', 'Archive things you are done with but want to keep.']
+            : state.view === 'pinned'
+              ? ['No pins yet', 'Pin the stuff you keep coming back to.']
+              : ["Sink's empty", 'Drop a screenshot anywhere, paste one, or hit the button.'];
     $('empty-title').textContent = title;
     $('empty-body').textContent = body;
   }
@@ -465,13 +459,13 @@ $('grid').addEventListener('click', (e) => {
   // Once anything is selected, clicks select; the tick, shift or cmd/ctrl start it.
   if (e.target.closest('[data-select]') || state.selected.size || e.shiftKey || e.metaKey || e.ctrlKey) {
     toggleSelect(card.dataset.id, e.shiftKey);
-  } else openDetail(card.dataset.id);
+  } else openPanel(card.dataset.id);
 });
 $('grid').addEventListener('keydown', (e) => {
   const card = e.target.closest('.card');
   if (card && (e.key === 'Enter' || e.key === ' ')) {
     e.preventDefault();
-    openDetail(card.dataset.id);
+    openPanel(card.dataset.id);
   }
 });
 
@@ -503,7 +497,7 @@ function renderSelection() {
   const n = state.selected.size;
   $('grid').classList.toggle('selecting', n > 0);
   $('bulk-bar').hidden = n === 0;
-  $('upload-fab').hidden = n > 0;
+  $('app').classList.toggle('bulk', n > 0);
   if (!n) return;
   $('bulk-count').textContent = `${n} selected`;
   const picked = state.items.filter((c) => state.selected.has(c.id));
@@ -534,8 +528,6 @@ async function bulk(body, message) {
   if (body.add_collections || body.remove_collections) loadCollections();
   reload();
 }
-
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 $('bulk-actions').addEventListener('click', async (e) => {
   const act = e.target.closest('[data-bulk]')?.dataset.bulk;
@@ -585,16 +577,6 @@ $('bulk-all').addEventListener('click', () => {
   renderSelection();
 });
 
-document.addEventListener('keydown', (e) => {
-  if ($('app').hidden || e.target.closest('input, textarea') || state.view === 'digest') return;
-  if (e.key === 'Escape' && state.selected.size) clearSelection();
-  if (e.key === 'a' && (e.metaKey || e.ctrlKey) && state.items.length) {
-    e.preventDefault();
-    for (const c of state.items) state.selected.add(c.id);
-    renderSelection();
-  }
-});
-
 const bulkCollect = $('bulk-collect');
 
 async function openBulkCollect() {
@@ -622,11 +604,34 @@ $('bulk-collect-go').addEventListener('click', () => {
   if (ids.length) bulk({ add_collections: ids }, (n) => `Filed ${plural(n, 'capture')}`);
 });
 
+// ---------- keyboard ----------
+
+document.addEventListener('keydown', (e) => {
+  if ($('app').hidden || e.target.closest('input, textarea, [contenteditable]') || document.querySelector('m3e-dialog[open]')) return;
+  if (e.key === '/' && listView()) {
+    e.preventDefault();
+    $('search').focus();
+  } else if (e.key === 'Escape') {
+    if (state.selected.size) clearSelection();
+    else if (state.current) closePanel();
+  } else if ((e.key === 'j' || e.key === 'ArrowDown' || e.key === 'ArrowRight') && state.current && !isPhone()) {
+    e.preventDefault();
+    stepPanel(1);
+  } else if ((e.key === 'k' || e.key === 'ArrowUp' || e.key === 'ArrowLeft') && state.current && !isPhone()) {
+    e.preventDefault();
+    stepPanel(-1);
+  } else if (e.key === 'a' && (e.metaKey || e.ctrlKey) && listView() && state.items.length) {
+    e.preventDefault();
+    for (const c of state.items) state.selected.add(c.id);
+    renderSelection();
+  }
+});
+
 // Poll captures the AI is still working on.
 let pollTimer;
 function schedulePoll() {
   clearTimeout(pollTimer);
-  const busy = state.items.filter((c) => c.status === 'pending' || c.status === 'processing');
+  const busy = state.items.filter(busyStatus);
   if (!busy.length) return;
   pollTimer = setTimeout(async () => {
     for (const c of busy.slice(0, 20)) {
@@ -634,7 +639,10 @@ function schedulePoll() {
         const fresh = await api.get(c.id);
         if (fresh.status !== c.status) {
           replaceItem(fresh);
-          if (state.current?.id === fresh.id) renderDetail(fresh);
+          if (state.current?.id === fresh.id) {
+            state.current = fresh;
+            renderPanel();
+          }
         }
       } catch {
         /* next round */
@@ -644,38 +652,40 @@ function schedulePoll() {
   }, 3000);
 }
 
-// ---------- digest ----------
+// ---------- review (digest) ----------
 
 async function loadDigest() {
   const el = $('digest');
-  el.innerHTML = '<m3e-loading-indicator></m3e-loading-indicator>';
+  el.innerHTML = '<div class="more"><m3e-loading-indicator></m3e-loading-indicator></div>';
   try {
     const { unreviewed, actions } = await api.digest();
     state.items = unreviewed;
     state.done = true;
+    state.reviewCount = unreviewed.length;
+    renderChrome();
     const byCapture = new Map(unreviewed.map((c) => [c.id, c]));
     el.innerHTML = `
 <div class="digest-head">
   <m3e-shape name="sunny" class="digest-shape"></m3e-shape>
   <div>
-    <m3e-heading variant="headline" size="small">This week in the sink</m3e-heading>
-    <p class="muted">${unreviewed.length ? `${unreviewed.length} thing${unreviewed.length === 1 ? '' : 's'} you saved and haven't looked at again. Keep or archive.` : 'All caught up. Nice.'}</p>
+    <h2>This week in the sink</h2>
+    <p>${unreviewed.length ? `${plural(unreviewed.length, 'thing')} you saved and haven't looked at again. Keep or archive.` : 'All caught up. Nice.'}</p>
   </div>
 </div>
 ${
   actions.length
     ? `<div class="digest-actions">
-  <m3e-heading variant="title" size="small">Open suggestions</m3e-heading>
-  <m3e-chip-set>${actions
+  <h3 class="section-label">Open suggestions</h3>
+  <div class="chip-row">${actions
     .map(
       (a) =>
         `<m3e-assist-chip data-capture="${a.capture_id}" title="${esc(byCapture.get(a.capture_id)?.title ?? '')}">${ic(ACTION_ICONS[a.type] ?? 'bolt', 'icon')}${esc(a.label)}</m3e-assist-chip>`,
     )
-    .join('')}</m3e-chip-set>
+    .join('')}</div>
 </div>`
     : ''
 }
-<div class="masonry digest-grid">${unreviewed
+<div class="cards">${unreviewed
       .map(
         (c) => `<div class="digest-item" data-id="${c.id}">${cardHtml(c)}
   <div class="digest-buttons">
@@ -692,62 +702,86 @@ ${
 
 $('digest').addEventListener('click', async (e) => {
   const chip = e.target.closest('[data-capture]');
-  if (chip) return openDetail(chip.dataset.capture);
+  if (chip) return openPanel(chip.dataset.capture);
   const btn = e.target.closest('[data-review]');
   const item = e.target.closest('.digest-item');
   if (btn && item) {
     const id = item.dataset.id;
     await api.patch(id, btn.dataset.review === 'keep' ? { reviewed: true } : { reviewed: true, archived: true });
     item.classList.add('leaving');
+    state.reviewCount = Math.max(0, state.reviewCount - 1);
+    renderChrome();
     setTimeout(() => item.remove(), 250);
     return;
   }
   const card = e.target.closest('.card');
-  if (card) openDetail(card.dataset.id);
+  if (card) openPanel(card.dataset.id);
 });
 
-// ---------- detail ----------
+// ---------- capture panel ----------
 
-const detail = $('detail');
-
-async function openDetail(id) {
+async function openPanel(id) {
   try {
     const c = await api.get(id);
+    const wasOpen = !!state.current;
     state.current = c;
-    renderDetail(c);
-    detail.show();
+    renderPanel();
+    $('panel-close').querySelector('m3e-icon').setAttribute('name', isPhone() ? 'arrow_back' : 'close');
+    $('panel').hidden = false;
+    $('app').classList.add('panel-open');
+    for (const card of document.querySelectorAll('.card.open')) card.classList.remove('open');
+    document.querySelector(`.card[data-id="${id}"]`)?.classList.add('open');
+    $('panel-body').scrollTop = 0;
+    if (isPhone() && !wasOpen) history.pushState({ capture: id }, '');
   } catch (err) {
     toast(err.message);
   }
 }
 
-detail.addEventListener('closed', async () => {
-  const c = state.current;
+function closePanel({ fromHistory = false } = {}) {
+  if (!state.current) return;
   state.current = null;
-  if (!c) return;
-  // Save edits on close.
-  const title = $('d-title')?.value.trim();
-  const note = $('d-note')?.value.trim() ?? '';
-  const tags = ($('d-tags')?.value ?? '')
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
-  const changes = {};
-  if (title !== undefined && title !== (c.title ?? '')) changes.title = title;
-  if (note !== (c.note_text ?? '')) changes.note_text = note || null;
-  if (tags.join(',') !== c.tags.join(',')) changes.tags = tags;
-  if (Object.keys(changes).length) {
-    try {
-      replaceItem(await api.patch(c.id, changes));
-      toast('Saved');
-    } catch (err) {
-      toast(`Couldn't save: ${err.message}`);
-    }
+  $('panel').hidden = true;
+  $('app').classList.remove('panel-open');
+  for (const card of document.querySelectorAll('.card.open')) card.classList.remove('open');
+  if (isPhone() && !fromHistory && history.state?.capture) history.back();
+}
+
+function stepPanel(delta) {
+  const ids = state.items.map((c) => c.id);
+  const next = ids[ids.indexOf(state.current?.id) + delta];
+  if (next) {
+    openPanel(next);
+    document.querySelector(`.card[data-id="${next}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+$('panel-close').addEventListener('click', () => closePanel());
+// Esc in a field leaves it (which saves it); the next Esc closes the panel.
+$('panel-body').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && e.target.matches('input, textarea')) {
+    e.stopPropagation();
+    e.target.blur();
   }
 });
+$('panel-prev').addEventListener('click', () => stepPanel(-1));
+$('panel-next').addEventListener('click', () => stepPanel(1));
+
+/** Saves one edited field straight away; the panel stays open, so there's no "save on close". */
+async function saveField(changes) {
+  const c = state.current;
+  if (!c) return;
+  try {
+    const updated = await api.patch(c.id, changes);
+    Object.assign(c, updated);
+    replaceItem(updated);
+  } catch (err) {
+    toast(`Couldn't save: ${err.message}`);
+  }
+}
 
 function entityRows(entities) {
-  const labels = { dates: ['event', 'Dates'], urls: ['link', 'Links'], prices: ['sell', 'Prices'], addresses: ['place', 'Addresses'], people: ['person', 'People'] };
+  const labels = { dates: ['event', 'When'], urls: ['link', 'Links'], prices: ['sell', 'Price'], addresses: ['place', 'Where'], people: ['person', 'People'] };
   return Object.entries(entities ?? {})
     .filter(([, v]) => v?.length)
     .map(([k, values]) => {
@@ -755,11 +789,11 @@ function entityRows(entities) {
       const shown = values
         .map((v) =>
           k === 'urls' && /^https?:\/\//.test(v)
-            ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)}</a>`
-            : esc(k === 'dates' && !Number.isNaN(Date.parse(v)) ? new Date(v).toLocaleString() : v),
+            ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v.replace(/^https?:\/\/(www\.)?/, ''))}</a>`
+            : esc(k === 'dates' && !Number.isNaN(Date.parse(v)) ? new Date(v).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: v.length > 10 ? 'short' : undefined }) : v),
         )
-        .join(' · ');
-      return `<div class="entity">${ic(icon)}<span class="entity-label">${label}</span><span>${shown}</span></div>`;
+        .join('<br>');
+      return `<div class="fact">${ic(icon)}<span class="fact-label">${label}</span><span class="fact-value">${shown}</span></div>`;
     })
     .join('');
 }
@@ -781,80 +815,134 @@ function priceWatchHtml(c) {
     const first = w.first_price != null && w.first_price !== w.last_price ? ` · was ${money(w.first_price)}` : '';
     status = `Now ${money(w.last_price)}${lowest}${first} · checked ${relativeDay(w.last_checked_at).toLowerCase()} ${timeOf(w.last_checked_at)}`;
   } else if (w) status = 'Watching. First check is on its way.';
-  return `<div class="price-watch">
+  return `<label class="price-watch">
+  ${ic('trending_down')}
+  <div class="grow"><div class="price-watch-title">Watch price</div><div class="muted small">${esc(status)}</div></div>
   <m3e-switch id="d-watch" ${w ? 'checked' : ''} aria-label="Watch price"></m3e-switch>
-  <div><div class="price-watch-title">${ic('trending_down')}Watch price</div><div class="muted small">${esc(status)}</div></div>
-</div>`;
+</label>`;
 }
 
-function renderDetail(c) {
-  const busy = c.status === 'pending' || c.status === 'processing';
+function renderPanel() {
+  const c = state.current;
+  if (!c) return;
+  const busy = busyStatus(c);
   const kind = KINDS[c.kind];
-  $('detail-header').innerHTML = `${kind ? ic(kind.icon) : ''} ${esc(relativeDay(c.created_at))}, ${timeOf(c.created_at)}`;
-
   const actions = (c.actions ?? []).filter((a) => a.state !== 'dismissed');
-  $('detail-body').innerHTML = `
-<div class="detail-grid">
-  <a class="detail-image" href="${c.image_url}" target="_blank" rel="noopener">
-    <img src="${c.image_url}" alt="Screenshot" />
-  </a>
-  <div class="detail-info">
-    ${busy ? `<div class="status">${'<m3e-loading-indicator></m3e-loading-indicator>'}<span>AI is reading this…</span></div>` : ''}
-    ${c.status === 'failed' ? `<div class="status failed">${ic('error')}<span>AI couldn't process this. ${esc(c.error ?? '')}</span></div>` : ''}
-    <m3e-form-field variant="outlined" class="full">
-      <label slot="label" for="d-title">Title</label>
-      <input id="d-title" value="${esc(c.title ?? '')}" />
-    </m3e-form-field>
-    ${c.summary ? `<p class="detail-summary">${esc(c.summary)}</p>` : ''}
-    ${
-      actions.length
-        ? `<m3e-chip-set class="detail-chips">${actions
-            .map(
-              (a) =>
-                `<m3e-assist-chip data-action="${a.id}" class="${a.state === 'done' ? 'done' : ''}">${ic(a.state === 'done' ? 'check' : a.state === 'accepted' ? 'alarm_on' : ACTION_ICONS[a.type] ?? 'bolt', 'icon')}${esc(a.label)}${a.due_at && a.state === 'suggested' && a.due_at > Date.now() ? ` · ${esc(new Date(a.due_at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}` : ''}</m3e-assist-chip>`,
-            )
-            .join('')}</m3e-chip-set>`
-        : ''
-    }
-    <div class="entities">${
-      c.source_url && /^https?:\/\//.test(c.source_url)
-        ? `<div class="entity">${ic('public')}<span class="entity-label">Page</span><span><a href="${esc(c.source_url)}" target="_blank" rel="noopener noreferrer">${esc(c.source_url)}</a></span></div>`
-        : ''
-    }${entityRows(c.entities)}</div>
-    ${priceWatchHtml(c)}
-    <div class="detail-collections">
-      <span class="entity-label">Collections</span>
-      <div class="collection-chips">
-        ${
-          state.collections.length
-            ? `<m3e-filter-chip-set id="d-collections" multi aria-label="Collections">${state.collections
-                .map(
-                  (col) =>
-                    `<m3e-filter-chip value="${esc(col.id)}"${c.collections?.includes(col.id) ? ' selected' : ''}>${esc(col.name)}</m3e-filter-chip>`,
-                )
-                .join('')}</m3e-filter-chip-set>`
-            : ''
-        }
-        <m3e-assist-chip id="d-collection-new">${ic('add', 'icon')}New</m3e-assist-chip>
-      </div>
-    </div>
-    <m3e-form-field variant="outlined" class="full">
-      <label slot="label" for="d-note">Your note</label>
-      <textarea id="d-note" rows="2">${esc(c.note_text ?? '')}</textarea>
-    </m3e-form-field>
-    <m3e-form-field variant="outlined" class="full">
-      <label slot="label" for="d-tags">Tags (comma separated)</label>
-      <input id="d-tags" value="${esc(c.tags.join(', '))}" />
-    </m3e-form-field>
-    ${
-      c.ocr_text
-        ? `<m3e-expansion-panel class="ocr"><span slot="header">Text in image</span><pre>${esc(c.ocr_text)}</pre></m3e-expansion-panel>`
-        : ''
-    }
-    ${c.model ? `<p class="muted small">Read by ${esc(c.model)}</p>` : ''}
+  const trashed = c.deleted_at != null;
+
+  $('panel').style.setProperty('--kind', `var(--kind-${c.kind ?? 'none'})`);
+  $('panel-actions').innerHTML = trashed
+    ? `<m3e-button data-do="restore" variant="text">${ic('restore_from_trash', 'icon')}Restore</m3e-button>
+       <m3e-icon-button data-do="purge" aria-label="Delete forever" title="Delete forever">${ic('delete_forever')}</m3e-icon-button>`
+    : `<m3e-icon-button data-do="pin" toggle ${c.pinned ? 'selected' : ''} aria-label="Pin" title="${c.pinned ? 'Unpin' : 'Pin'}">${ic('push_pin')}${ic('push_pin', 'selected', ' filled')}</m3e-icon-button>
+       <m3e-icon-button data-do="archive" aria-label="${c.archived_at ? 'Unarchive' : 'Archive'}" title="${c.archived_at ? 'Unarchive' : 'Archive'}">${ic(c.archived_at ? 'unarchive' : 'archive')}</m3e-icon-button>
+       <m3e-icon-button data-do="reprocess" aria-label="Re-read with AI" title="Re-read with AI">${ic('auto_awesome')}</m3e-icon-button>
+       <m3e-icon-button data-do="delete" aria-label="Move to trash" title="Move to trash">${ic('delete')}</m3e-icon-button>`;
+
+  const tagChips = c.tags
+    .map((t) => `<m3e-input-chip data-tag="${esc(t)}" removable>${esc(t)}</m3e-input-chip>`)
+    .join('');
+
+  $('panel-body').innerHTML = `
+<a class="shot" href="${c.image_url}" target="_blank" rel="noopener" title="Open full size">
+  <img src="${c.image_url}" alt="Screenshot" />
+</a>
+<div class="panel-content">
+  <div class="eyebrow">
+    ${kind ? `<span class="kind">${ic(kind.icon)}${kind.one}</span>` : ''}
+    <span>${esc(relativeDay(c.created_at))}, ${timeOf(c.created_at)}</span>
   </div>
+  ${busy ? `<div class="status"><m3e-loading-indicator></m3e-loading-indicator><span>AI is reading this…</span></div>` : ''}
+  ${c.status === 'failed' ? `<div class="status failed">${ic('error')}<span>AI couldn't read this. ${esc(c.error ?? '')}</span></div>` : ''}
+  <textarea id="d-title" class="title-edit" rows="1" placeholder="Add a title" aria-label="Title">${esc(c.title ?? '')}</textarea>
+  ${c.summary ? `<p class="summary-text">${esc(c.summary)}</p>` : ''}
+  ${
+    actions.length
+      ? `<div class="chip-row actions">${actions
+          .map(
+            (a) =>
+              `<m3e-assist-chip data-action="${a.id}" class="${a.state === 'done' ? 'done' : ''}">${ic(a.state === 'done' ? 'check' : a.state === 'accepted' ? 'alarm_on' : ACTION_ICONS[a.type] ?? 'bolt', 'icon')}${esc(a.label)}${a.due_at && a.state === 'suggested' && a.due_at > Date.now() ? ` · ${esc(new Date(a.due_at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}` : ''}</m3e-assist-chip>`,
+          )
+          .join('')}</div>`
+      : ''
+  }
+  ${
+    (c.source_url && /^https?:\/\//.test(c.source_url)) || Object.values(c.entities ?? {}).some((v) => v?.length)
+      ? `<div class="facts">${
+          c.source_url && /^https?:\/\//.test(c.source_url)
+            ? `<div class="fact">${ic('public')}<span class="fact-label">Page</span><span class="fact-value"><a href="${esc(c.source_url)}" target="_blank" rel="noopener noreferrer">${esc(new URL(c.source_url).host.replace(/^www\./, ''))}</a></span></div>`
+            : ''
+        }${entityRows(c.entities)}</div>`
+      : ''
+  }
+  ${priceWatchHtml(c)}
+
+  <h3 class="section-label">Your note</h3>
+  <textarea id="d-note" class="note-edit" rows="2" placeholder="Why did you save this?">${esc(c.note_text ?? '')}</textarea>
+
+  <h3 class="section-label">Collections</h3>
+  <div class="chip-row">
+    ${
+      state.collections.length
+        ? `<m3e-filter-chip-set id="d-collections" multi aria-label="Collections">${state.collections
+            .map((col) => `<m3e-filter-chip value="${esc(col.id)}"${c.collections?.includes(col.id) ? ' selected' : ''}>${esc(col.name)}</m3e-filter-chip>`)
+            .join('')}</m3e-filter-chip-set>`
+        : ''
+    }
+    <m3e-assist-chip id="d-collection-new">${ic('add', 'icon')}New</m3e-assist-chip>
+  </div>
+
+  <h3 class="section-label">Tags</h3>
+  <div class="chip-row tags">
+    ${tagChips}
+    <input id="d-tag-add" class="tag-add" placeholder="${c.tags.length ? 'Add' : 'Add a tag'}" aria-label="Add tag" />
+  </div>
+
+  ${
+    c.ocr_text
+      ? `<m3e-expansion-panel class="ocr"><span slot="header">Text in the image</span><pre>${esc(c.ocr_text)}</pre></m3e-expansion-panel>`
+      : ''
+  }
+  ${c.model ? `<p class="muted small footnote">Read by ${esc(c.model)}</p>` : ''}
 </div>`;
 
+  const title = $('d-title');
+  const fit = () => {
+    title.style.height = 'auto';
+    title.style.height = `${title.scrollHeight}px`;
+  };
+  requestAnimationFrame(fit);
+  title.addEventListener('input', fit);
+  title.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      title.blur();
+    }
+  });
+  title.addEventListener('blur', () => {
+    const v = title.value.trim();
+    if (v !== (c.title ?? '')) saveField({ title: v });
+  });
+  $('d-note').addEventListener('blur', () => {
+    const v = $('d-note').value.trim();
+    if (v !== (c.note_text ?? '')) saveField({ note_text: v || null });
+  });
+  $('d-tag-add').addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' && e.key !== ',') return;
+    e.preventDefault();
+    const v = e.target.value.trim().toLowerCase();
+    if (!v || c.tags.includes(v)) return;
+    await saveField({ tags: [...c.tags, v] });
+    renderPanel();
+    $('d-tag-add')?.focus();
+  });
+  // Tag chips' own remove button (or Delete/Backspace on a focused chip).
+  for (const chip of $('panel-body').querySelectorAll('[data-tag]')) {
+    chip.addEventListener('remove', async () => {
+      await saveField({ tags: c.tags.filter((t) => t !== chip.dataset.tag) });
+      renderPanel();
+    });
+  }
   $('d-watch')?.addEventListener('change', async () => {
     try {
       const updated = await api.patch(c.id, { watch_price: $('d-watch').checked });
@@ -863,34 +951,24 @@ function renderDetail(c) {
     } catch (err) {
       toast(err.message);
     }
-    renderDetail(c);
+    renderPanel();
   });
-  $('d-collections')?.addEventListener('change', () =>
-    setCollections(c, [].concat($('d-collections').value ?? [])),
-  );
+  $('d-collections')?.addEventListener('change', () => setCollections(c, [].concat($('d-collections').value ?? [])));
   $('d-collection-new').addEventListener('click', async () => {
     const created = await newCollection();
     if (created) await setCollections(c, [...(c.collections ?? []), created.id]);
-    renderDetail(c);
+    renderPanel();
   });
-
-  const trashed = c.deleted_at != null;
-  $('detail-actions').innerHTML = trashed
-    ? `<m3e-button data-do="restore">${ic('restore_from_trash', 'icon')}Restore</m3e-button>
-       <m3e-button data-do="purge" variant="filled" class="danger">${ic('delete_forever', 'icon')}Delete forever</m3e-button>`
-    : `<m3e-icon-button data-do="pin" toggle ${c.pinned ? 'selected' : ''} aria-label="Pin">${ic('push_pin')}${ic('push_pin', 'selected', ' filled')}</m3e-icon-button>
-       <m3e-icon-button data-do="archive" aria-label="${c.archived_at ? 'Unarchive' : 'Archive'}">${ic(c.archived_at ? 'unarchive' : 'archive')}</m3e-icon-button>
-       <m3e-icon-button data-do="reprocess" aria-label="Re-read with AI">${ic('auto_awesome')}</m3e-icon-button>
-       <m3e-icon-button data-do="delete" aria-label="Move to trash">${ic('delete')}</m3e-icon-button>
-       <span class="spacer"></span>
-       <m3e-button data-do="close" variant="filled">Done</m3e-button>`;
 }
 
-$('detail-body').addEventListener('click', async (e) => {
+$('panel-body').addEventListener('click', async (e) => {
+  const c = state.current;
+  if (!c) return;
   const chip = e.target.closest('[data-action]');
-  if (!chip || !state.current) return;
-  const action = state.current.actions.find((a) => a.id === chip.dataset.action);
-  if (action) await runAction(action);
+  if (chip) {
+    const action = c.actions.find((a) => a.id === chip.dataset.action);
+    if (action) await runAction(action);
+  }
 });
 
 async function setCollections(c, ids) {
@@ -902,7 +980,7 @@ async function setCollections(c, ids) {
     if (state.collection && !c.collections.includes(state.collection)) removeItem(c.id);
   } catch (err) {
     toast(`Couldn't update collections: ${err.message}`);
-    renderDetail(c);
+    renderPanel();
   }
 }
 
@@ -913,7 +991,7 @@ async function runAction(a) {
     await api.setAction(a.id, 'accepted').catch(() => {});
     a.state = 'accepted';
     toast(`Reminder set for ${new Date(a.due_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}. Your phone will ping you.`);
-    renderDetail(state.current);
+    renderPanel();
     return;
   }
   switch (a.type) {
@@ -935,7 +1013,7 @@ async function runAction(a) {
   }
   await api.setAction(a.id, 'done').catch(() => {});
   a.state = 'done';
-  renderDetail(state.current);
+  renderPanel();
 }
 
 function googleCalendarUrl(p) {
@@ -951,61 +1029,204 @@ function googleCalendarUrl(p) {
   return `https://calendar.google.com/calendar/render?${params}`;
 }
 
-$('detail-actions').addEventListener('click', async (e) => {
+$('panel-actions').addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-do]');
   const c = state.current;
   if (!btn || !c) return;
+  const leave = (message) => {
+    closePanel();
+    removeItem(c.id);
+    if (message) toast(message);
+  };
   try {
     switch (btn.dataset.do) {
-      case 'close':
-        detail.hide();
-        break;
       case 'pin': {
         const updated = await api.patch(c.id, { pinned: !c.pinned });
         Object.assign(c, updated);
         replaceItem(updated);
+        if (state.view === 'pinned' && !updated.pinned) leave();
         break;
       }
       case 'archive':
         await api.patch(c.id, { archived: !c.archived_at });
-        toast(c.archived_at ? 'Back in the sink' : 'Archived');
-        state.current = null;
-        detail.hide();
-        removeItem(c.id);
+        leave(c.archived_at ? 'Back in the sink' : 'Archived');
         break;
       case 'reprocess': {
         const updated = await api.reprocess(c.id);
         Object.assign(c, updated);
         replaceItem(updated);
-        renderDetail(c);
+        renderPanel();
         schedulePoll();
         break;
       }
       case 'delete':
         await api.patch(c.id, { deleted: true });
-        state.current = null;
-        detail.hide();
-        removeItem(c.id);
-        toast('Moved to trash');
+        leave('Moved to trash');
         break;
       case 'restore':
         await api.patch(c.id, { deleted: false });
-        state.current = null;
-        detail.hide();
-        removeItem(c.id);
-        toast('Restored');
+        leave('Restored');
         break;
       case 'purge':
         if (!confirm('Delete forever? This cannot be undone.')) return;
         await api.purge(c.id);
-        state.current = null;
-        detail.hide();
-        removeItem(c.id);
-        toast('Deleted');
+        leave('Deleted');
         break;
     }
   } catch (err) {
     toast(err.message);
+  }
+});
+
+// ---------- settings ----------
+
+async function renderSettings() {
+  const el = $('settings');
+  const scheme = storage.get('scheme') ?? 'auto';
+  const accent = storage.get('accent') ?? ACCENTS[0].color;
+  el.innerHTML = `
+<section class="setting-card">
+  <h2>Appearance</h2>
+  <div class="setting-row">
+    <div class="grow"><div class="setting-title">Theme</div></div>
+    <m3e-button-group id="scheme" variant="connected" size="small">
+      ${[['auto', 'brightness_auto', 'System'], ['light', 'light_mode', 'Light'], ['dark', 'dark_mode', 'Dark']]
+        .map(([v, icon, label]) => `<m3e-button toggle variant="tonal" data-scheme="${v}"${v === scheme ? ' selected' : ''}>${ic(icon, 'icon')}${label}</m3e-button>`)
+        .join('')}
+    </m3e-button-group>
+  </div>
+  <div class="setting-row">
+    <div class="grow"><div class="setting-title">Accent</div><div class="muted small">Buttons, highlights and the logo.</div></div>
+    <div class="swatches" role="radiogroup" aria-label="Accent colour">
+      ${ACCENTS.map((a) => `<button class="swatch${a.color === accent ? ' on' : ''}" data-accent="${a.color}" style="--c:${a.color}" role="radio" aria-checked="${a.color === accent}" aria-label="${a.name}" title="${a.name}"></button>`).join('')}
+    </div>
+  </div>
+</section>
+
+<section class="setting-card">
+  <h2>AI assistants</h2>
+  <p class="muted">Let Claude, ChatGPT, Poke or another assistant search your sink, read captures and file them into collections.</p>
+  <div class="setting-title">Connector URL</div>
+  <p class="muted small">Add a custom connector (MCP server) with this URL. You'll sign in here and approve it.</p>
+  <div class="copy-row">
+    <code id="connect-url">${esc(location.origin)}/mcp</code>
+    <m3e-icon-button id="connect-url-copy" aria-label="Copy connector URL" title="Copy">${ic('content_copy')}</m3e-icon-button>
+  </div>
+  <m3e-expansion-panel class="token-panel">
+    <span slot="header">Claude Code, or anything that wants a token</span>
+    <p class="muted small">The URL above works with <code>claude mcp add --transport http</code>. For a fixed header instead, make a token:</p>
+    <div class="setting-row">
+      <m3e-form-field variant="outlined" class="grow">
+        <label slot="label" for="connect-name">Name</label>
+        <input id="connect-name" value="Claude Code" />
+      </m3e-form-field>
+      <m3e-button id="connect-create" variant="tonal">Create token</m3e-button>
+    </div>
+    <div id="connect-result" hidden>
+      <p class="small">Run this once. The token is only shown now.</p>
+      <pre id="connect-command" class="command"></pre>
+      <m3e-button id="connect-copy" variant="text" size="small">${ic('content_copy', 'icon')}Copy command</m3e-button>
+    </div>
+  </m3e-expansion-panel>
+</section>
+
+<section class="setting-card">
+  <h2>Signed-in devices and assistants</h2>
+  <div id="connect-tokens" class="token-list"><m3e-loading-indicator></m3e-loading-indicator></div>
+</section>
+
+<section class="setting-card">
+  <h2>Server</h2>
+  <div id="server-info" class="facts"></div>
+</section>
+
+<section class="setting-card">
+  <div class="setting-row">
+    <div class="grow"><div class="setting-title">Sign out of this browser</div><div class="muted small">Other devices stay signed in.</div></div>
+    <m3e-button id="logout" variant="outlined">${ic('logout', 'icon')}Sign out</m3e-button>
+  </div>
+</section>`;
+  renderTokens();
+  try {
+    const h = await api.health();
+    $('server-info').innerHTML = [
+      ['smart_toy', 'AI reading', h.ai ? 'On' : 'Off (no API key)'],
+      ['manage_search', 'Search by meaning', h.semantic == null ? 'Off' : `${plural(h.semantic, 'capture')} indexed`],
+      ['pending', 'Waiting to be read', String(h.pending_jobs)],
+      ['dns', 'Address', location.host],
+    ]
+      .map(([icon, label, value]) => `<div class="fact">${ic(icon)}<span class="fact-label">${label}</span><span class="fact-value">${esc(value)}</span></div>`)
+      .join('');
+  } catch (err) {
+    $('server-info').textContent = err.message;
+  }
+}
+
+async function renderTokens() {
+  try {
+    const [{ tokens }, me] = await Promise.all([api.tokens(), api.me()]);
+    const ago = (ts) => (ts ? `${relativeDay(ts).toLowerCase()} ${timeOf(ts)}` : 'never');
+    $('connect-tokens').innerHTML = tokens
+      .map((t) => {
+        const assistant = /\(MCP\)|claude|mcp|code|gpt|poke/i.test(t.name);
+        return `<div class="token-row">
+  <span class="token-icon">${ic(assistant ? 'hub' : 'devices')}</span>
+  <div class="grow"><div>${esc(t.name.replace(/ \(MCP\)$/, ''))}${t.id === me.tokenId ? ' <span class="here">This browser</span>' : ''}</div>
+  <div class="muted small">${assistant ? 'Assistant' : 'Device'} · last used ${esc(ago(t.last_used_at))}</div></div>
+  ${t.id === me.tokenId ? '' : `<m3e-icon-button data-revoke="${esc(t.id)}" aria-label="Revoke ${esc(t.name)}" title="Revoke">${ic('close')}</m3e-icon-button>`}
+</div>`;
+      })
+      .join('');
+  } catch (err) {
+    $('connect-tokens').textContent = err.message;
+  }
+}
+
+$('settings').addEventListener('click', async (e) => {
+  const scheme = e.target.closest('[data-scheme]');
+  if (scheme) {
+    storage.set('scheme', scheme.dataset.scheme);
+    applyTheme();
+    for (const b of document.querySelectorAll('[data-scheme]')) b.selected = b === scheme;
+    return;
+  }
+  const accent = e.target.closest('[data-accent]');
+  if (accent) {
+    storage.set('accent', accent.dataset.accent);
+    applyTheme();
+    for (const b of document.querySelectorAll('[data-accent]')) {
+      b.classList.toggle('on', b === accent);
+      b.setAttribute('aria-checked', String(b === accent));
+    }
+    return;
+  }
+  const revoke = e.target.closest('[data-revoke]');
+  if (revoke) {
+    if (!confirm('Revoke this? That device or assistant gets signed out.')) return;
+    await api.revokeToken(revoke.dataset.revoke).catch((err) => toast(err.message));
+    return renderTokens();
+  }
+  const id = e.target.closest('[id]')?.id;
+  if (id === 'connect-url-copy') {
+    await navigator.clipboard.writeText($('connect-url').textContent);
+    toast('Copied');
+  } else if (id === 'connect-copy') {
+    await navigator.clipboard.writeText($('connect-command').textContent);
+    toast('Copied');
+  } else if (id === 'connect-create') {
+    const name = $('connect-name').value.trim() || 'MCP client';
+    try {
+      const { token } = await api.createToken(name);
+      $('connect-command').textContent =
+        `claude mcp add --transport http --scope user sink ${location.origin}/mcp \\\n  --header "Authorization: Bearer ${token}"`;
+      $('connect-result').hidden = false;
+      renderTokens();
+    } catch (err) {
+      toast(err.message);
+    }
+  } else if (id === 'logout') {
+    await api.logout().catch(() => {});
+    showLogin();
   }
 });
 
@@ -1017,10 +1238,11 @@ let pendingFiles = [];
 function startUpload(files) {
   pendingFiles = [...files].filter((f) => f.type.startsWith('image/'));
   if (!pendingFiles.length) return;
-  $('upload-previews').innerHTML = pendingFiles
-    .slice(0, 6)
-    .map((f) => `<img src="${URL.createObjectURL(f)}" alt="" />`)
-    .join('') + (pendingFiles.length > 6 ? `<span class="more-count">+${pendingFiles.length - 6}</span>` : '');
+  $('upload-previews').innerHTML =
+    pendingFiles
+      .slice(0, 6)
+      .map((f) => `<img src="${URL.createObjectURL(f)}" alt="" />`)
+      .join('') + (pendingFiles.length > 6 ? `<span class="more-count">+${pendingFiles.length - 6}</span>` : '');
   $('upload-note').value = '';
   uploadDialog.show();
   setTimeout(() => $('upload-note').focus(), 50);
@@ -1040,7 +1262,7 @@ async function doUpload() {
       if (state.collection && !created.collections?.includes(state.collection)) {
         created = await api.patch(created.id, { collections: [...(created.collections ?? []), state.collection] });
       }
-      if (state.view === 'all' && !state.q && !state.kind) {
+      if ((state.view === 'all' || state.collection) && !state.q && !state.kind) {
         state.items.unshift(created);
         renderGrid();
       }
@@ -1049,7 +1271,10 @@ async function doUpload() {
     }
   }
   if (ok && state.collection) loadCollections();
-  if (ok) toast(ok === 1 ? 'Stashed. AI is reading it.' : `Stashed ${ok}. AI is reading them.`);
+  if (ok) {
+    refreshReviewCount();
+    toast(ok === 1 ? 'Stashed. AI is reading it.' : `Stashed ${ok}. AI is reading them.`);
+  }
 }
 
 uploadDialog.addEventListener('closed', () => {
@@ -1064,7 +1289,7 @@ $('upload-note').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) doUpload();
 });
 
-$('upload-fab').addEventListener('click', () => $('file-input').click());
+for (const id of ['upload-fab', 'add-btn']) $(id).addEventListener('click', () => $('file-input').click());
 $('file-input').addEventListener('change', (e) => {
   startUpload(e.target.files);
   e.target.value = '';

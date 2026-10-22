@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sink</title>
     <meta name="theme-color" content="#6750A4" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -19,7 +19,7 @@
       <section id="login" class="login" hidden>
         <div class="login-card">
           <m3e-shape name="7-sided-cookie" class="login-logo"></m3e-shape>
-          <m3e-heading variant="headline" size="medium">Sink</m3e-heading>
+          <h1 class="wordmark">Sink</h1>
           <p class="muted">Everything but the kitchen sink. Well, including it.</p>
           <p id="login-error" class="error" hidden></p>
           <m3e-button id="login-submit" variant="filled" size="medium">
@@ -28,74 +28,94 @@
         </div>
       </section>
 
-      <!-- App -->
-      <div id="app" hidden>
-        <header class="topbar">
-          <a class="brand" href="#">
+      <!-- App: sidebar | main | detail panel. On phones the sidebar is the Library tab and the panel is full screen. -->
+      <div id="app" class="shell" hidden>
+        <aside id="nav" class="nav" aria-label="Library">
+          <a class="brand" href="#/">
             <m3e-shape id="logo" name="7-sided-cookie"></m3e-shape>
-            <span><b>Sink</b></span>
+            <span class="wordmark">Sink</span>
           </a>
-          <m3e-search-bar class="search" clearable>
-            <m3e-icon name="search" slot="leading"></m3e-icon>
-            <input id="search" slot="input" placeholder="Search the sink" aria-label="Search" />
-          </m3e-search-bar>
-          <div class="top-actions">
-            <m3e-icon-button id="dark-toggle" toggle aria-label="Dark mode">
-              <m3e-icon name="dark_mode"></m3e-icon>
-              <m3e-icon slot="selected" name="light_mode"></m3e-icon>
-            </m3e-icon-button>
-            <m3e-icon-button id="connect-open" aria-label="Connect an AI assistant" title="Connect an AI assistant (MCP)">
-              <m3e-icon name="hub"></m3e-icon>
-            </m3e-icon-button>
-            <m3e-icon-button id="logout" aria-label="Log out">
-              <m3e-icon name="logout"></m3e-icon>
+          <m3e-button id="add-btn" class="add-btn" variant="tonal">
+            <m3e-icon slot="icon" name="add_photo_alternate"></m3e-icon>Add screenshots
+          </m3e-button>
+          <nav id="nav-views" class="nav-list"></nav>
+          <div class="nav-heading">
+            <span>Collections</span>
+            <m3e-icon-button id="collection-new" aria-label="New collection" title="New collection">
+              <m3e-icon name="add"></m3e-icon>
             </m3e-icon-button>
           </div>
-        </header>
-
-        <nav class="filters">
-          <m3e-button-group id="views" variant="connected" size="small"></m3e-button-group>
-          <m3e-filter-chip-set id="kinds" aria-label="Kind"></m3e-filter-chip-set>
-          <div id="collections-bar" class="collections-bar">
-            <m3e-filter-chip-set id="collections" aria-label="Collection"></m3e-filter-chip-set>
-            <m3e-icon-button id="collection-rename" hidden aria-label="Rename collection">
-              <m3e-icon name="edit"></m3e-icon>
-            </m3e-icon-button>
-            <m3e-icon-button id="collection-delete" hidden aria-label="Delete collection">
-              <m3e-icon name="delete"></m3e-icon>
-            </m3e-icon-button>
-            <m3e-assist-chip id="collection-new"><m3e-icon slot="icon" name="create_new_folder"></m3e-icon>New collection</m3e-assist-chip>
+          <nav id="nav-collections" class="nav-list"></nav>
+          <div class="nav-foot">
+            <a class="nav-item" href="#/settings" data-route="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
           </div>
-        </nav>
+        </aside>
 
-        <main>
+        <main id="main" class="main">
+          <header class="main-head">
+            <div class="title-row">
+              <h1 id="view-title" class="view-title">Sink</h1>
+              <span id="view-sub" class="view-sub"></span>
+              <span class="spacer"></span>
+              <div id="collection-tools" class="collection-tools" hidden>
+                <m3e-icon-button id="collection-rename" aria-label="Rename collection" title="Rename"><m3e-icon name="edit"></m3e-icon></m3e-icon-button>
+                <m3e-icon-button id="collection-delete" aria-label="Delete collection" title="Delete"><m3e-icon name="delete"></m3e-icon></m3e-icon-button>
+              </div>
+            </div>
+            <div id="search-row" class="search-row">
+              <m3e-search-bar class="search" clearable>
+                <m3e-icon name="search" slot="leading"></m3e-icon>
+                <input id="search" slot="input" placeholder="Search by words or meaning" aria-label="Search" />
+              </m3e-search-bar>
+            </div>
+            <m3e-filter-chip-set id="kinds" class="kinds" aria-label="Kind"></m3e-filter-chip-set>
+          </header>
+
           <section id="digest" class="digest" hidden></section>
+          <section id="settings" class="settings" hidden></section>
           <div id="grid" class="grid"></div>
           <div id="empty" class="empty" hidden>
             <m3e-shape name="ghost-ish" class="empty-shape"></m3e-shape>
-            <m3e-heading variant="title" size="large" id="empty-title">Sink's empty</m3e-heading>
+            <h2 id="empty-title" class="empty-title">Sink's empty</h2>
             <p class="muted" id="empty-body">Drop a screenshot anywhere, paste one, or hit the button.</p>
           </div>
           <div id="more" class="more"><m3e-loading-indicator hidden id="loading"></m3e-loading-indicator></div>
         </main>
 
-        <m3e-fab id="upload-fab" extended variant="primary-container" size="large" aria-label="Add screenshot">
-          <m3e-icon name="add_photo_alternate"></m3e-icon>
-          <span slot="label">Stash it</span>
+        <aside id="panel" class="panel" aria-label="Capture" hidden>
+          <div class="panel-bar">
+            <m3e-icon-button id="panel-close" aria-label="Close"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="panel-prev" class="desk-only" aria-label="Previous (k)" title="Previous (k)"><m3e-icon name="keyboard_arrow_up"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="panel-next" class="desk-only" aria-label="Next (j)" title="Next (j)"><m3e-icon name="keyboard_arrow_down"></m3e-icon></m3e-icon-button>
+            <span class="spacer"></span>
+            <div id="panel-actions" class="panel-actions"></div>
+          </div>
+          <div id="panel-body" class="panel-body"></div>
+        </aside>
+
+        <nav class="tabbar" aria-label="Sections">
+          <a href="#/" data-tab="all"><m3e-icon name="inventory_2"></m3e-icon><span>Sink</span></a>
+          <a href="#/review" data-tab="digest"><m3e-icon name="auto_awesome"></m3e-icon><span>Review</span><b id="tab-badge" class="badge" hidden></b></a>
+          <a href="#/library" data-tab="library"><m3e-icon name="folder"></m3e-icon><span>Library</span></a>
+          <a href="#/settings" data-tab="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
+        </nav>
+
+        <m3e-fab id="upload-fab" class="phone-only" variant="primary-container" size="small" aria-label="Add screenshots">
+          <m3e-icon name="add"></m3e-icon>
         </m3e-fab>
         <input id="file-input" type="file" accept="image/*" multiple hidden />
 
         <div id="bulk-bar" class="bulk-bar" hidden role="toolbar" aria-label="Selected captures">
           <m3e-icon-button id="bulk-clear" aria-label="Clear selection"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
           <span id="bulk-count" class="bulk-count"></span>
+          <m3e-button id="bulk-all" variant="text" size="small">All</m3e-button>
           <span class="spacer"></span>
-          <m3e-button id="bulk-all" variant="text" size="small">Select all</m3e-button>
           <div id="bulk-actions" class="bulk-actions"></div>
         </div>
 
         <div id="dropzone" class="dropzone" hidden>
           <m3e-shape name="very-sunny" class="drop-shape"></m3e-shape>
-          <m3e-heading variant="headline" size="small">Drop to stash</m3e-heading>
+          <h2>Drop to stash</h2>
         </div>
       </div>
 
@@ -118,55 +138,11 @@
       <!-- Bulk: file selected captures into collections -->
       <m3e-dialog id="bulk-collect" dismissible>
         <span slot="header">Add to collections</span>
-        <div class="collection-chips" id="bulk-collect-chips"></div>
+        <div class="chip-row" id="bulk-collect-chips"></div>
         <div slot="actions" end>
           <m3e-button id="bulk-collect-cancel">Cancel</m3e-button>
           <m3e-button id="bulk-collect-go" variant="filled">Add</m3e-button>
         </div>
-      </m3e-dialog>
-
-      <!-- MCP: tokens for AI assistants -->
-      <m3e-dialog id="connect" dismissible>
-        <span slot="header">Connect an AI assistant</span>
-        <div class="connect-body">
-          <p class="muted">
-            Lets an assistant search your sink, read captures and file them into collections.
-          </p>
-          <m3e-heading variant="title" size="small">Claude, ChatGPT, Poke and other apps</m3e-heading>
-          <p class="small">
-            Add a custom connector (MCP server) with this URL. You'll sign in here and approve it; no token to copy.
-          </p>
-          <div class="connect-row">
-            <pre id="connect-url" class="connect-command connect-url"></pre>
-            <m3e-icon-button id="connect-url-copy" aria-label="Copy connector URL"><m3e-icon name="content_copy"></m3e-icon></m3e-icon-button>
-          </div>
-          <m3e-heading variant="title" size="small">Claude Code</m3e-heading>
-          <p class="small">The same URL works with <code>claude mcp add --transport http</code>, or create a token for a fixed header:</p>
-          <div class="connect-row">
-            <m3e-form-field variant="outlined" class="full">
-              <label slot="label" for="connect-name">Client name</label>
-              <input id="connect-name" value="Claude Code" />
-            </m3e-form-field>
-            <m3e-button id="connect-create" variant="filled">Create token</m3e-button>
-          </div>
-          <div id="connect-result" hidden>
-            <p class="small">Run this once. The token is only shown now.</p>
-            <pre id="connect-command" class="connect-command"></pre>
-            <m3e-button id="connect-copy" variant="tonal" size="small"><m3e-icon slot="icon" name="content_copy"></m3e-icon>Copy</m3e-button>
-          </div>
-          <m3e-heading variant="title" size="small">Signed-in devices and clients</m3e-heading>
-          <div id="connect-tokens" class="connect-tokens"></div>
-        </div>
-        <div slot="actions" end>
-          <m3e-button id="connect-close">Done</m3e-button>
-        </div>
-      </m3e-dialog>
-
-      <!-- Detail -->
-      <m3e-dialog id="detail" dismissible class="detail-dialog">
-        <span slot="header" id="detail-header"></span>
-        <div id="detail-body" class="detail"></div>
-        <div slot="actions" id="detail-actions" class="detail-actions"></div>
       </m3e-dialog>
     </m3e-theme>
     <script type="module" src="/src/main.js"></script>
