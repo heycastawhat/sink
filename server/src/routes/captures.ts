@@ -13,8 +13,8 @@ type CaptureRow = Record<string, unknown> & {
   id: string;
   tags: string;
   entities: string;
-  image_path: string;
-  thumb_path: string;
+  image_path: string | null;
+  thumb_path: string | null;
   pinned: number;
 };
 type ActionRow = Record<string, unknown> & { payload: string };
@@ -31,8 +31,9 @@ function serialize(row: CaptureRow, actions?: ActionRow[], collections?: string[
     pinned: row.pinned === 1,
     tags: JSON.parse(row.tags) as string[],
     entities: JSON.parse(row.entities) as Record<string, string[]>,
-    image_url: `/api/media/${row.id}/original`,
-    thumb_url: `/api/media/${row.id}/thumb`,
+    // Notes and links saved by assistants have no screenshot.
+    image_url: image_path ? `/api/media/${row.id}/original` : null,
+    thumb_url: thumb_path ? `/api/media/${row.id}/thumb` : null,
     ...(actions && { actions: actions.map((a) => ({ ...a, payload: JSON.parse(a.payload) })) }),
     ...(collections && { collections }),
     ...(priceWatch !== undefined && { price_watch: priceWatch }),
@@ -83,7 +84,9 @@ const patchBody = z
 const uploadFields = z.object({
   note: z.string().max(4000).optional(),
   ocr_text: z.string().max(50_000).optional(),
-  source: z.enum(["share", "auto", "tile", "assist", "web"]).default("web"),
+  source: z.enum(["share", "auto", "tile", "assist", "web", "mcp"]).default("web"),
+  // A note's body when there's no screenshot (or extra text alongside one).
+  text: z.string().max(50_000).optional(),
   // From the assistant: the real text on screen (better than OCR) and the page URL.
   screen_text: z.string().max(50_000).optional(),
   source_url: z.string().url().max(2000).optional(),
@@ -125,14 +128,16 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
     const form = await c.req.formData().catch(() => null);
     if (!form) return c.json({ error: "expected multipart form" }, 400);
     const image = form.get("image");
-    if (!(image instanceof File)) return c.json({ error: "missing image" }, 400);
-    if (image.size > maxUploadBytes) return c.json({ error: "file too large" }, 413);
+    if (image !== null && !(image instanceof File)) return c.json({ error: "image must be a file" }, 400);
+    if (image && image.size > maxUploadBytes) return c.json({ error: "file too large" }, 413);
 
     const fields = uploadFields.safeParse(
       Object.fromEntries([...form.entries()].filter(([, v]) => typeof v === "string")),
     );
     if (!fields.success) return c.json({ error: "invalid fields", issues: fields.error.issues }, 400);
     const f = fields.data;
+    const body = f.text?.trim();
+    if (!image && !body && !f.source_url) return c.json({ error: "need an image, text or source_url" }, 400);
 
     // Idempotent retries from the Android upload queue.
     if (f.client_id) {
@@ -142,8 +147,11 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
       if (existing) return c.json(full(existing.id), 200);
     }
 
-    const bytes = new Uint8Array(await image.arrayBuffer());
-    const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+    // Without a screenshot, the same text and link count as the same capture.
+    const bytes = image ? new Uint8Array(await image.arrayBuffer()) : null;
+    const sha256 = new Bun.CryptoHasher("sha256")
+      .update(bytes ?? `text\n${body ?? ""}\n${f.source_url ?? ""}`)
+      .digest("hex");
     const duplicate = db
       .query<{ id: string; note_text: string | null }, [string]>(
         "SELECT id, note_text FROM captures WHERE sha256 = ? AND deleted_at IS NULL ORDER BY created_at LIMIT 1",
@@ -161,13 +169,15 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
     }
 
     const id = newId();
-    let stored;
-    try {
-      stored = await media.save(id, bytes);
-    } catch (err) {
-      if (err instanceof MediaError) return c.json({ error: err.message }, 415);
-      if ((err as Error).message?.includes("unsupported image format")) return c.json({ error: "unsupported image" }, 415);
-      throw err;
+    let stored = null;
+    if (bytes) {
+      try {
+        stored = await media.save(id, bytes);
+      } catch (err) {
+        if (err instanceof MediaError) return c.json({ error: err.message }, 415);
+        if ((err as Error).message?.includes("unsupported image format")) return c.json({ error: "unsupported image" }, 415);
+        throw err;
+      }
     }
 
     const createdAt = f.captured_at ?? now();
@@ -183,13 +193,13 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
         f.client_id ?? null,
         f.source,
         f.app_package ?? null,
-        stored.imagePath,
-        stored.thumbPath,
-        stored.mime,
-        stored.width,
-        stored.height,
+        stored?.imagePath ?? null,
+        stored?.thumbPath ?? null,
+        stored?.mime ?? null,
+        stored?.width ?? null,
+        stored?.height ?? null,
         f.note?.trim() || null,
-        mergeText(f.screen_text, f.ocr_text),
+        mergeText([body, f.screen_text?.trim()].filter(Boolean).join("\n\n"), f.ocr_text),
         sha256,
         f.source_url ?? null,
       );
@@ -364,7 +374,7 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
     if (!row) return c.json({ error: "not found" }, 404);
     db.query("DELETE FROM captures WHERE id = ?").run(row.id);
     index?.remove(row.id);
-    await media.remove(row.image_path, row.thumb_path);
+    await media.remove(...[row.image_path, row.thumb_path].filter((p): p is string => !!p));
     return c.json({ ok: true });
   });
 
@@ -497,7 +507,9 @@ export function captureRoutes(db: Database, media: MediaStore, maxUploadBytes: n
     const row = getCapture(c.req.param("id"));
     if (!row) return c.json({ error: "not found" }, 404);
     const variant = c.req.param("variant");
-    const file = Bun.file(media.path(variant === "thumb" ? row.thumb_path : row.image_path));
+    const path = variant === "thumb" ? row.thumb_path : row.image_path;
+    if (!path) return c.json({ error: "no image" }, 404);
+    const file = Bun.file(media.path(path));
     if (!(await file.exists())) return c.json({ error: "not found" }, 404);
     return new Response(file, {
       headers: {

@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import sharp from "sharp";
 import { z } from "zod";
 import { KINDS } from "./ai/extract";
+import { fetchPublic } from "./net";
 
 /** Calls Sink's own REST API as the MCP caller, so tools share its auth, filters and validation. */
 export type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>;
@@ -16,6 +17,7 @@ type Capture = Record<string, unknown> & {
 type Collection = { id: string; name: string; count: number };
 
 const IMAGE_MAX_PX = 1568;
+const FETCH_MAX_BYTES = 20 * 1024 * 1024;
 
 /**
  * MCP over Streamable HTTP, stateless: a fresh server per request (no sessions to keep),
@@ -35,6 +37,18 @@ export async function handleMcp(req: Request, api: ApiFetch, timeZone: string): 
 
 class ToolError extends Error {}
 
+/** Downloads an image an agent points at, public addresses only. */
+async function fetchImage(raw: string): Promise<Uint8Array> {
+  const res = await fetchPublic(raw, { headers: { accept: "image/*" } }).catch((err: Error) => {
+    throw new ToolError(`Can't fetch ${raw}: ${err.message}`);
+  });
+  if (!res.ok) throw new ToolError(`Image URL returned HTTP ${res.status}`);
+  if (Number(res.headers.get("content-length") ?? 0) > FETCH_MAX_BYTES) throw new ToolError("Image too large");
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.length > FETCH_MAX_BYTES) throw new ToolError("Image too large");
+  return bytes;
+}
+
 async function json<T>(res: Response): Promise<T> {
   const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!res.ok) throw new ToolError(body?.error ?? `HTTP ${res.status}`);
@@ -48,9 +62,10 @@ function buildServer(api: ApiFetch, timeZone: string) {
     { name: "sink", version: "1.0.0" },
     {
       instructions:
-        "Sink is the user's personal screenshot archive. Each capture is a screenshot the AI has read: kind, title, " +
-        "summary, extracted entities, the user's note on why they saved it, and the text in the image. Search first, " +
-        "then get_capture for full text or to look at the image.",
+        "Sink is the user's personal archive of screenshots, notes and links. Each capture is one the AI has read: kind, " +
+        "title, summary, extracted entities, the user's note on why they saved it, and its text. Search first, " +
+        "then get_capture for full text or to look at the image. add_capture saves something new: a note, a link or an " +
+        "image. Captures without a screenshot have has_image false.",
     },
   );
 
@@ -70,6 +85,7 @@ function buildServer(api: ApiFetch, timeZone: string) {
     pinned: c.pinned,
     source_url: c.source_url ?? undefined,
     status: c.status,
+    has_image: c.image_url !== null,
     text_excerpt: c.ocr_text ? c.ocr_text.slice(0, 280) : undefined,
   });
 
@@ -146,10 +162,11 @@ function buildServer(api: ApiFetch, timeZone: string) {
       const detail = {
         ...rest,
         ...when(c.created_at),
+        has_image: image_url !== null,
         collections: (c.collections ?? []).map((cid) => names.get(cid) ?? cid),
       };
       const content: unknown[] = text(detail).content;
-      if (include_image) {
+      if (include_image && image_url) {
         const res = await api(`/api/media/${encodeURIComponent(id)}/original`);
         if (res.ok) {
           const jpeg = await sharp(Buffer.from(await res.arrayBuffer()))
@@ -240,6 +257,53 @@ function buildServer(api: ApiFetch, timeZone: string) {
       }
       const c = await json<Capture>(await api(`/api/captures/${encodeURIComponent(id)}`));
       return text({ updated: brief(c) });
+    }),
+  );
+
+  server.registerTool(
+    "add_capture",
+    {
+      title: "Add capture",
+      description:
+        "Save something new to the user's sink: a note (text), a link (url), an image, or any mix. A bare link is read so " +
+        "it's searchable. The AI then files it like any screenshot (kind, title, summary, reminders), which takes a few " +
+        "seconds; status is pending until then. Saving the same thing twice returns the existing capture.",
+      inputSchema: {
+        text: z.string().max(50_000).optional().describe("Text to keep, e.g. a recipe, an address, notes from this chat"),
+        url: z.string().url().max(2000).optional().describe("Link to save, or the page the text or image came from"),
+        note: z.string().max(4000).optional().describe("Why it's being saved; steers the AI and shows as the user's note"),
+        image_base64: z.string().max(28_000_000).optional().describe("PNG, JPEG, WebP or HEIC, base64"),
+        image_url: z.string().url().max(2000).optional().describe("Public URL of an image to download and keep"),
+        collections: z.array(z.string().max(60)).max(20).optional().describe("Collection names or ids to file it into"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    safe(async ({ text: body, url, note, image_base64, image_url, collections: cols }) => {
+      if (image_base64 && image_url) throw new ToolError("Give image_base64 or image_url, not both");
+      if (!body?.trim() && !url && !image_base64 && !image_url) throw new ToolError("Nothing to save: give text, url or an image");
+      const collectionIds = await resolveCollections(cols ?? []);
+
+      const form = new FormData();
+      form.set("source", "mcp");
+      if (body?.trim()) form.set("text", body.trim());
+      if (url) form.set("source_url", url);
+      if (note?.trim()) form.set("note", note.trim());
+      const image = image_url
+        ? await fetchImage(image_url)
+        : image_base64 && new Uint8Array(Buffer.from(image_base64.replace(/^data:[^,]*,/, ""), "base64"));
+      if (image) form.set("image", new File([image], "capture"));
+      const c = await json<Capture>(await api("/api/captures", { method: "POST", body: form }));
+
+      if (collectionIds.length) {
+        await json(
+          await api("/api/captures/bulk", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ids: [c.id], add_collections: collectionIds }),
+          }),
+        );
+      }
+      return text({ added: brief(c), collections: cols ?? [] });
     }),
   );
 

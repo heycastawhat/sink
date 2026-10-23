@@ -1,7 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { newId, now } from "./db";
+import { assertPublicUrl, fetchPublic } from "./net";
 
 const HOUR = 60 * 60 * 1000;
 const MAX_PAGE_BYTES = 3 * 1024 * 1024;
@@ -75,23 +74,6 @@ export function extractPrice(html: string): Price | null {
   const micro = html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1];
   if (num(micro)) return { price: num(micro)!, currency: html.match(/itemprop=["']priceCurrency["'][^>]*content=["']([^"']+)["']/i)?.[1] ?? null };
   return null;
-}
-
-/** Shop pages only: no LAN, loopback or link-local hosts, so a URL in a screenshot can't reach thonk's neighbours. */
-export async function assertPublicUrl(raw: string): Promise<URL> {
-  const url = new URL(raw);
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("only http(s) pages");
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  const addresses = isIP(host) ? [host] : (await lookup(host, { all: true })).map((a) => a.address);
-  for (const a of addresses) {
-    if (
-      /^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(a) ||
-      /^(::1?$|f[cd]|fe80|::ffff:(127|10|192\.168)\.)/i.test(a)
-    ) {
-      throw new Error("not a public address");
-    }
-  }
-  return url;
 }
 
 export class PriceWatcher {
@@ -174,29 +156,20 @@ export class PriceWatcher {
   }
 
   private async fetchPrice(raw: string): Promise<Price | null> {
-    // Follow redirects by hand so every hop gets the public-address check.
-    let url = await this.checkUrl(raw);
-    for (let hop = 0; hop < 5; hop++) {
-      const res = await this.fetchImpl(url, {
-        redirect: "manual",
-        signal: AbortSignal.timeout(20_000),
-        headers: {
-          "user-agent": "Mozilla/5.0 (compatible; SinkPriceWatch/1.0; +self-hosted)",
-          accept: "text/html,application/xhtml+xml",
-          "accept-language": "en-NZ,en;q=0.8",
-        },
-      });
-      if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
-        url = await this.checkUrl(new URL(res.headers.get("location")!, url).toString());
-        continue;
-      }
-      if (!res.ok) throw new Error(`page returned HTTP ${res.status}`);
-      const length = Number(res.headers.get("content-length") ?? 0);
-      if (length > MAX_PAGE_BYTES) throw new Error("page too large");
-      const html = (await res.text()).slice(0, MAX_PAGE_BYTES);
-      return extractPrice(html);
-    }
-    throw new Error("too many redirects");
+    const res = await fetchPublic(raw, {
+      fetchImpl: this.fetchImpl,
+      checkUrl: this.checkUrl,
+      headers: {
+        "user-agent": "Mozilla/5.0 (compatible; SinkPriceWatch/1.0; +self-hosted)",
+        accept: "text/html,application/xhtml+xml",
+        "accept-language": "en-NZ,en;q=0.8",
+      },
+    });
+    if (!res.ok) throw new Error(`page returned HTTP ${res.status}`);
+    const length = Number(res.headers.get("content-length") ?? 0);
+    if (length > MAX_PAGE_BYTES) throw new Error("page too large");
+    const html = (await res.text()).slice(0, MAX_PAGE_BYTES);
+    return extractPrice(html);
   }
 }
 

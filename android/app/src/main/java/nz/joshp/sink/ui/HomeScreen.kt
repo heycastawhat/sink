@@ -2,6 +2,7 @@ package nz.joshp.sink.ui
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +36,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Notes
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Add
@@ -44,6 +46,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
@@ -400,6 +403,33 @@ fun KindPill(icon: ImageVector, label: String, hue: Color) {
     }
 }
 
+/** Notes and links saved by assistants have no screenshot; the tile shows their text instead. */
+@Composable
+private fun TextTile(c: Capture, hue: Color) {
+    val link = c.sourceUrl?.takeIf { it.startsWith("http") }
+    val body = c.ocrText?.replace(Regex("^(Title|Description): ", RegexOption.MULTILINE), "")?.take(360) ?: c.note.orEmpty()
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(lerp(MaterialTheme.colorScheme.surfaceContainer, hue, 0.10f))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (link != null) Icons.Outlined.Link else Icons.AutoMirrored.Outlined.Notes, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(4.dp))
+            Text(
+                link?.let { Uri.parse(it).host?.removePrefix("www.") } ?: "Note",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(body, style = MaterialTheme.typography.bodySmall, overflow = TextOverflow.Ellipsis)
+    }
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun CaptureCard(c: Capture, onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -415,13 +445,17 @@ fun CaptureCard(c: Capture, onClick: () -> Unit, modifier: Modifier = Modifier) 
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)), tile),
         ) {
-            AsyncImage(
-                model = CaptureImages.absolute(c.thumbUrl),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                alignment = Alignment.TopCenter,
-                modifier = Modifier.fillMaxSize(),
-            )
+            if (c.thumbUrl != null) {
+                AsyncImage(
+                    model = CaptureImages.absolute(c.thumbUrl),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    alignment = Alignment.TopCenter,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                TextTile(c, kind?.hue ?: MaterialTheme.colorScheme.outline)
+            }
             if (c.busy) {
                 Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)), Alignment.Center) {
                     ContainedLoadingIndicator()

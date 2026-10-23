@@ -194,18 +194,27 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
             ) {
                 val kind = kindOf(c.kind)
                 val shot = RoundedCornerShape(22.dp)
-                AsyncImage(
-                    model = CaptureImages.absolute(c.imageUrl),
-                    contentDescription = "Screenshot",
-                    contentScale = ContentScale.FillWidth,
-                    alignment = Alignment.TopCenter,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 440.dp)
-                        .clip(shot)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), shot),
-                )
+                if (c.imageUrl != null) {
+                    AsyncImage(
+                        model = CaptureImages.absolute(c.imageUrl),
+                        contentDescription = "Screenshot",
+                        contentScale = ContentScale.FillWidth,
+                        alignment = Alignment.TopCenter,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 440.dp)
+                            .clip(shot)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), shot),
+                    )
+                } else if (c.ocrText != null) {
+                    // A note or link: its text is the content, so show it in full where the screenshot would be.
+                    Surface(shape = shot, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+                        SelectionContainer {
+                            Text(c.ocrText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(16.dp))
+                        }
+                    }
+                }
 
                 Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     kind?.let {
@@ -418,7 +427,7 @@ fun DetailScreen(vm: SinkViewModel, id: String, onBack: () -> Unit) {
                     )
                 }
 
-                c.ocrText?.let {
+                c.ocrText?.takeIf { c.imageUrl != null }?.let {
                     TextButton(onClick = { showText = !showText }, contentPadding = PaddingValues(horizontal = 0.dp)) {
                         Text(if (showText) "Hide text in the image" else "Show text in the image")
                     }

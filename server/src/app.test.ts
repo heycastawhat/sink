@@ -3,18 +3,19 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
-import { openDb } from "./db";
+import { migrations, openDb } from "./db";
 import { Auth, s256 } from "./auth";
 import { Oidc } from "./oidc";
 import { MediaStore } from "./media";
 import { Worker, dueAt } from "./worker";
 import { createApp } from "./app";
 import { ProviderError, type Provider } from "./ai/provider";
-import { parseExtraction, localIso, utcOffset, type ExtractInput } from "./ai/extract";
+import { buildUserText, parseExtraction, localIso, utcOffset, type ExtractInput } from "./ai/extract";
 import { toFtsQuery } from "./routes/captures";
 import { VectorIndex, fuse, type Embedder } from "./semantic";
 import { Backups } from "./backup";
-import { PriceWatcher, extractPrice, assertPublicUrl } from "./prices";
+import { PriceWatcher, extractPrice } from "./prices";
+import { assertPublicUrl, pageText } from "./net";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
 
@@ -108,7 +109,13 @@ function makeSetup(allowedUsers: string[] = []) {
   );
   const provider = new FakeProvider();
   const index = new VectorIndex(db, new FakeEmbedder());
-  const worker = new Worker(db, media, provider, { pollMs: 1000, maxAttempts: 3 }, 512, index);
+  // Pages a bare link reads as, instead of the network.
+  const pages = new Map<string, string>();
+  const readLink = async (url: string) => {
+    if (!pages.has(url)) throw new Error("page returned HTTP 404");
+    return pages.get(url)!;
+  };
+  const worker = new Worker(db, media, provider, { pollMs: 1000, maxAttempts: 3 }, 512, index, "Pacific/Auckland", readLink);
   const app = createApp({
     db,
     media,
@@ -118,7 +125,7 @@ function makeSetup(allowedUsers: string[] = []) {
     provider,
     config: { secureCookies: false, maxUploadBytes: 5 * 1024 * 1024, webDir: undefined, publicUrls: [PUBLIC] },
   });
-  return { db, app, provider, worker, authentik, auth };
+  return { db, app, provider, worker, authentik, auth, pages };
 }
 
 /** Runs /oidc/start, plays authentik, returns the callback response. */
@@ -235,6 +242,75 @@ describe("auth", () => {
 });
 
 describe("captures", () => {
+  test("notes and links need no image", async () => {
+    const token = await login();
+    const post = (fields: Record<string, string>) => {
+      const form = new FormData();
+      for (const [k, v] of Object.entries(fields)) form.set(k, v);
+      return setup.app.request("/api/captures", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
+    };
+
+    expect((await post({ note: "just a note field" })).status).toBe(400);
+
+    const note = (await (await post({ text: "Door code 4821, gate on the left" })).json()) as any;
+    expect(note.image_url).toBeNull();
+    expect(note.thumb_url).toBeNull();
+    expect(note.ocr_text).toBe("Door code 4821, gate on the left");
+    expect((await post({ text: "Door code 4821, gate on the left" })).status).toBe(200);
+    expect((await get(token, `/api/media/${note.id}/thumb`)).status).toBe(404);
+
+    setup.pages.set("https://example.com/ramen", "Title: Best ramen in Ponsonby\n\nTonkotsu, open late.");
+    const link = (await (await post({ source_url: "https://example.com/ramen", note: "try this" })).json()) as any;
+    const dead = (await (await post({ source_url: "https://example.com/gone" })).json()) as any;
+    await setup.worker.tick();
+
+    const calls = setup.provider.calls.filter((c) => !c.imageDataUrl);
+    expect(calls).toHaveLength(3);
+    expect(buildUserText(calls.find((c) => c.sourceUrl === "https://example.com/ramen")!)).toContain("Saved text:\nTitle: Best ramen");
+    const read = (await (await get(token, `/api/captures/${link.id}`)).json()) as any;
+    expect(read.status).toBe("done");
+    expect(read.ocr_text).toContain("Tonkotsu");
+    // An unreadable page still gets filed from the URL alone.
+    expect(((await (await get(token, `/api/captures/${dead.id}`)).json()) as any).status).toBe("done");
+    expect(((await (await get(token, "/api/captures?q=tonkotsu")).json()) as any).items.map((i: any) => i.id)).toEqual([link.id]);
+
+    expect((await setup.app.request(`/api/captures/${note.id}`, { method: "DELETE", headers: { authorization: `Bearer ${token}` } })).status).toBe(200);
+  });
+
+  test("reads a page's title, description and text", () => {
+    const html = `<html><head><title>Ignored</title><meta property="og:title" content="Ramen &amp; More">
+      <meta name="description" content="Late night noodles"><style>.x{}</style></head>
+      <body><nav>Home About</nav><article><h1>Tonkotsu</h1><p>Open till 2am.</p><script>track()</script></article></body></html>`;
+    expect(pageText(html)).toBe("Title: Ramen & More\n\nDescription: Late night noodles\n\nTonkotsu\nOpen till 2am.");
+  });
+
+  test("migrating keeps captures, their children and search", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "sink-mig-")), "old.db");
+    const old = new Database(path, { create: true, strict: true });
+    old.exec("PRAGMA foreign_keys = ON;");
+    // Everything before the rebuild that made image columns optional.
+    for (const m of migrations.slice(0, 7)) old.exec(m);
+    old.exec("PRAGMA user_version = 7");
+    old.exec(`INSERT INTO captures (id, created_at, updated_at, source, image_path, thumb_path, mime, width, height, ocr_text, title)
+      VALUES ('c1', 1, 1, 'auto', 'c1.png', 'c1.thumb.webp', 'image/png', 10, 20, 'laneway tickets', 'Gig')`);
+    old.exec("INSERT INTO actions (id, capture_id, type, label, created_at) VALUES ('a1', 'c1', 'todo', 'Buy', 1)");
+    old.exec("INSERT INTO collections (id, name, created_at) VALUES ('col', 'Gigs', 1)");
+    old.exec("INSERT INTO capture_collections VALUES ('c1', 'col')");
+    old.close();
+
+    const db = openDb(path);
+    expect(db.query("SELECT COUNT(*) AS n FROM actions").get()).toEqual({ n: 1 });
+    expect(db.query("SELECT COUNT(*) AS n FROM capture_collections").get()).toEqual({ n: 1 });
+    const hit = db.query("SELECT c.id FROM captures_fts f JOIN captures c ON c.rowid = f.rowid WHERE captures_fts MATCH 'laneway'").all();
+    expect(hit).toEqual([{ id: "c1" }]);
+    db.exec("INSERT INTO captures (id, created_at, updated_at, source, ocr_text) VALUES ('c2', 2, 2, 'mcp', 'a note')");
+    db.exec("UPDATE captures SET title = 'Concert' WHERE id = 'c1'");
+    expect(db.query("SELECT rowid FROM captures_fts WHERE captures_fts MATCH 'concert OR note'").all()).toHaveLength(2);
+    // Foreign keys are back on: deleting cascades.
+    db.exec("DELETE FROM captures WHERE id = 'c1'");
+    expect(db.query("SELECT COUNT(*) AS n FROM actions").get()).toEqual({ n: 0 });
+  });
+
   test("upload, process, search, fetch media", async () => {
     const token = await login();
     const res = await upload(token, { note: "want tickets", ocr_text: "Powerstation Saturday 8pm" });
@@ -509,6 +585,38 @@ describe("mcp", () => {
     const bad = await call(token, "update_capture", { id, add_to_collections: ["nope"] });
     expect(bad.result.isError).toBe(true);
     expect(bad.result.content[0].text).toContain("Existing: Gigs");
+  });
+
+  test("add_capture saves notes, links and images, filed into collections", async () => {
+    const token = await login();
+    await call(token, "create_collection", { name: "Recipes" });
+
+    const added = await call(token, "add_capture", {
+      text: "Pikelets: 1 cup flour, 1 egg, 3/4 cup milk",
+      url: "https://example.com/pikelets",
+      note: "from chat",
+      collections: ["recipes"],
+    });
+    const id = added.data.added.id;
+    expect(added.data.added).toMatchObject({ note: "from chat", has_image: false, status: "pending" });
+    const got = await call(token, "get_capture", { id, include_image: true });
+    expect(got.data).toMatchObject({ source: "mcp", has_image: false, source_url: "https://example.com/pikelets", collections: ["Recipes"] });
+    expect(got.data.ocr_text).toBe("Pikelets: 1 cup flour, 1 egg, 3/4 cup milk");
+    expect(got.result.content).toHaveLength(1);
+
+    const again = await call(token, "add_capture", { text: "Pikelets: 1 cup flour, 1 egg, 3/4 cup milk", url: "https://example.com/pikelets" });
+    expect(again.data.added.id).toBe(id);
+
+    const link = await call(token, "add_capture", { url: "https://example.com/article" });
+    expect(link.data.added.id).not.toBe(id);
+
+    const img = await call(token, "add_capture", { image_base64: png.toString("base64"), note: "screenshot from chat" });
+    expect(img.data.added.has_image).toBe(true);
+
+    expect((await call(token, "add_capture", {})).result.isError).toBe(true);
+    expect((await call(token, "add_capture", { image_base64: Buffer.from("nope").toString("base64") })).result.isError).toBe(true);
+    const local = await call(token, "add_capture", { image_url: "http://127.0.0.1/x.png" });
+    expect(local.result.content[0].text).toContain("not a public address");
   });
 
   test("tokens can be minted for other clients", async () => {

@@ -6,12 +6,13 @@ import { runOcr } from "./ocr";
 import { newId, now } from "./db";
 import type { VectorIndex } from "./semantic";
 import { utcOffset } from "./ai/extract";
+import { readPage } from "./net";
 
 type Job = { id: number; capture_id: string; kind: string; attempts: number };
 type CaptureRow = {
   id: string;
   created_at: number;
-  image_path: string;
+  image_path: string | null;
   note_text: string | null;
   ocr_text: string | null;
   app_package: string | null;
@@ -54,6 +55,7 @@ export class Worker {
     private aiMaxPx: number,
     private index?: VectorIndex,
     private timeZone = "Pacific/Auckland",
+    private readLink: (url: string) => Promise<string | null> = readPage,
   ) {}
 
   start() {
@@ -149,9 +151,16 @@ export class Worker {
 
   private async process(capture: CaptureRow) {
     let ocrText = capture.ocr_text;
-    if (!ocrText) {
-      ocrText = await runOcr(this.media.path(capture.image_path));
-      if (ocrText) this.db.query("UPDATE captures SET ocr_text = ? WHERE id = ?").run(ocrText, capture.id);
+    if (!ocrText && capture.image_path) ocrText = await runOcr(this.media.path(capture.image_path));
+    // A bare link: read the page so search and the AI have something to go on. Best effort.
+    if (!ocrText && !capture.image_path && capture.source_url) {
+      ocrText = await this.readLink(capture.source_url).catch((err: Error) => {
+        console.warn(`[worker] capture ${capture.id} page: ${err.message}`);
+        return null;
+      });
+    }
+    if (ocrText && ocrText !== capture.ocr_text) {
+      this.db.query("UPDATE captures SET ocr_text = ? WHERE id = ?").run(ocrText, capture.id);
     }
 
     if (!this.provider.enabled) {
@@ -160,7 +169,7 @@ export class Worker {
     }
 
     const { extraction, model } = await this.provider.extract({
-      imageDataUrl: await this.media.forModel(capture.image_path, this.aiMaxPx),
+      imageDataUrl: capture.image_path ? await this.media.forModel(capture.image_path, this.aiMaxPx) : null,
       note: capture.note_text,
       ocrText,
       appPackage: capture.app_package,

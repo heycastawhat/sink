@@ -47,7 +47,8 @@ export const extractionSchema = z.object({
 export type Extraction = z.infer<typeof extractionSchema>;
 
 export type ExtractInput = {
-  imageDataUrl: string;
+  /** Null for notes and links saved without a screenshot. */
+  imageDataUrl: string | null;
   note?: string | null;
   ocrText?: string | null;
   appPackage?: string | null;
@@ -56,8 +57,8 @@ export type ExtractInput = {
   timeZone: string;
 };
 
-export const SYSTEM_PROMPT = `You file screenshots into a personal "sink" so the user can find them later and act on them.
-Look at the screenshot, the text on screen and the user's note (the note says WHY they saved it and matters most).
+export const SYSTEM_PROMPT = `You file screenshots, notes and links into a personal "sink" so the user can find them later and act on them.
+Look at the screenshot (if there is one), the text and the user's note (the note says WHY they saved it and matters most).
 Reply with ONLY a JSON object, no prose, no code fences:
 {
   "kind": one of ${KINDS.map((k) => `"${k}"`).join(", ")},
@@ -73,9 +74,9 @@ Reply with ONLY a JSON object, no prose, no code fences:
 }
 Rules:
 - Times are in the user's timezone (given below). Write every date/time with that UTC offset.
-- Resolve relative dates ("Friday", "tomorrow") against the capture time. Never invent a date or time the screenshot and note don't give or clearly imply; leave it out instead.
+- Resolve relative dates ("Friday", "tomorrow") against the capture time. Never invent a date or time the capture and note don't give or clearly imply; leave it out instead.
 - Only suggest actions that are clearly useful to the user in real life. Never suggest actions about the phone or app UI itself (popups, notifications, buttons, dismissing things).
-- "reminder" pings the user's phone, so be sparing: at most ONE per screenshot, only when the screenshot shows a real deadline or time-sensitive moment (tickets on sale, a booking, a flight, a bill due, a delivery window). Its "due" is when to ping, e.g. a bit before the deadline. No reminder for articles, reading, general info, or anything without a clear date.
+- "reminder" pings the user's phone, so be sparing: at most ONE per capture, only when it shows a real deadline or time-sensitive moment (tickets on sale, a booking, a flight, a bill due, a delivery window). Its "due" is when to ping, e.g. a bit before the deadline. No reminder for articles, reading, general info, or anything without a clear date.
 - "calendar" for something with a start time the user attends; "todo" for an undated task.
 - If you only know the day, give a date with no time (YYYY-MM-DD); never make up midnight or other times.
 - Omit unknown fields.`;
@@ -88,7 +89,8 @@ export function buildUserText(input: ExtractInput): string {
   if (input.appPackage) parts.push(`Source app: ${input.appPackage}`);
   if (input.sourceUrl) parts.push(`Page URL: ${input.sourceUrl}`);
   if (input.note) parts.push(`User note: ${input.note}`);
-  if (input.ocrText) parts.push(`Text on screen:\n${input.ocrText.slice(0, 8000)}`);
+  if (!input.imageDataUrl) parts.push("No screenshot: this was saved as text or a link.");
+  if (input.ocrText) parts.push(`${input.imageDataUrl ? "Text on screen" : "Saved text"}:\n${input.ocrText.slice(0, 8000)}`);
   return parts.join("\n\n");
 }
 

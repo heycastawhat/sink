@@ -374,6 +374,24 @@ async function loadMore() {
 
 new IntersectionObserver((entries) => entries[0].isIntersecting && loadMore(), { rootMargin: '600px' }).observe($('more'));
 
+const hostOf = (url) => {
+  try {
+    return new URL(url).host.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+};
+
+/** Notes and links saved by assistants have no screenshot; their card shows the text instead. */
+function textTileHtml(c) {
+  const link = /^https?:\/\//.test(c.source_url ?? '') ? c.source_url : null;
+  const body = (c.ocr_text ?? '').replace(/^(Title|Description): /gm, '').slice(0, 360) || c.note_text || '';
+  return `<div class="text-tile">
+    ${link ? `<span class="tile-host">${ic('link')}${esc(hostOf(link))}</span>` : `<span class="tile-host">${ic('notes')}Note</span>`}
+    <p>${esc(body)}</p>
+  </div>`;
+}
+
 function cardHtml(c) {
   const busy = busyStatus(c);
   const kind = KINDS[c.kind];
@@ -381,8 +399,8 @@ function cardHtml(c) {
   const classes = ['card', c.pinned && 'pinned', state.selected.has(c.id) && 'selected', state.current?.id === c.id && 'open'].filter(Boolean);
   return `
 <article class="${classes.join(' ')}" data-id="${c.id}" tabindex="0" style="--kind: var(--kind-${c.kind ?? 'none'})">
-  <div class="thumb">
-    <img src="${c.thumb_url}" alt="" loading="lazy" />
+  <div class="thumb${c.thumb_url ? '' : ' text'}">
+    ${c.thumb_url ? `<img src="${c.thumb_url}" alt="" loading="lazy" />` : textTileHtml(c)}
     <span class="select-box" data-select role="checkbox" aria-label="Select" aria-checked="${state.selected.has(c.id)}">${ic('check')}</span>
     ${c.pinned ? `<span class="pin" title="Pinned">${ic('push_pin', '', ' filled')}</span>` : ''}
     ${busy ? '<div class="busy"><m3e-loading-indicator variant="contained"></m3e-loading-indicator></div>' : ''}
@@ -844,9 +862,15 @@ function renderPanel() {
     .join('');
 
   $('panel-body').innerHTML = `
-<a class="shot" href="${c.image_url}" target="_blank" rel="noopener" title="Open full size">
+${
+  c.image_url
+    ? `<a class="shot" href="${c.image_url}" target="_blank" rel="noopener" title="Open full size">
   <img src="${c.image_url}" alt="Screenshot" />
-</a>
+</a>`
+    : /^https?:\/\//.test(c.source_url ?? '')
+      ? `<a class="link-card" href="${esc(c.source_url)}" target="_blank" rel="noopener noreferrer">${ic('link')}<span>${esc(hostOf(c.source_url))}</span>${ic('open_in_new')}</a>`
+      : ''
+}
 <div class="panel-content">
   <div class="eyebrow">
     ${kind ? `<span class="kind">${ic(kind.icon)}${kind.one}</span>` : ''}
@@ -900,7 +924,7 @@ function renderPanel() {
 
   ${
     c.ocr_text
-      ? `<m3e-expansion-panel class="ocr"><span slot="header">Text in the image</span><pre>${esc(c.ocr_text)}</pre></m3e-expansion-panel>`
+      ? `<m3e-expansion-panel class="ocr" ${c.image_url ? '' : 'open'}><span slot="header">${c.image_url ? 'Text in the image' : 'Saved text'}</span><pre>${esc(c.ocr_text)}</pre></m3e-expansion-panel>`
       : ''
   }
   ${c.model ? `<p class="muted small footnote">Read by ${esc(c.model)}</p>` : ''}
@@ -1105,7 +1129,7 @@ async function renderSettings() {
 
 <section class="setting-card">
   <h2>AI assistants</h2>
-  <p class="muted">Let Claude, ChatGPT, Poke or another assistant search your sink, read captures and file them into collections.</p>
+  <p class="muted">Let Claude, ChatGPT, Poke or another assistant search your sink, read captures, save new things and file them into collections.</p>
   <div class="setting-title">Connector URL</div>
   <p class="muted small">Add a custom connector (MCP server) with this URL. You'll sign in here and approve it.</p>
   <div class="copy-row">

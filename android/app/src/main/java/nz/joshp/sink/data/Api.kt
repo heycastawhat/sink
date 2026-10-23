@@ -51,8 +51,9 @@ data class Capture(
     @SerialName("archived_at") val archivedAt: Long? = null,
     @SerialName("deleted_at") val deletedAt: Long? = null,
     @SerialName("source_url") val sourceUrl: String? = null,
-    @SerialName("image_url") val imageUrl: String,
-    @SerialName("thumb_url") val thumbUrl: String,
+    /** Null for notes and links saved without a screenshot. */
+    @SerialName("image_url") val imageUrl: String? = null,
+    @SerialName("thumb_url") val thumbUrl: String? = null,
     val actions: List<Action>? = null,
     /** Collection ids; only on the detail fetch. */
     val collections: List<String>? = null,

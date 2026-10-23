@@ -68,7 +68,7 @@ export class OpenAICompatibleProvider implements Provider {
             role: "user",
             content: [
               { type: "text", text: buildUserText(input) },
-              { type: "image_url", image_url: { url: input.imageDataUrl } },
+              ...(input.imageDataUrl ? [{ type: "image_url", image_url: { url: input.imageDataUrl } }] : []),
             ],
           },
         ],

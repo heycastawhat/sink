@@ -440,6 +440,48 @@ a {
   display: block;
 }
 
+.thumb.text {
+  background: color-mix(in srgb, var(--kind) 10%, var(--md-sys-color-surface-container));
+}
+
+.text-tile {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  box-sizing: border-box;
+}
+
+.text-tile .tile-host {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.text-tile .tile-host m3e-icon {
+  font-size: 15px;
+  flex: none;
+}
+
+.text-tile p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--md-sys-color-on-surface);
+  white-space: pre-line;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  mask-image: linear-gradient(to bottom, #000 75%, transparent);
+}
+
 .card:hover .thumb,
 .card:focus-visible .thumb {
   transform: translateY(-3px);
@@ -731,6 +773,26 @@ a {
 .shot img {
   display: block;
   width: 100%;
+}
+
+.link-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--kind) 10%, var(--md-sys-color-surface-container));
+  color: var(--md-sys-color-on-surface);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.link-card span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-content {

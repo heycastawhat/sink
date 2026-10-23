@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-const migrations: string[] = [
+export const migrations: string[] = [
   `
   CREATE TABLE captures (
     id TEXT PRIMARY KEY,
@@ -157,22 +157,82 @@ const migrations: string[] = [
     created_at INTEGER NOT NULL
   );
   `,
+  // Captures without a screenshot (notes and links saved by assistants): image columns become optional.
+  // SQLite can't drop NOT NULL in place, so rebuild the table, keeping rowids for the FTS index.
+  `
+  CREATE TABLE captures_new (
+    id TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    client_id TEXT UNIQUE,
+    source TEXT NOT NULL,
+    app_package TEXT,
+    image_path TEXT,
+    thumb_path TEXT,
+    mime TEXT,
+    width INTEGER,
+    height INTEGER,
+    note_text TEXT,
+    ocr_text TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    kind TEXT,
+    title TEXT,
+    summary TEXT,
+    tags TEXT NOT NULL DEFAULT '[]',
+    entities TEXT NOT NULL DEFAULT '{}',
+    model TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    reviewed_at INTEGER,
+    archived_at INTEGER,
+    deleted_at INTEGER,
+    sha256 TEXT,
+    source_url TEXT
+  );
+  INSERT INTO captures_new (rowid, id, created_at, updated_at, client_id, source, app_package, image_path, thumb_path,
+    mime, width, height, note_text, ocr_text, status, error, kind, title, summary, tags, entities, model, pinned,
+    reviewed_at, archived_at, deleted_at, sha256, source_url)
+  SELECT rowid, id, created_at, updated_at, client_id, source, app_package, image_path, thumb_path,
+    mime, width, height, note_text, ocr_text, status, error, kind, title, summary, tags, entities, model, pinned,
+    reviewed_at, archived_at, deleted_at, sha256, source_url FROM captures;
+  DROP TABLE captures;
+  ALTER TABLE captures_new RENAME TO captures;
+  CREATE INDEX captures_created ON captures(created_at DESC);
+  CREATE INDEX captures_kind ON captures(kind);
+  CREATE INDEX captures_sha256 ON captures(sha256);
+  CREATE TRIGGER captures_ai AFTER INSERT ON captures BEGIN
+    INSERT INTO captures_fts(rowid, title, summary, note_text, ocr_text, tags)
+    VALUES (new.rowid, new.title, new.summary, new.note_text, new.ocr_text, new.tags);
+  END;
+  CREATE TRIGGER captures_ad AFTER DELETE ON captures BEGIN
+    INSERT INTO captures_fts(captures_fts, rowid, title, summary, note_text, ocr_text, tags)
+    VALUES ('delete', old.rowid, old.title, old.summary, old.note_text, old.ocr_text, old.tags);
+  END;
+  CREATE TRIGGER captures_au AFTER UPDATE OF title, summary, note_text, ocr_text, tags ON captures BEGIN
+    INSERT INTO captures_fts(captures_fts, rowid, title, summary, note_text, ocr_text, tags)
+    VALUES ('delete', old.rowid, old.title, old.summary, old.note_text, old.ocr_text, old.tags);
+    INSERT INTO captures_fts(rowid, title, summary, note_text, ocr_text, tags)
+    VALUES (new.rowid, new.title, new.summary, new.note_text, new.ocr_text, new.tags);
+  END;
+  `,
 ];
 
 export function openDb(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true, strict: true });
   db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA busy_timeout = 5000;");
 
+  // Foreign keys stay off while migrating so a table rebuild doesn't cascade-delete its children.
   const version = db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version;
   for (let i = version; i < migrations.length; i++) {
     db.transaction(() => {
       db.exec(migrations[i]!);
+      if (db.query("PRAGMA foreign_key_check").all().length) throw new Error(`migration ${i + 1} broke foreign keys`);
       db.exec(`PRAGMA user_version = ${i + 1}`);
     })();
   }
+  db.exec("PRAGMA foreign_keys = ON;");
   return db;
 }
 
