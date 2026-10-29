@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Same geometry as web/public/favicon.svg: a tilted note card with a ticked box, on @color/ic_bg. -->
+<!-- Same drawing as web/public/favicon.svg: three fanned cards, the front one a checklist. Background is @color/ic_bg. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <group android:translateX="8.4" android:translateY="8.4" android:scaleX="1.9" android:scaleY="1.9">
-        <group android:rotation="-8" android:pivotX="24" android:pivotY="24">
-            <group android:translateX="0.8" android:translateY="1.4">
-                <path android:pathData="M16.7,10.5 H28.5 L34.5,16.5 V34.3 A3.2,3.2 0 0 1 31.3,37.5 H16.7 A3.2,3.2 0 0 1 13.5,34.3 V13.7 A3.2,3.2 0 0 1 16.7,10.5 Z" android:fillColor="#FF4F378B" android:fillAlpha="0.35" />
-            </group>
-            <path android:pathData="M16.7,10.5 H28.5 L34.5,16.5 V34.3 A3.2,3.2 0 0 1 31.3,37.5 H16.7 A3.2,3.2 0 0 1 13.5,34.3 V13.7 A3.2,3.2 0 0 1 16.7,10.5 Z" android:fillColor="#FFFFFBFE" />
-            <path android:pathData="M28.5,10.5 V15.3 A1.2,1.2 0 0 0 29.7,16.5 H34.5 Z" android:fillColor="#FFD0BCFF" />
-            <path android:pathData="M18.7,18.9 h2.4000000000000004 a1.4,1.4 0 0 1 1.4,1.4 v2.4000000000000004 a1.4,1.4 0 0 1 -1.4,1.4 h-2.4000000000000004 a1.4,1.4 0 0 1 -1.4,-1.4 v-2.4000000000000004 a1.4,1.4 0 0 1 1.4,-1.4 Z" android:fillColor="#FF6750A4" />
-            <path android:pathData="M18.55,21.599999999999998 l1.2,1.2 l2.0,-2.3" android:strokeColor="#FFFFFBFE" android:strokeWidth="1.25" android:strokeLineCap="round" android:strokeLineJoin="round" />
-            <path android:pathData="M24.7,21.5 H30.5" android:strokeColor="#FF6750A4" android:strokeWidth="2" android:strokeLineCap="round" />
-            <path android:pathData="M18.1,28.5 H30.5" android:strokeColor="#FF6750A4" android:strokeWidth="2" android:strokeLineCap="round" />
-            <path android:pathData="M18.1,33.3 H26.0" android:strokeColor="#FF6750A4" android:strokeWidth="2" android:strokeLineCap="round" />
-        </group>
+    <group android:rotation="-16" android:pivotX="54" android:pivotY="56">
+        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FFF6C945" />
+    </group>
+    <group android:rotation="10" android:pivotX="54" android:pivotY="56">
+        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FF4FB6A8" />
+    </group>
+    <group android:rotation="-2" android:pivotX="54" android:pivotY="56">
+        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FFFFFBFE" />
+        <path android:pathData="M42.0,39.8 H45.0 A2.0,2.0 0 0 1 47.0,41.8 V44.8 A2.0,2.0 0 0 1 45.0,46.8 H42.0 A2.0,2.0 0 0 1 40.0,44.8 V41.8 A2.0,2.0 0 0 1 42.0,39.8 Z" android:fillColor="#FF6750A4" />
+        <path android:pathData="M51 43.3 H68" android:strokeColor="#FF6750A4" android:strokeWidth="3.8" android:strokeLineCap="round" />
+        <path android:pathData="M40 52.3 H68" android:strokeColor="#FF6750A4" android:strokeWidth="3.8" android:strokeLineCap="round" />
+        <path android:pathData="M40 61.3 H60" android:strokeColor="#FF6750A4" android:strokeWidth="3.8" android:strokeLineCap="round" />
+        <path android:pathData="M41.6 43.3 l1.8 1.8 l3.2 -3.6" android:strokeColor="#FFFFFBFE" android:strokeWidth="1.6" android:strokeLineCap="round" android:strokeLineJoin="round" />
     </group>
 </vector>
