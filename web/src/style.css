@@ -521,10 +521,12 @@ a {
 
   .tabbar a {
     position: relative;
+    isolation: isolate;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 4px;
+    padding-top: 4px;
     color: var(--md-sys-color-on-surface-variant);
     text-decoration: none;
     font-size: 12px;
@@ -532,21 +534,36 @@ a {
     --m3e-icon-size: 24px;
   }
 
-  .tabbar a m3e-icon {
-    display: grid;
-    place-items: center;
+  /* The active pill sits behind the icon: m3e-icon draws its glyph at the start of its own box, so stretching
+     the icon itself to pill width would leave the glyph off-centre. */
+  .tabbar a::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    z-index: -1;
     width: 60px;
     height: 32px;
     border-radius: 16px;
-    transition: background-color 200ms ease;
+    translate: -50% 0;
+    scale: 0.6 1;
+    opacity: 0;
+    background: var(--md-sys-color-secondary-container);
+    transition:
+      opacity 160ms ease,
+      scale 260ms var(--ease-spring);
   }
 
   .tabbar a.active {
     color: var(--md-sys-color-on-surface);
   }
 
+  .tabbar a.active::before {
+    scale: 1;
+    opacity: 1;
+  }
+
   .tabbar a.active m3e-icon {
-    background: var(--md-sys-color-secondary-container);
     color: var(--md-sys-color-on-secondary-container);
     font-variation-settings: 'FILL' 1;
   }
