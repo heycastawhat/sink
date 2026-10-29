@@ -36,7 +36,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /**
- * The "new" button on Notes and Recents: a toggle FAB that opens a stack of labelled actions (Material 3 Expressive's
+ * The "new" button on Notes: a toggle FAB that opens a stack of labelled actions (Material 3 Expressive's
  * FAB menu) for a note, a todo, a folder or a board. [folder] is where new things go.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)

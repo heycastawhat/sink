@@ -60,6 +60,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -138,6 +139,11 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
     val inside = state.folder.isNotEmpty()
     // Subfolders right here, unless searching (results span every folder).
     val subfolders = remember(state.folders, state.folder) { childFolders(state.folders, state.folder) }
+    // Home's Recent row (not in folders or search), once there are enough notes for it to save scrolling.
+    val opened by vm.opened.collectAsStateWithLifecycle()
+    val recent = remember(state.notes, opened) { recentNotes(state.notes, opened) }
+    val showRecent = !inside && !searching && state.notes.size > 6
+    var recentShut by rememberSaveable { mutableStateOf(false) }
     // Back climbs out of a folder before it leaves the tab.
     BackHandler(enabled = inside) { vm.folderUp() }
 
@@ -231,6 +237,11 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                         verticalItemSpacing = 10.dp,
                         modifier = Modifier.fillMaxSize(),
                     ) {
+                        if (showRecent) {
+                            item(key = "recent", span = StaggeredGridItemSpan.FullLine) {
+                                RecentStrip(recent, recentShut, onToggle = { recentShut = !recentShut }, onOpen = onOpen)
+                            }
+                        }
                         if (pinned.isNotEmpty()) {
                             item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.padding(start = 6.dp, top = 4.dp)) }
                             items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen) }
@@ -353,7 +364,8 @@ private val TASK = Regex("""^\s*[-*+]\s+\[(.)]\s+(.*)$""")
 
 /** Markdown excerpt as card text: checkboxes as boxes, markup stripped, a few lines. Mirrors the web card. */
 @Composable
-private fun Excerpt(text: String) {
+fun Excerpt(text: String, small: Boolean = false) {
+    val style = if (small) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
     val lines = remember(text) { text.lines().filter { it.isNotBlank() && !it.startsWith("%%") }.take(10) }
     if (lines.isEmpty()) return
     Column(Modifier.heightIn(max = 220.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -365,18 +377,18 @@ private fun Excerpt(text: String) {
                     Icon(
                         if (done) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
                         null,
-                        Modifier.size(17.dp).padding(top = 1.dp),
+                        Modifier.size(if (small) 14.dp else 17.dp).padding(top = 1.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
                         clean(task.groupValues[2]),
-                        style = MaterialTheme.typography.bodyMedium.copy(textDecoration = if (done) TextDecoration.LineThrough else null),
+                        style = style.copy(textDecoration = if (done) TextDecoration.LineThrough else null),
                         color = if (done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     )
                 }
             } else {
-                Text(clean(l), style = MaterialTheme.typography.bodyMedium)
+                Text(clean(l), style = style, maxLines = if (small) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis)
             }
         }
     }

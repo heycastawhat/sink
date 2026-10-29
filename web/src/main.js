@@ -50,7 +50,6 @@ const storage = {
 
 const VIEWS = [
   { id: 'notes', label: 'Notes', icon: 'sticky_note_2', hash: '#/notes' },
-  { id: 'recents', label: 'Recents', icon: 'schedule', hash: '#/recents' },
   { id: 'todos', label: 'Todos', icon: 'checklist', hash: '#/todos' },
 ];
 
@@ -163,7 +162,7 @@ function parseHash() {
     return { ...base, note: rest.map(decodeURIComponent).join('/'), line: line == null ? null : Number(line) };
   }
   if (first === 'new') return { ...base, draft: true };
-  if (['todos', 'recents', 'trash', 'settings'].includes(first)) return { ...base, view: first };
+  if (['todos', 'trash', 'settings'].includes(first)) return { ...base, view: first };
   return base;
 }
 
@@ -175,7 +174,6 @@ function applyRoute() {
   renderChrome();
   if (state.view === 'settings') renderSettings();
   if (state.view === 'todos') notes.loadTodos();
-  if (state.view === 'recents') notes.loadNotes().then(notes.renderRecents);
   if (state.view === 'trash') notes.loadTrash();
   if (state.view === 'notes') {
     notes.setFolder(state.folder);
@@ -202,7 +200,7 @@ function renderChrome() {
   const tab = state.view === 'trash' ? 'settings' : state.view;
   for (const a of document.querySelectorAll('.tabbar [data-tab]')) a.classList.toggle('active', a.dataset.tab === tab);
 
-  const titles = { recents: 'Recents', notes: state.folder.split('/').pop() || 'Notes', todos: 'Todos', trash: 'Trash', settings: 'Settings' };
+  const titles = { notes: state.folder.split('/').pop() || 'Notes', todos: 'Todos', trash: 'Trash', settings: 'Settings' };
   $('view-title').textContent = titles[state.view];
 
   $('app').dataset.view = state.view;
@@ -211,13 +209,11 @@ function renderChrome() {
   $('folder-actions').hidden = state.view !== 'notes';
   if (state.view !== 'notes') $('folder-crumbs').hidden = true;
   $('todos').hidden = state.view !== 'todos';
-  $('recents').hidden = state.view !== 'recents';
   $('trash').hidden = state.view !== 'trash';
   $('settings').hidden = state.view !== 'settings';
   closeNewMenus();
   notes.renderFolderTree();
   if (state.view === 'notes') notes.notesRendered();
-  if (state.view === 'recents') notes.recentsRendered();
   if (state.view === 'todos') notes.todosRendered();
 }
 

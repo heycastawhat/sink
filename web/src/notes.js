@@ -153,6 +153,7 @@ function renderGrid() {
 
   renderFolderBar();
   renderFolderTree();
+  renderRecentStrip();
 
   const pinned = state.results ? [] : list.filter((n) => n.pinned);
   const others = state.results ? list : list.filter((n) => !n.pinned);
@@ -231,7 +232,7 @@ export const prefs = {
 
 // ---------- recents ----------
 
-/** When this browser last opened each note (path -> ms). Drive's "opened by me", kept per device. */
+/** When this browser last opened each note (path -> ms), for home's Recent row. Kept per device. */
 const opened = {
   read() {
     try {
@@ -242,7 +243,7 @@ const opened = {
   },
   write(map) {
     try {
-      // The 300 most recent are plenty for a Recents list.
+      // The 300 most recent are plenty; the Recent row shows 8.
       const top = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 300);
       localStorage.setItem('sink:opened', JSON.stringify(Object.fromEntries(top)));
     } catch {}
@@ -261,49 +262,40 @@ const opened = {
   },
 };
 
-function bucket(ts) {
-  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const now = new Date();
-  const today = day(now);
-  const days = Math.round((today - day(new Date(ts))) / 86_400_000);
-  if (days <= 0) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return 'Earlier this week';
-  if (new Date(ts).getMonth() === now.getMonth() && new Date(ts).getFullYear() === now.getFullYear()) return 'Earlier this month';
-  return 'Older';
-}
-
 function when(ts) {
   const d = new Date(ts);
-  return bucket(ts) === 'Today' || bucket(ts) === 'Yesterday'
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
     ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
     : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 }
 
-/** Recents view: list (grouped by day) or grid (preview cards), remembered per device. */
-const recentsPrefs = {
-  get view() {
+/** Whether the Recent row on home is folded away; remembered per device. */
+const recentPrefs = {
+  get shut() {
     try {
-      return localStorage.getItem('sink:recents-view') === 'list' ? 'list' : 'grid';
+      return localStorage.getItem('sink:recent-shut') === '1';
     } catch {
-      return 'grid';
+      return false;
     }
   },
-  set view(v) {
+  set shut(on) {
     try {
-      localStorage.setItem('sink:recents-view', v);
+      localStorage.setItem('sink:recent-shut', on ? '1' : '0');
     } catch {}
   },
-  collapsed: new Set(),
 };
 
 /**
- * Notes by when you last touched them (opened here, or edited anywhere), laid out like Drive's home: the folders
- * you've been working in, then the notes, as preview cards or a list grouped by day.
+ * Home's Recent row: the notes you opened here or edited anywhere lately, as preview cards, like Drive's suggested
+ * files. Only on home, not in folders or search, and only once there are enough notes for it to save scrolling.
  */
-export function renderRecents() {
-  const root = $('recents');
-  if (!root || root.hidden) return;
+function renderRecentStrip() {
+  const root = $('notes-recent');
+  if (!root) return;
+  const show = !state.folder && !state.results && state.notes.length > 6;
+  root.hidden = !show;
+  if (!show) return;
   const opens = opened.read();
   const items = state.notes
     .map((n) => {
@@ -311,91 +303,29 @@ export function renderRecents() {
       return { n, at: Math.max(o, n.mtime), how: o > n.mtime ? 'opened' : 'edited' };
     })
     .sort((a, b) => b.at - a.at)
-    .slice(0, 200);
-  if (!items.length) {
-    root.innerHTML = `<div class="empty"><m3e-shape name="soft-burst" class="empty-shape"></m3e-shape><h2 class="empty-title">Nothing yet</h2>
-      <p class="muted">Notes you open or edit show up here, newest first.</p></div>`;
-    return;
-  }
-
-  // Folders, in the order you last touched something inside them.
-  const folders = [];
-  for (const { n } of items) {
-    const f = folderOf(n.path);
-    if (f && !folders.includes(f)) folders.push(f);
-    if (folders.length === 5) break;
-  }
-
-  const view = recentsPrefs.view;
-  const section = (id, title, body, extra = '') => {
-    const shut = recentsPrefs.collapsed.has(id);
-    return `<section class="recent-section${shut ? ' shut' : ''}">
-  <div class="recent-head"><button type="button" class="recent-toggle" data-recent-toggle="${id}" aria-expanded="${!shut}">${ic('expand_more')}<h2>${title}</h2></button>${extra}</div>
-  ${shut ? '' : body}</section>`;
-  };
-  const toggle = `<div class="view-toggle" role="group" aria-label="View">
-  <button type="button" data-recent-view="list" aria-pressed="${view === 'list'}" title="List">${ic('view_list')}</button>
-  <button type="button" data-recent-view="grid" aria-pressed="${view === 'grid'}" title="Grid">${ic('grid_view')}</button></div>`;
-
-  const folderTiles = folders.length
-    ? section(
-        'folders',
-        'Folders',
-        `<div class="folder-tiles">${folders
-          .map(
-            (f) => `<a class="folder-tile" href="${folderHash(f)}" data-drop-folder="${esc(f)}">${ic('folder')}<span class="folder-name">${esc(
-              f.split('/').pop(),
-            )}${f.includes('/') ? `<small>in ${esc(folderOf(f))}</small>` : ''}</span></a>`,
-          )
-          .join('')}</div>`,
-      )
-    : '';
-
-  const icon = (n) => ic(/\.excalidraw\.md$/i.test(n.path) ? 'draw' : 'description');
-  let notesBody;
-  if (view === 'grid') {
-    notesBody = `<div class="recent-grid">${items
-      .slice(0, 60)
-      .map(
-        ({ n, at, how }) => `<a class="recent-card${n.color ? ` c-${n.color}` : ''}" href="${noteHash(n.path)}">
-  <span class="recent-card-head">${icon(n)}<span class="recent-title">${esc(n.title)}</span></span>
-  <span class="recent-preview">${/\.excalidraw\.md$/i.test(n.path) ? `<span class="recent-board">${ic('draw')}</span>` : excerptHtml(n.excerpt)}</span>
+    .slice(0, 8);
+  const shut = recentPrefs.shut;
+  const board = (n) => /\.excalidraw\.md$/i.test(n.path);
+  root.innerHTML = `<button type="button" class="recent-toggle" data-recent-toggle aria-expanded="${!shut}">${ic('expand_more')}<h2>Recent</h2></button>
+${
+  shut
+    ? ''
+    : `<div class="recent-row">${items
+        .map(
+          ({ n, at, how }) => `<a class="recent-card${n.color ? ` c-${n.color}` : ''}" href="${noteHash(n.path)}">
+  <span class="recent-card-head">${ic(board(n) ? 'draw' : 'description')}<span class="recent-title">${esc(n.title)}</span></span>
+  <span class="recent-preview">${board(n) ? `<span class="recent-board">${ic('draw')}</span>` : excerptHtml(n.excerpt)}</span>
   <span class="recent-foot">You ${how} · ${esc(when(at))}</span></a>`,
-      )
-      .join('')}</div>`;
-  } else {
-    const groups = new Map();
-    for (const it of items) {
-      const b = bucket(it.at);
-      if (!groups.has(b)) groups.set(b, []);
-      groups.get(b).push(it);
-    }
-    notesBody = [...groups]
-      .map(
-        ([name, list]) => `<div class="recent-group"><h3 class="day">${name}<span>${list.length}</span></h3><ul>${list
-          .map(
-            ({ n, at, how }) => `<li><a class="recent${n.color ? ` c-${n.color}` : ''}" href="${noteHash(n.path)}">
-  <span class="recent-icon">${icon(n)}</span>
-  <span class="recent-main"><span class="recent-title">${esc(n.title)}</span>
-  <span class="recent-meta">${ic('folder')}${esc(folderOf(n.path) || 'Notes')}</span></span>
-  <span class="recent-when">You ${how} · ${esc(when(at))}</span></a></li>`,
-          )
-          .join('')}</ul></div>`,
-      )
-      .join('');
-  }
-  root.innerHTML = folderTiles + section('notes', 'Notes', notesBody, toggle);
+        )
+        .join('')}</div>`
+}`;
+  root.classList.toggle('shut', shut);
 }
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest?.('[data-recent-toggle], [data-recent-view]');
-  if (!t || !t.closest('#recents')) return;
-  if (t.dataset.recentView) recentsPrefs.view = t.dataset.recentView;
-  else {
-    const id = t.dataset.recentToggle;
-    recentsPrefs.collapsed.has(id) ? recentsPrefs.collapsed.delete(id) : recentsPrefs.collapsed.add(id);
-  }
-  renderRecents();
+  if (!e.target.closest?.('[data-recent-toggle]')) return;
+  recentPrefs.shut = !recentPrefs.shut;
+  renderRecentStrip();
 });
 
 const openFolders = new Set(
@@ -1344,5 +1274,4 @@ export function wireNotes() {
 }
 
 export const notesRendered = () => renderGrid();
-export const recentsRendered = () => renderRecents();
 export const todosRendered = () => renderTodos();

@@ -84,6 +84,8 @@
                 <m3e-button id="take-close" variant="text" size="small">Close</m3e-button>
               </div>
             </div>
+            <!-- Home only: what you opened or edited lately, like Drive's suggested files. -->
+            <section id="notes-recent" class="recent-strip" hidden></section>
             <div id="folder-tiles" class="folder-tiles" aria-label="Folders"></div>
             <h2 id="notes-pinned-head" class="notes-head" hidden>Pinned</h2>
             <div id="notes-pinned" class="note-grid"></div>
@@ -96,8 +98,6 @@
             </div>
           </section>
 
-          <!-- Recents: what you opened or edited lately, newest first, like Drive. -->
-          <section id="recents" class="recents" hidden></section>
 
           <!-- Todos: every checkbox in every note. -->
           <section id="todos" class="todos" hidden>
@@ -132,7 +132,6 @@
 
         <nav class="tabbar" aria-label="Sections">
           <a href="#/notes" data-tab="notes"><m3e-icon name="sticky_note_2"></m3e-icon><span>Notes</span></a>
-          <a href="#/recents" data-tab="recents"><m3e-icon name="schedule"></m3e-icon><span>Recents</span></a>
           <a href="#/todos" data-tab="todos"><m3e-icon name="checklist"></m3e-icon><span>Todos</span></a>
           <a href="#/settings" data-tab="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
         </nav>

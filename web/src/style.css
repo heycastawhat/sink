@@ -607,7 +607,7 @@ a {
     bottom: 0;
     z-index: 25;
     display: grid !important;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     padding: 10px 8px calc(10px + env(safe-area-inset-bottom));
     background: var(--md-sys-color-surface-container);
   }
@@ -1488,98 +1488,55 @@ body.dragging-note [data-drop-folder] {
   font-weight: 500;
 }
 
-/* ---------- recents ---------- */
-.recents {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-}
-
-.recent-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+/* ---------- home's Recent row ---------- */
+.recent-strip {
+  margin: 4px 0 18px;
 }
 
 .recent-toggle {
   display: flex;
-  flex: 1;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  margin-bottom: 10px;
   padding: 4px 0;
   border: 0;
   background: none;
-  color: var(--md-sys-color-on-surface);
+  color: var(--md-sys-color-on-surface-variant);
   font: inherit;
-  text-align: left;
   cursor: pointer;
 }
 
 .recent-toggle h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .recent-toggle m3e-icon {
   transition: transform 160ms ease;
-}
-
-.recent-section.shut .recent-toggle m3e-icon {
-  transform: rotate(-90deg);
-}
-
-.recent-section.shut .recent-head {
-  margin-bottom: 0;
-}
-
-.recent-section .folder-tile {
-  min-height: 60px;
-}
-
-.recent-section .folder-name small {
-  display: block;
-  overflow: hidden;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 12px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-}
-
-.view-toggle {
-  display: flex;
-  flex: none;
-  overflow: hidden;
-  border-radius: 999px;
-  box-shadow: inset 0 0 0 1px var(--md-sys-color-outline);
-}
-
-.view-toggle button {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 34px;
-  border: 0;
-  background: none;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
   --m3e-icon-size: 20px;
 }
 
-.view-toggle button + button {
-  border-left: 1px solid var(--md-sys-color-outline);
+.recent-strip.shut .recent-toggle {
+  margin-bottom: 0;
 }
 
-.view-toggle button[aria-pressed='true'] {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+.recent-strip.shut .recent-toggle m3e-icon {
+  transform: rotate(-90deg);
 }
 
-.recent-grid {
+/* One row that scrolls sideways, so it never pushes the notes far down. */
+.recent-row {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 14px;
+  grid-auto-columns: minmax(200px, 1fr);
+  grid-auto-flow: column;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
 }
 
 .recent-card {
@@ -1587,12 +1544,13 @@ body.dragging-note [data-drop-folder] {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  padding: 12px 12px 12px;
+  padding: 12px;
   border-radius: 16px;
   background: color-mix(in srgb, var(--note, var(--md-sys-color-surface-container-low)) 22%, var(--md-sys-color-surface-container-low));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--note, var(--md-sys-color-outline-variant)) 40%, transparent);
   color: var(--md-sys-color-on-surface);
   text-decoration: none;
+  scroll-snap-align: start;
   transition: background-color 160ms ease;
 }
 
@@ -1614,11 +1572,18 @@ body.dragging-note [data-drop-folder] {
   color: color-mix(in srgb, var(--note, var(--md-sys-color-primary)) 70%, var(--md-sys-color-on-surface));
 }
 
+.recent-title {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .recent-preview {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  height: 128px;
+  height: 96px;
   padding: 10px 12px;
   overflow: hidden;
   border-radius: 10px;
@@ -1648,7 +1613,7 @@ body.dragging-note [data-drop-folder] {
   flex: 1;
   place-items: center;
   color: var(--md-sys-color-primary);
-  --m3e-icon-size: 40px;
+  --m3e-icon-size: 36px;
 }
 
 .recent-foot {
@@ -1657,94 +1622,13 @@ body.dragging-note [data-drop-folder] {
   font-size: 13px;
 }
 
-.recent-group ul {
-  margin: 0 0 18px;
-  padding: 0;
-  list-style: none;
-}
-
-.recent-group .day {
-  margin: 8px 0 4px;
-}
-
-.recent {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  color: var(--md-sys-color-on-surface);
-  text-decoration: none;
-}
-
-.recent:hover {
-  background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
-}
-
-.recent-icon {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--note, var(--md-sys-color-primary)) 22%, var(--sheet));
-  color: color-mix(in srgb, var(--note, var(--md-sys-color-primary)) 70%, var(--md-sys-color-on-surface));
-}
-
-.recent-main {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.recent-title {
-  overflow: hidden;
-  font-weight: 600;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.recent-meta {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 13px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  --m3e-icon-size: 15px;
-}
-
-.recent-when {
-  flex: none;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 13px;
-}
-
 @media (max-width: 839px) {
-  .recent-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .recent-row {
+    grid-auto-columns: 62%;
     gap: 10px;
-  }
-
-  .recent-preview {
-    height: 96px;
-  }
-
-  .recent-section .folder-tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .recent {
-    padding: 10px 4px;
-  }
-
-  .recent-when {
-    max-width: 38%;
-    text-align: right;
+    margin: 0 -16px;
+    padding: 0 16px 6px;
+    scroll-padding: 0 16px;
   }
 }
 

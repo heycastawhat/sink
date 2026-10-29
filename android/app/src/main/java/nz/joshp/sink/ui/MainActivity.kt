@@ -12,10 +12,8 @@ import android.net.Uri
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.automirrored.outlined.StickyNote2
 import androidx.compose.material.icons.filled.Checklist
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Checklist
-import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
@@ -60,7 +58,6 @@ private data class Tab(val route: String, val label: String, val icon: ImageVect
 
 private val TABS = listOf(
     Tab("notes", "Notes", Icons.AutoMirrored.Outlined.StickyNote2, Icons.AutoMirrored.Filled.StickyNote2),
-    Tab("recents", "Recents", Icons.Outlined.Schedule, Icons.Filled.Schedule),
     Tab("todos", "Todos", Icons.Outlined.Checklist, Icons.Filled.Checklist),
     Tab("settings", "Settings", Icons.Outlined.Settings, Icons.Filled.Settings),
 )
@@ -234,7 +231,6 @@ class MainActivity : ComponentActivity() {
                 composable("notes") {
                     NotesScreen(notesVm, onOpen = { openNoteAt(it, null) }, onNew = { nav.navigate(noteRoute(null, folder = notesVm.state.value.folder)) })
                 }
-                composable("recents") { RecentsScreen(notesVm, onOpen = { openNoteAt(it, null) }, onNew = { nav.navigate(noteRoute(null, folder = "")) }) }
                 composable("todos") { TodosScreen(notesVm, onOpenNote = { p, l -> openNoteAt(p, l) }) }
                 composable(
                     "note?path={path}&line={line}&folder={folder}&text={text}&files={files}",
