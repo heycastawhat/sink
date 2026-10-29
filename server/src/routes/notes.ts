@@ -39,7 +39,7 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(40),
 });
 
-export function noteRoutes(vault: Vault, maxUploadBytes: number) {
+export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) {
   const app = new Hono<AuthEnv>();
 
   /** Vault errors become their status; the 409 on a stale save carries the file as it is now. */
@@ -116,6 +116,30 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number) {
       const q = pathQuery.safeParse(c.req.query());
       if (!q.success) return c.json({ error: "invalid query" }, 400);
       return c.json({ ok: true, ...(await vault.trash(q.data.path)) });
+    }),
+  );
+
+  // The trash: list it, put a note back, delete one for good, or empty it.
+  // `days`: how long Sink keeps what it trashed (0: until emptied).
+  app.get("/notes/trash", (c) => run(c, async () => c.json({ items: await vault.listTrash(), days: Math.max(0, trashDays) })));
+
+  app.post("/notes/trash/restore", (c) =>
+    run(c, async () => {
+      const body = pathQuery.safeParse(await c.req.json().catch(() => null));
+      if (!body.success) return c.json({ error: "invalid body" }, 400);
+      return c.json(await vault.restore(body.data.path));
+    }),
+  );
+
+  app.delete("/notes/trash", (c) =>
+    run(c, async () => {
+      if (c.req.query("all") === "true") await vault.emptyTrash();
+      else {
+        const q = pathQuery.safeParse(c.req.query());
+        if (!q.success) return c.json({ error: "invalid query" }, 400);
+        await vault.deleteForever(q.data.path);
+      }
+      return c.json({ ok: true });
     }),
   );
 

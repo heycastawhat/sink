@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +42,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,14 +55,23 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import nz.joshp.sink.BuildConfig
 import nz.joshp.sink.data.Settings
 
 @Composable
-fun SettingsScreen(settings: Settings, vm: NotesViewModel, serverUrl: String, onBack: (() -> Unit)? = null) {
+fun SettingsScreen(
+    settings: Settings,
+    vm: NotesViewModel,
+    serverUrl: String,
+    onBack: (() -> Unit)? = null,
+    /** Asks GitHub for a newer APK; returns a message to show, or null when it's showing the update itself. */
+    onCheckForUpdates: suspend () -> String? = { null },
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val dynamicColor by settings.dynamicColor.collectAsState(initial = false)
     val themeMode by settings.themeMode.collectAsState(initial = "auto")
+    var checking by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -121,6 +134,27 @@ fun SettingsScreen(settings: Settings, vm: NotesViewModel, serverUrl: String, on
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            Card("App") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconBadge(Icons.Outlined.SystemUpdate)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleSmall)
+                        Text("New versions come from GitHub releases.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                OutlinedButton(
+                    enabled = !checking,
+                    onClick = {
+                        checking = true
+                        scope.launch {
+                            onCheckForUpdates()?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                            checking = false
+                        }
+                    },
+                ) { Text(if (checking) "Checking…" else "Check for updates") }
             }
 
             Card("Account") {

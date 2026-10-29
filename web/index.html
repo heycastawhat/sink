@@ -41,6 +41,7 @@
           </m3e-button>
           <nav id="nav-views" class="nav-list"></nav>
           <div class="nav-foot">
+            <a class="nav-item" href="#/trash" data-route="trash"><m3e-icon name="delete"></m3e-icon><span>Trash</span></a>
             <a class="nav-item" href="#/settings" data-route="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
           </div>
         </aside>
@@ -98,6 +99,20 @@
             <div id="todo-list"></div>
             <m3e-button id="todo-done-toggle" variant="text" size="small">Show done</m3e-button>
             <div id="todo-done" class="todo-done"></div>
+          </section>
+
+          <!-- Trash: notes deleted in Sink (and Obsidian), until they're emptied. -->
+          <section id="trash" class="trash" hidden>
+            <div class="trash-head">
+              <p id="trash-info" class="muted small grow"></p>
+              <m3e-button id="trash-empty" variant="text" size="small"><m3e-icon slot="icon" name="delete_forever"></m3e-icon>Empty trash</m3e-button>
+            </div>
+            <div id="trash-list" class="trash-list"></div>
+            <div id="trash-none" class="empty" hidden>
+              <m3e-shape name="soft-burst" class="empty-shape"></m3e-shape>
+              <h2 class="empty-title">Trash is empty</h2>
+              <p class="muted">Deleted notes wait here so you can put them back.</p>
+            </div>
           </section>
 
           <section id="settings" class="settings" hidden></section>

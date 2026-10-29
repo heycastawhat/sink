@@ -80,6 +80,9 @@ private data class Conflict(val current: Note? = null)
 data class Attached(val path: String, val embed: String)
 
 @Serializable
+private data class Trashed(@SerialName("trashed_to") val trashedTo: String)
+
+@Serializable
 data class Todo(
     val path: String,
     val line: Int,
@@ -158,8 +161,14 @@ suspend fun Api.moveNote(from: String, to: String) {
     call(request("/api/notes/move").post(jsonBody(body)).build()) { }
 }
 
-suspend fun Api.trashNote(path: String) {
-    call(authed(pathUrl("/api/notes/file", path)).delete().build()) { }
+/** Moves a note to the trash; returns where it went, for [restoreNote]. */
+suspend fun Api.trashNote(path: String): String =
+    call(authed(pathUrl("/api/notes/file", path)).delete().build()) { json.decodeFromString<Trashed>(it).trashedTo }
+
+/** Puts a trashed note back (numbered if its name is taken now). */
+suspend fun Api.restoreNote(trashPath: String): NoteMeta {
+    val body = buildJsonObject { put("path", trashPath) }
+    return call(request("/api/notes/trash/restore").post(jsonBody(body)).build()) { json.decodeFromString(it) }
 }
 
 suspend fun Api.attach(name: String, mime: String, bytes: ByteArray): Attached {
@@ -300,7 +309,12 @@ object NoteSaver {
 
     fun titleFor(text: String): String {
         Regex("""^#\s+(.+)$""", RegexOption.MULTILINE).find(text)?.let { return it.groupValues[1].trim().take(60) }
-        return text.trim().lineSequence().first().replace(Regex("""^[-*+]\s+(\[.]\s+)?|^#+\s+"""), "").take(60)
+        // A shared photo on its own is named after the file, not "![[Photo.jpg]]".
+        val embed = Regex("""^!\[\[([^\]|]+)[^\]]*]]$""")
+        val lines = text.trim().lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val first = lines.firstOrNull { !embed.matches(it) }
+            ?: return lines.firstOrNull()?.let { embed.find(it)!!.groupValues[1].substringBeforeLast('.') }.orEmpty().take(60)
+        return first.replace(Regex("""^[-*+]\s+(\[.]\s+)?|^#+\s+"""), "").take(60)
     }
 
     /** [requeue] false from the sync worker itself, which retries through WorkManager instead. */

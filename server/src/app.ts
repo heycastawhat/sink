@@ -44,7 +44,7 @@ export function createApp(deps: {
   plugins?: PluginHost;
   auth: Auth;
   oidc: Oidc;
-  config: Pick<Config, "secureCookies" | "maxUploadBytes" | "webDir" | "publicUrls"> & Partial<Pick<Config, "timeZone">>;
+  config: Pick<Config, "secureCookies" | "maxUploadBytes" | "webDir" | "publicUrls"> & Partial<Pick<Config, "timeZone" | "trashDays">>;
 }) {
   const { db, vault, plugins, auth, oidc, config } = deps;
   const app = new Hono<AuthEnv>();
@@ -61,7 +61,7 @@ export function createApp(deps: {
 
   const api = new Hono<AuthEnv>();
   api.use("*", requireAuth(auth, config.publicUrls));
-  api.route("/", noteRoutes(vault, config.maxUploadBytes));
+  api.route("/", noteRoutes(vault, config.maxUploadBytes, config.trashDays));
   api.route("/", todoRoutes(db, vault, config.timeZone ?? "UTC"));
   // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/.
   api.get("/plugins", (c) => c.json({ plugins: plugins?.list() ?? [] }));

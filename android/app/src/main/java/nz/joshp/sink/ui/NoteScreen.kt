@@ -111,6 +111,7 @@ import nz.joshp.sink.data.noteMeta
 import nz.joshp.sink.data.trashNote
 import java.io.ByteArrayInputStream
 import java.io.File
+import nz.joshp.sink.capture.SharedFiles
 import java.security.MessageDigest
 
 private const val SAVE_DELAY_MS = 700L
@@ -177,6 +178,8 @@ fun NoteScreen(
     onOpenNote: (String) -> Unit,
     /** For a new note: text to start with, e.g. shared from another app. */
     initialText: String = "",
+    /** For a new note: photos and PDFs shared from another app (copies in the cache), uploaded and embedded. */
+    sharedFiles: List<File> = emptyList(),
 ) {
     if (path != null && path.endsWith(".excalidraw.md", ignoreCase = true)) {
         BoardScreen(path, serverUrl, onBack)
@@ -199,7 +202,6 @@ fun NoteScreen(
     var menu by remember { mutableStateOf(false) }
     var palette by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
-    var deleting by remember { mutableStateOf(false) }
     var web by remember { mutableStateOf<WebView?>(null) }
     var pageReady by remember { mutableStateOf(false) }
     var loadedNote by remember { mutableStateOf<String?>(null) }
@@ -349,10 +351,29 @@ fun NoteScreen(
     // Load: the phone's copy first (works offline), then the server's.
     LaunchedEffect(path) {
         if (path == null) {
+            val embeds = mutableListOf<String>()
+            val failed = mutableListOf<String>()
+            if (sharedFiles.isNotEmpty()) status = "Uploading…"
+            for (f in sharedFiles) {
+                // Gone already: the screen was rebuilt after uploading it.
+                if (!f.isFile) continue
+                runCatching {
+                    val bytes = withContext(Dispatchers.IO) { f.readBytes() }
+                    api()!!.attach(f.name, SharedFiles.mimeOf(f), bytes)
+                }.onSuccess { embeds += it.embed }.onFailure { failed += f.name }
+                SharedFiles.discard(f)
+            }
+            status = ""
+            if (failed.isNotEmpty()) {
+                val what = failed.singleOrNull()?.let { "“$it”" } ?: "${failed.size} files"
+                scope.launch { snackbar.showSnackbar("Couldn't upload $what. Share again when you're online.") }
+            }
+            val start = listOf(initialText.trimEnd(), embeds.joinToString("\n")).filter { it.isNotEmpty() }.joinToString("\n\n")
+                .let { if (it.isEmpty()) it else it + "\n" }
             ed.loaded = true
-            ed.current = initialText
-            loadedNote = initialText
-            if (initialText.isNotBlank()) scheduleSave()
+            ed.current = start
+            loadedNote = start
+            if (start.isNotBlank()) scheduleSave()
             return@LaunchedEffect
         }
         val pending = store.pending(path)
@@ -457,6 +478,27 @@ fun NoteScreen(
         }
     }
 
+    /** No "are you sure?": the notes list offers Undo, and the web's Trash page has it after that. */
+    fun trash() {
+        saveJob?.cancel()
+        val p = ed.path ?: return onBack()
+        // Saved first, so what comes back from the trash is what was on screen.
+        flush {
+            scope.launch {
+                save()
+                runCatching { api()!!.trashNote(p) }
+                    .onSuccess { trashedTo ->
+                        store.forget(p)
+                        store.clearPending(p)
+                        ed.saved = ed.current
+                        vm.trashed(p, trashedTo)
+                        onBack()
+                    }
+                    .onFailure { snackbar.showSnackbar(it.message ?: "Couldn't delete") }
+            }
+        }
+    }
+
     suspend fun setMeta(pin: Boolean? = null, newColor: String? = null, clearColor: Boolean = false) {
         saveJob?.cancel()
         save()
@@ -527,7 +569,7 @@ fun NoteScreen(
                             leadingIcon = { Icon(Icons.Outlined.Delete, null) },
                             onClick = {
                                 menu = false
-                                deleting = true
+                                trash()
                             },
                         )
                     }
@@ -603,34 +645,6 @@ fun NoteScreen(
                 }) { Text("Move") }
             },
             dismissButton = { TextButton(onClick = { moving = false }) { Text("Cancel") } },
-        )
-    }
-
-    if (deleting) {
-        AlertDialog(
-            onDismissRequest = { deleting = false },
-            title = { Text("Delete this note?") },
-            text = { Text("It moves to .trash/ in the vault.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    deleting = false
-                    scope.launch {
-                        saveJob?.cancel()
-                        val p = ed.path
-                        if (p == null) return@launch onBack()
-                        runCatching { api()!!.trashNote(p) }
-                            .onSuccess {
-                                store.forget(p)
-                                store.clearPending(p)
-                                ed.saved = ed.current
-                                vm.refresh()
-                                onBack()
-                            }
-                            .onFailure { snackbar.showSnackbar(it.message ?: "Couldn't delete") }
-                    }
-                }) { Text("Delete") }
-            },
-            dismissButton = { TextButton(onClick = { deleting = false }) { Text("Cancel") } },
         )
     }
 }

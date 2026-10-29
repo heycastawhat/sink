@@ -30,6 +30,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -41,11 +42,17 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import nz.joshp.sink.SinkApp
+import nz.joshp.sink.capture.SharedFiles
+import nz.joshp.sink.data.Update
+import nz.joshp.sink.data.Updates
 import nz.joshp.sink.data.Session
 import nz.joshp.sink.data.SignIn
 import nz.joshp.sink.ui.theme.SinkTheme
+import java.io.File
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
 
@@ -55,9 +62,13 @@ private val TABS = listOf(
     Tab("settings", "Settings", Icons.Outlined.Settings, Icons.Filled.Settings),
 )
 
-/** Route for one note (or a new draft when [path] is null, optionally starting with [text]). */
-fun noteRoute(path: String?, line: Int? = null, folder: String = "", text: String = "") =
-    "note?path=${path?.let(Uri::encode) ?: ""}&line=${line ?: -1}&folder=${Uri.encode(folder)}&text=${Uri.encode(text)}"
+/**
+ * Route for one note (or a new draft when [path] is null, optionally starting with [text] and with [files] from the
+ * app's cache to attach).
+ */
+fun noteRoute(path: String?, line: Int? = null, folder: String = "", text: String = "", files: List<File> = emptyList()) =
+    "note?path=${path?.let(Uri::encode) ?: ""}&line=${line ?: -1}&folder=${Uri.encode(folder)}&text=${Uri.encode(text)}" +
+        "&files=${Uri.encode(files.joinToString("\n") { it.path })}"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,6 +79,8 @@ class MainActivity : ComponentActivity() {
         handleSignIn(intent)
         handleDebugSignIn(intent)
         openNote.value = noteTarget(intent)
+        // Not again when the activity is recreated (rotation): the files were already copied and opened.
+        if (savedInstanceState == null) handleSharedFiles(intent)
 
         setContent {
             val dynamic by settings.dynamicColor.collectAsState(initial = false)
@@ -89,16 +102,13 @@ class MainActivity : ComponentActivity() {
     private val signingIn = mutableStateOf(false)
     private val signInError = mutableStateOf<String?>(null)
 
-    // A note route from a todo reminder, the New note tile, or text shared from another app.
+    // A note route from a todo reminder, the New note tile, or text and files shared from another app.
     private val openNote = mutableStateOf<String?>(null)
 
     private fun noteTarget(intent: Intent): String? = when {
+        SharedFiles.uris(intent).isNotEmpty() -> null
         intent.action == Intent.ACTION_SEND -> {
-            // Shared text becomes a new note: the subject (a page title, say) as its heading.
-            val text = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty().trim()
-            val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim().orEmpty()
-            val body = if (subject.isNotEmpty() && subject != text) "# $subject\n\n$text\n" else if (text.isNotEmpty()) "$text\n" else ""
-            body.takeIf { it.isNotEmpty() }?.let { noteRoute(null, text = it) }
+            sharedText(intent).takeIf { it.isNotEmpty() }?.let { noteRoute(null, text = it) }
         }
         intent.getBooleanExtra(EXTRA_NEW_NOTE, false) -> noteRoute(null)
         intent.getStringExtra(EXTRA_OPEN_NOTE) != null ->
@@ -111,6 +121,25 @@ class MainActivity : ComponentActivity() {
         handleSignIn(intent)
         handleDebugSignIn(intent)
         noteTarget(intent)?.let { openNote.value = it }
+        handleSharedFiles(intent)
+    }
+
+    /** Shared text: the subject (a page title, say) as its heading. */
+    private fun sharedText(intent: Intent): String {
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty().trim()
+        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim().orEmpty()
+        return if (subject.isNotEmpty() && subject != text) "# $subject\n\n$text\n" else if (text.isNotEmpty()) "$text\n" else ""
+    }
+
+    /** Photos and PDFs shared in: copied while we may still read them, then a new note that attaches them. */
+    private fun handleSharedFiles(intent: Intent) {
+        val uris = SharedFiles.uris(intent)
+        if (uris.isEmpty()) return
+        val text = sharedText(intent)
+        lifecycleScope.launch {
+            val files = withContext(Dispatchers.IO) { SharedFiles.copy(applicationContext, uris) }
+            if (files.isNotEmpty() || text.isNotEmpty()) openNote.value = noteRoute(null, text = text, files = files)
+        }
     }
 
     /**
@@ -157,6 +186,39 @@ class MainActivity : ComponentActivity() {
         val showBar = route != null && !route.startsWith("note?")
         val openNoteAt = { path: String, line: Int? -> nav.navigate(noteRoute(path, line)) }
 
+        // A newer APK on GitHub: asked about once a day, or from Settings.
+        var update by remember { mutableStateOf<Update?>(null) }
+        LaunchedEffect(Unit) {
+            if (BuildConfig.DEBUG || System.currentTimeMillis() - settings.updateCheckedAt() < Updates.DAY_MS) return@LaunchedEffect
+            val found = runCatching { Updates.check(BuildConfig.VERSION_NAME) }.getOrElse { return@LaunchedEffect }
+            settings.setUpdateCheckedAt(System.currentTimeMillis())
+            if (found != null && found.version != settings.skippedVersion()) update = found
+        }
+        val checkForUpdates: suspend () -> String? = {
+            runCatching { Updates.check(BuildConfig.VERSION_NAME) }.fold(
+                onSuccess = { found ->
+                    settings.setUpdateCheckedAt(System.currentTimeMillis())
+                    update = found
+                    if (found == null) "You have the latest version" else null
+                },
+                onFailure = { "Couldn't check: ${it.message}" },
+            )
+        }
+        update?.let { u ->
+            UpdateDialog(
+                u,
+                onDownload = {
+                    update = null
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u.apkUrl)))
+                },
+                onSkip = {
+                    update = null
+                    lifecycleScope.launch { settings.skipVersion(u.version) }
+                },
+                onLater = { update = null },
+            )
+        }
+
         Scaffold(
             bottomBar = { if (showBar) TabBar(nav, route) },
             containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
@@ -171,12 +233,13 @@ class MainActivity : ComponentActivity() {
                 }
                 composable("todos") { TodosScreen(notesVm, onOpenNote = { p, l -> openNoteAt(p, l) }) }
                 composable(
-                    "note?path={path}&line={line}&folder={folder}&text={text}",
+                    "note?path={path}&line={line}&folder={folder}&text={text}&files={files}",
                     arguments = listOf(
                         navArgument("path") { type = NavType.StringType; defaultValue = "" },
                         navArgument("line") { type = NavType.IntType; defaultValue = -1 },
                         navArgument("folder") { type = NavType.StringType; defaultValue = "" },
                         navArgument("text") { type = NavType.StringType; defaultValue = "" },
+                        navArgument("files") { type = NavType.StringType; defaultValue = "" },
                     ),
                 ) { e ->
                     val path = e.arguments?.getString("path").orEmpty().ifEmpty { null }
@@ -189,9 +252,10 @@ class MainActivity : ComponentActivity() {
                         onBack = { nav.popBackStack() },
                         onOpenNote = { openNoteAt(it, null) },
                         initialText = e.arguments?.getString("text").orEmpty(),
+                        sharedFiles = e.arguments?.getString("files").orEmpty().split('\n').filter { it.isNotEmpty() }.map(::File),
                     )
                 }
-                composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl) }
+                composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onCheckForUpdates = checkForUpdates) }
             }
         }
     }

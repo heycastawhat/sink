@@ -290,6 +290,11 @@ export const migrations: string[] = [
   ALTER TABLE tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'full';
   UPDATE tokens SET scope = 'mcp' WHERE name LIKE '% (MCP)';
   `,
+  // What Sink moved to .trash/ and when, so the trash can be listed, restored and emptied after a while.
+  // Paths are inside .trash/; anything put there by Obsidian or by hand has no row and is never purged.
+  `
+  CREATE TABLE trash (path TEXT PRIMARY KEY, original TEXT NOT NULL, at INTEGER NOT NULL);
+  `,
 ];
 
 export function openDb(path: string): Database {

@@ -21,6 +21,7 @@ import nz.joshp.sink.data.Todo
 import nz.joshp.sink.data.addTodo
 import nz.joshp.sink.data.createNote
 import nz.joshp.sink.data.notes
+import nz.joshp.sink.data.restoreNote
 import nz.joshp.sink.data.searchNotes
 import nz.joshp.sink.data.todos
 import nz.joshp.sink.data.toggleTodo
@@ -38,6 +39,9 @@ data class NotesState(
     val offline: Boolean = false,
     val error: String? = null,
 )
+
+/** A note just moved to the trash, for the list's Undo. */
+data class TrashedNote(val title: String, val trashPath: String)
 
 data class TodosState(
     val open: List<Todo> = emptyList(),
@@ -57,6 +61,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     private val _todos = MutableStateFlow(TodosState())
     val todos: StateFlow<TodosState> = _todos.asStateFlow()
     val loggedOut = MutableStateFlow(false)
+    val trashed = MutableStateFlow<TrashedNote?>(null)
 
     private var searchJob: Job? = null
 
@@ -137,6 +142,22 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         return runCatching {
             api()?.createNote(name.substringBeforeLast('/', ""), title, "# $title\n\n")
         }.getOrNull()?.also { refresh() }
+    }
+
+    /** Called by the note screen after a delete; the list then offers Undo. */
+    fun trashed(path: String, trashPath: String) {
+        val title = _state.value.notes.firstOrNull { it.path == path }?.title ?: path.substringAfterLast('/').removeSuffix(".md")
+        _state.update { s -> s.copy(notes = s.notes.filterNot { it.path == path }, results = s.results?.filterNot { it.path == path }) }
+        trashed.value = TrashedNote(title, trashPath)
+        refresh()
+    }
+
+    /** Puts the note back; returns an error message, or null. */
+    suspend fun undoTrash(note: TrashedNote): String? {
+        val api = api() ?: return "Signed out"
+        val error = runCatching { api.restoreNote(note.trashPath) }.exceptionOrNull()
+        refresh()
+        return error?.let { "Couldn't restore: ${it.message}" }
     }
 
     fun linkTargets(): List<Pair<String, String>> =

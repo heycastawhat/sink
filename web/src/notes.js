@@ -646,14 +646,15 @@ function wireScreen() {
       Object.assign(screen, { saved: '' });
       return back();
     }
-    if (!confirm(`Move “${fileName(screen.path)}” to the trash? (It goes to .trash/ in the vault.)`)) return;
-    clearTimeout(screen.timer);
+    // No "are you sure?": the snackbar's Undo (and the Trash page) put it back.
+    await flush();
     try {
-      await api.trashNote(screen.path);
+      const { trashed_to } = await api.trashNote(screen.path);
       clearUnsaved(screen.path);
       screen.saved = screen.editor.getText();
-      toast('Moved to trash');
+      toast('Moved to trash', { action: 'Undo', onAction: () => restore(trashed_to) });
       back();
+      loadNotes();
     } catch (err) {
       toast(err.message);
     }
@@ -664,6 +665,86 @@ function wireScreen() {
     if (!dirty() || !screen.path) return;
     stashUnsaved();
     api.saveNote(screen.path, screen.editor.getText(), screen.hash, { keepalive: true }).catch(() => {});
+  });
+}
+
+// ---------- trash ----------
+
+const trashState = { items: [], days: 0, loaded: false };
+
+async function restore(trashPath) {
+  try {
+    const note = await api.restoreNote(trashPath);
+    toast(`Restored “${note.title}”`);
+    await loadNotes();
+    if (!$('trash').hidden) loadTrash();
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    toast(`Couldn't restore: ${err.message}`);
+  }
+}
+
+export async function loadTrash() {
+  try {
+    const { items, days } = await api.trash();
+    Object.assign(trashState, { items, days, loaded: true });
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    toast(`Can't load the trash: ${err.message}`);
+  }
+  renderTrash();
+}
+
+function renderTrash() {
+  if ($('trash').hidden) return;
+  const { items, days, loaded } = trashState;
+  $('trash-info').textContent = days ? `Notes deleted in Sink are removed for good after ${days} days.` : 'Notes stay here until you empty the trash.';
+  $('trash-empty').hidden = !items.length;
+  $('trash-none').hidden = !loaded || items.length > 0;
+  $('trash-list').innerHTML = items
+    .map((t) => {
+      const folder = folderOf(t.original);
+      return `<article class="trash-row" data-trash="${esc(t.path)}">
+  <span class="trash-icon">${ic(isBoardPath(t.path) ? 'draw' : 'description')}</span>
+  <div class="grow">
+    <div class="trash-title">${esc(t.title)}</div>
+    ${t.excerpt ? `<div class="muted small trash-excerpt">${esc(t.excerpt.split('\n').slice(0, 2).join(' · '))}</div>` : ''}
+    <div class="muted small">${folder ? `${ic('folder')}${esc(folder)} · ` : ''}deleted ${relative(t.deleted_at)}</div>
+  </div>
+  <m3e-button data-restore variant="tonal" size="small">Put back</m3e-button>
+  <m3e-icon-button data-forever aria-label="Delete for good" title="Delete for good">${ic('delete_forever')}</m3e-icon-button>
+</article>`;
+    })
+    .join('');
+}
+
+function wireTrash() {
+  $('trash-list').addEventListener('click', async (e) => {
+    const row = e.target.closest('[data-trash]');
+    if (!row) return;
+    const path = row.dataset.trash;
+    if (e.target.closest('[data-restore]')) return restore(path);
+    if (e.target.closest('[data-forever]')) {
+      const item = trashState.items.find((t) => t.path === path);
+      if (!confirm(`Delete “${item?.title ?? fileName(path)}” for good? This can't be undone.`)) return;
+      try {
+        await api.deleteForever(path);
+        loadTrash();
+      } catch (err) {
+        toast(err.message);
+      }
+    }
+  });
+  $('trash-empty').addEventListener('click', async () => {
+    const n = trashState.items.length;
+    if (!confirm(`Delete ${n === 1 ? 'this note' : `all ${n} notes`} in the trash for good? This can't be undone.`)) return;
+    try {
+      await api.emptyTrash();
+      toast('Trash emptied');
+      loadTrash();
+    } catch (err) {
+      toast(err.message);
+    }
   });
 }
 
@@ -803,6 +884,7 @@ export function wireNotes() {
   wireGridActions();
   wireScreen();
   wireTodos();
+  wireTrash();
 }
 
 export const notesRendered = () => renderGrid();

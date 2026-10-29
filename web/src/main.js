@@ -22,7 +22,11 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
-const toast = (msg, opts = {}) => M3eSnackbar.open(msg, { duration: 3000, ...opts });
+/** `action` + `onAction` add a button (Undo) to the snackbar. */
+const toast = (msg, { action, onAction, ...opts } = {}) =>
+  action
+    ? M3eSnackbar.open(msg, action, { duration: 6000, ...opts, actionCallback: onAction })
+    : M3eSnackbar.open(msg, { duration: 3000, ...opts });
 
 const storage = {
   get(key) {
@@ -70,7 +74,7 @@ const timeOf = (ts) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numer
 // ---------- state ----------
 
 const state = {
-  // 'notes', 'todos' or 'settings'.
+  // 'notes', 'todos', 'trash' or 'settings'.
   view: '',
   // Notes: the folder filter and the search text.
   folder: '',
@@ -143,7 +147,7 @@ applyTheme();
 
 // ---------- routing ----------
 // Hash routes so reloads, the back button and links keep their place:
-// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new  #/todos  #/settings
+// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new  #/todos  #/trash  #/settings
 
 function parseHash() {
   const [path, query = ''] = (location.hash.replace(/^#/, '') || '/').split('?');
@@ -155,7 +159,7 @@ function parseHash() {
     return { ...base, note: rest.map(decodeURIComponent).join('/'), line: line == null ? null : Number(line) };
   }
   if (first === 'new') return { ...base, draft: true };
-  if (first === 'todos' || first === 'settings') return { ...base, view: first };
+  if (first === 'todos' || first === 'trash' || first === 'settings') return { ...base, view: first };
   return base;
 }
 
@@ -167,6 +171,7 @@ function applyRoute() {
   renderChrome();
   if (state.view === 'settings') renderSettings();
   if (state.view === 'todos') notes.loadTodos();
+  if (state.view === 'trash') notes.loadTrash();
   if (state.view === 'notes') {
     notes.setFolder(state.folder);
     if (viewChanged) {
@@ -187,16 +192,19 @@ function renderChrome() {
   $('nav-views').innerHTML = VIEWS.map(
     (v) => `<a class="nav-item${state.view === v.id ? ' active' : ''}" href="${v.hash}">${ic(v.icon)}<span>${v.label}</span></a>`,
   ).join('');
-  document.querySelector('.nav-foot .nav-item').classList.toggle('active', state.view === 'settings');
-  for (const a of document.querySelectorAll('.tabbar [data-tab]')) a.classList.toggle('active', a.dataset.tab === state.view);
+  for (const a of document.querySelectorAll('.nav-foot [data-route]')) a.classList.toggle('active', a.dataset.route === state.view);
+  // The phone tab bar has no Trash tab; it's reached from Settings.
+  const tab = state.view === 'trash' ? 'settings' : state.view;
+  for (const a of document.querySelectorAll('.tabbar [data-tab]')) a.classList.toggle('active', a.dataset.tab === tab);
 
-  const titles = { notes: state.folder || 'Notes', todos: 'Todos', settings: 'Settings' };
+  const titles = { notes: state.folder || 'Notes', todos: 'Todos', trash: 'Trash', settings: 'Settings' };
   $('view-title').textContent = titles[state.view];
 
   $('app').dataset.view = state.view;
   $('search-row').hidden = state.view !== 'notes';
   $('notes').hidden = state.view !== 'notes';
   $('todos').hidden = state.view !== 'todos';
+  $('trash').hidden = state.view !== 'trash';
   $('settings').hidden = state.view !== 'settings';
   $('fab-icon').setAttribute('name', state.view === 'todos' ? 'add_task' : 'edit');
   $('new-fab').setAttribute('aria-label', state.view === 'todos' ? 'Add todo' : 'New note');
@@ -291,6 +299,13 @@ async function renderSettings() {
 </section>
 
 <section class="setting-card">
+  <div class="setting-row">
+    <div class="grow"><div class="setting-title">Trash</div><div class="muted small">Put back or delete notes you've deleted.</div></div>
+    <m3e-button id="open-trash" variant="tonal">${ic('delete', 'icon')}Open trash</m3e-button>
+  </div>
+</section>
+
+<section class="setting-card">
   <h2>Server</h2>
   <div id="server-info" class="facts"></div>
 </section>
@@ -377,6 +392,8 @@ $('settings').addEventListener('click', async (e) => {
     } catch (err) {
       toast(err.message);
     }
+  } else if (id === 'open-trash') {
+    location.hash = '#/trash';
   } else if (id === 'logout') {
     await api.logout().catch(() => {});
     showLogin();

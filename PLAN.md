@@ -82,6 +82,8 @@ handled Message-IDs are remembered in SQLite.
 
 - `GET /api/notes` (all, with card excerpts) · `GET /api/notes?q=` (search with snippets)
 - `GET/PUT/DELETE /api/notes/file?path=` · `POST /api/notes` · `PATCH /api/notes/meta?path=` · `POST /api/notes/move`
+- `GET /api/notes/trash` · `POST /api/notes/trash/restore` · `DELETE /api/notes/trash?path=|all=true`: what Sink trashed is
+  recorded in SQLite (`trash`) and purged after `SINK_TRASH_DAYS` (30); anything else in `.trash/` is listed but never purged
 - `POST /api/notes/folders` · `POST /api/notes/scan` · `GET /api/notes/attachment?name=|path=` · `POST /api/notes/attachments`
 - `GET /api/todos?view=open|done|all` · `POST /api/todos` · `POST /api/todos/toggle`
 - `/mcp`: MCP for AI assistants (search_notes, read_note, save_note, list_todos, add_todo). Connectors sign in

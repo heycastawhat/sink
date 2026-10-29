@@ -8,7 +8,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Obsidian's editor:** live preview markdown (headings, tasks, callouts, code blocks, `[[wikilinks]]`, `#tags`,
   embedded images, properties). Files stay exactly as you wrote them.
 - **Your files:** one `.md` per note in a normal folder. Point Sink at an Obsidian vault, a NAS share or a
-  Syncthing folder and both apps edit the same files. Deleted notes go to `.trash/`, like Obsidian.
+  Syncthing folder and both apps edit the same files. Deleted notes go to `.trash/`, like Obsidian;
+  Undo or the Trash page puts them back.
 - **Todos:** every `- [ ]` in every note, in one list, with due dates and reminders (Obsidian Tasks syntax).
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
@@ -70,12 +71,14 @@ don't use `SINK_OIDC_ALLOW_ANY_USER`.
 ## Android app
 
 Download the APK from the [latest release](https://github.com/heycastawhat/sink/releases/latest), allow installs
-from your browser, open it, and enter your Sink address. Newer releases install over older ones.
+from your browser, open it, and enter your Sink address. Newer releases install over older ones; the app checks for
+one once a day (or from Settings) and offers to download it.
 
 - Notes and Todos tabs; notes open fullscreen in the same editor as the web.
 - Edits made offline are saved on the phone and sent when you're back online.
 - Todo reminders arrive as notifications, with a Done button.
-- "New note" Quick Settings tile, and "Share → Sink" from any app turns text into a note.
+- "New note" Quick Settings tile, and "Share → Sink" from any app turns text into a note, or photos and PDFs into a
+  note with them attached.
 
 On iPhone or anywhere else, the web app works on phones too.
 
@@ -133,6 +136,9 @@ accepted; everything else is moved to a "Rejected" folder.
 
 Back up `./notes` (your actual notes) and `./data` (sign-ins and settings; Sink keeps daily database snapshots in
 `data/backups`). The search index rebuilds itself from the notes, so the notes folder is what matters.
+
+Notes deleted in Sink stay in `.trash/` for 30 days, then go for good (`SINK_TRASH_DAYS`, 0 keeps them). Anything
+Obsidian or you put in `.trash/` shows on the Trash page but is never removed automatically.
 
 ## Development
 

@@ -52,6 +52,9 @@ export const config = {
   backupDir: join(dataDir, "backups"),
   backupKeep: Number(env("SINK_BACKUP_KEEP", "7")),
 
+  // Notes Sink moves to .trash/ are deleted for good after this many days (0 keeps them forever).
+  trashDays: Number(env("SINK_TRASH_DAYS", "30")),
+
   maxUploadBytes: Number(env("SINK_MAX_UPLOAD_MB", "25")) * 1024 * 1024,
 
   // Email in: a mailbox that forwarded mail goes to. Off while host is empty.

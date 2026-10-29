@@ -608,6 +608,52 @@ describe("notes", () => {
     expect(((await (await get(token, "/api/notes")).json()) as any).notes).toEqual([]);
   });
 
+  test("trash: list, restore, delete for good, empty, purge after a while", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "Work", title: "Plan", content: "# Plan\nship it" });
+    await send(token, "POST", "/api/notes", { folder: "Work/Old", title: "Notes", content: "# Notes\nold stuff" });
+    await send(token, "DELETE", q("Work/Plan.md"));
+    await send(token, "DELETE", q("Work/Old"));
+    // Obsidian's own trash: listed, but never purged by Sink.
+    mkdirSync(file(".trash"), { recursive: true });
+    writeFileSync(file(".trash/From Obsidian.md"), "# From Obsidian");
+
+    const items = ((await (await get(token, "/api/notes/trash")).json()) as any).items;
+    expect(items.map((t: any) => [t.path, t.original, t.title]).sort()).toEqual([
+      ["From Obsidian.md", "From Obsidian.md", "From Obsidian"],
+      ["Work/Old/Notes.md", "Work/Old/Notes.md", "Notes"],
+      ["Work/Plan.md", "Work/Plan.md", "Plan"],
+    ]);
+    expect(items.find((t: any) => t.path === "Work/Plan.md").excerpt).toBe("ship it");
+
+    // Restore puts it back and in the index; a note made at the same path since gets a numbered sibling.
+    await send(token, "POST", "/api/notes", { folder: "Work", title: "Plan", content: "new plan" });
+    const back = (await (await send(token, "POST", "/api/notes/trash/restore", { path: ".trash/Work/Plan.md" })).json()) as any;
+    expect(back.path).toBe("Work/Plan 1.md");
+    expect(readFileSync(file("Work/Plan 1.md"), "utf8")).toBe("# Plan\nship it");
+    expect(((await (await get(token, "/api/notes?q=ship")).json()) as any).items.map((n: any) => n.path)).toEqual(["Work/Plan 1.md"]);
+    // A note trashed with its folder comes back into that folder.
+    expect(((await (await send(token, "POST", "/api/notes/trash/restore", { path: "Work/Old/Notes.md" })).json()) as any).path).toBe("Work/Old/Notes.md");
+    expect(existsSync(file(".trash/Work"))).toBe(false);
+    expect((await send(token, "POST", "/api/notes/trash/restore", { path: "Work/Plan.md" })).status).toBe(404);
+    expect((await send(token, "POST", "/api/notes/trash/restore", { path: "../sink.md" })).status).toBe(400);
+
+    // Purge only removes what Sink trashed, once it's old enough.
+    await send(token, "DELETE", q("Work/Plan 1.md"));
+    expect(await setup.vault.purgeTrash(30)).toBe(0);
+    expect(await setup.vault.purgeTrash(30, Date.now() + 31 * 86_400_000)).toBe(1);
+    expect(existsSync(file(".trash/Work/Plan 1.md"))).toBe(false);
+    expect(existsSync(file(".trash/From Obsidian.md"))).toBe(true);
+
+    await send(token, "DELETE", q("Work/Old/Notes.md"));
+    expect((await send(token, "DELETE", "/api/notes/trash?path=Work/Old/Notes.md")).status).toBe(200);
+    expect(existsSync(file(".trash/Work/Old/Notes.md"))).toBe(false);
+    expect((await send(token, "DELETE", "/api/notes/trash")).status).toBe(400);
+    expect((await send(token, "DELETE", "/api/notes/trash?all=true")).status).toBe(200);
+    expect(((await (await get(token, "/api/notes/trash")).json()) as any).items).toEqual([]);
+    expect(existsSync(file(".trash/From Obsidian.md"))).toBe(false);
+  });
+
   test("attachments: upload, embed by name, served without script", async () => {
     const token = await login();
     const upload = async (name: string, bytes: Uint8Array | string) => {

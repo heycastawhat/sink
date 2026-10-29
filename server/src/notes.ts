@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
@@ -27,6 +27,8 @@ export type NoteMeta = {
   color: string | null;
 };
 export type Note = NoteMeta & { content: string };
+/** A note in `.trash/`: `path` is inside the trash, `original` is where a restore puts it back. */
+export type TrashedNote = { path: string; original: string; title: string; excerpt: string; deleted_at: number; size: number };
 
 /** 404 / 409 / 400 / 503 for the routes, so file system detail never reaches clients. */
 export class VaultError extends Error {
@@ -515,6 +517,7 @@ export class Vault {
           .query<{ path: string }, [number, string]>("SELECT path FROM notes WHERE substr(path, 1, ?) = ?")
           .all(path.length + 1, path + "/")
           .map((r) => r.path);
+    this.db.query("INSERT OR REPLACE INTO trash (path, original, at) VALUES (?, ?, ?)").run(dest.slice(TRASH.length + 1), path, now());
     for (const p of gone) this.emit({ type: "note.deleted", path: p, source: "sink" });
     if (isNote) this.unindex(path);
     else {
@@ -522,6 +525,144 @@ export class Vault {
       for (const f of this.folders) if (f === path || f.startsWith(path + "/")) this.folders.delete(f);
     }
     return { trashed_to: dest };
+  }
+
+  // ---- trash
+
+  private trashRows() {
+    return this.db.query<TrashRow, []>("SELECT path, original, at FROM trash").all();
+  }
+
+  /** A path inside the trash from a client, with or without the `.trash/` prefix. */
+  private trashPath(raw: string): string {
+    return cleanPath(raw.trim().replace(/^\/*\.trash\//, ""), "note");
+  }
+
+  /** Every note in `.trash/`, newest deletion first. Notes Obsidian trashed are listed too (dated by ctime). */
+  async listTrash(): Promise<TrashedNote[]> {
+    const rows = this.trashRows();
+    const out: TrashedNote[] = [];
+    const walk = async (rel: string) => {
+      const entries = await readdir(join(this.dir, TRASH, rel), { withFileTypes: true }).catch((err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") return [];
+        throw err;
+      });
+      for (const e of entries) {
+        if (e.name.startsWith(".")) continue;
+        const path = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) await walk(path);
+        if (!e.isFile() || !e.name.toLowerCase().endsWith(".md")) continue;
+        try {
+          cleanPath(path, "note");
+        } catch {
+          continue;
+        }
+        const abs = join(this.dir, TRASH, path);
+        const st = await stat(abs);
+        const content = st.size > MAX_NOTE_BYTES ? "" : await readFile(abs, "utf8");
+        const { title, body } = parseNote(path, content);
+        const from = trashOrigin(rows, path);
+        out.push({
+          path,
+          original: from?.original ?? path,
+          title,
+          excerpt: isBoard(path) ? "" : cardText(body, title).slice(0, 200),
+          deleted_at: from?.at ?? Math.floor(st.ctimeMs),
+          size: st.size,
+        });
+      }
+    };
+    try {
+      await this.abs(TRASH);
+      await walk("");
+    } catch (err) {
+      fsError(err, "trash");
+    }
+    return out.sort((a, b) => b.deleted_at - a.deleted_at);
+  }
+
+  /** Puts a trashed note back where it was (numbered if that name is taken now) and indexes it again. */
+  async restore(trashPath: string): Promise<NoteMeta> {
+    const rel = this.trashPath(trashPath);
+    const from = trashOrigin(this.trashRows(), rel);
+    const original = cleanPath(from?.original ?? rel, "note");
+    try {
+      const src = await this.abs(`${TRASH}/${rel}`);
+      await stat(src);
+      const ext = original.toLowerCase().endsWith(".excalidraw.md") ? ".excalidraw.md" : ".md";
+      const stem = original.slice(0, -ext.length);
+      let dest = original;
+      for (let n = 1; await exists(await this.abs(dest)); n++) dest = `${stem} ${n}${ext}`;
+      await mkdir(dirname(await this.abs(dest)), { recursive: true });
+      await rename(src, await this.abs(dest));
+      await this.tidyTrash(dirname(rel), from?.row);
+      const content = await readFile(await this.abs(dest), "utf8");
+      const st = await stat(await this.abs(dest));
+      const m = this.index(dest, content, st.size, Math.floor(st.mtimeMs));
+      this.emit({ type: "note.created", path: dest, source: "sink" });
+      return m;
+    } catch (err) {
+      fsError(err, "note");
+    }
+  }
+
+  /** Deletes one trashed note for good. */
+  async deleteForever(trashPath: string): Promise<void> {
+    const rel = this.trashPath(trashPath);
+    try {
+      const abs = await this.abs(`${TRASH}/${rel}`);
+      await stat(abs);
+      await rm(abs);
+    } catch (err) {
+      fsError(err, "note");
+    }
+    await this.tidyTrash(dirname(rel), trashOrigin(this.trashRows(), rel)?.row);
+  }
+
+  /** Empties `.trash/` completely, including anything Obsidian put there. */
+  async emptyTrash(): Promise<void> {
+    try {
+      const root = await this.abs(TRASH);
+      for (const e of await readdir(root).catch(() => [] as string[])) await rm(join(root, e), { recursive: true, force: true });
+    } catch (err) {
+      fsError(err, "trash");
+    }
+    this.db.query("DELETE FROM trash").run();
+  }
+
+  /** Deletes what Sink trashed more than `days` ago. Things Obsidian or a person put in .trash/ are left alone. */
+  async purgeTrash(days: number, at = now()): Promise<number> {
+    if (days <= 0) return 0;
+    const old = this.db
+      .query<{ path: string }, [number]>("SELECT path FROM trash WHERE at < ?")
+      .all(at - days * 24 * 60 * 60 * 1000);
+    let purged = 0;
+    for (const { path } of old) {
+      try {
+        const abs = await this.abs(`${TRASH}/${path}`);
+        if (await exists(abs)) purged++;
+        await rm(abs, { recursive: true, force: true });
+        await this.tidyTrash(dirname(path), path);
+      } catch (err) {
+        console.warn(`[notes] couldn't purge .trash/${path}: ${(err as Error).message}`);
+      }
+    }
+    return purged;
+  }
+
+  /**
+   * Removes folders left empty in the trash, from `rel` up (never .trash itself), then forgets `row` (the trashed
+   * note or folder a change came from) once nothing of it is left.
+   */
+  private async tidyTrash(rel: string, row?: string) {
+    for (let d = rel; d && d !== "."; d = dirname(d)) {
+      try {
+        await rmdir(join(this.dir, TRASH, d));
+      } catch {
+        break;
+      }
+    }
+    if (row && !(await exists(join(this.dir, TRASH, row)))) this.db.query("DELETE FROM trash WHERE path = ?").run(row);
   }
 
   async createFolder(path: string): Promise<string> {
@@ -586,6 +727,17 @@ const meta = ({ excerpt: _, snippet: __, ...r }: Row & { excerpt?: string; snipp
   tags: JSON.parse(r.tags) as string[],
   pinned: r.pinned === 1,
 });
+type TrashRow = { path: string; original: string; at: number };
+
+/** Where a note in the trash came from: its own row, or the row of the folder it was trashed with. */
+function trashOrigin(rows: TrashRow[], rel: string): { row: string; original: string; at: number } | null {
+  for (const r of rows) {
+    if (r.path === rel) return { row: r.path, original: r.original, at: r.at };
+    if (rel.startsWith(r.path + "/")) return { row: r.path, original: r.original + rel.slice(r.path.length), at: r.at };
+  }
+  return null;
+}
+
 const exists = (abs: string) =>
   stat(abs).then(
     () => true,

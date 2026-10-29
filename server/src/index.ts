@@ -45,6 +45,9 @@ if (config.imap.host) {
 }
 const backups = new Backups(db, config.backupDir, config.backupKeep);
 backups.start();
+const purgeTrash = () => vault.purgeTrash(config.trashDays).catch((err) => console.warn(`[notes] trash purge failed: ${err.message}`));
+void purgeTrash();
+const trashTimer = setInterval(purgeTrash, 60 * 60 * 1000);
 
 const server = Bun.serve({
   port: config.port,
@@ -63,6 +66,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     plugins.stop();
     void email?.stop();
     backups.stop();
+    clearInterval(trashTimer);
     server.stop();
     db.close();
     process.exit(0);

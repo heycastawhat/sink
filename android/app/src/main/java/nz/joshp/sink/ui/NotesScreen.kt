@@ -44,6 +44,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -94,6 +98,16 @@ fun noteTint(color: String?, base: Color = MaterialTheme.colorScheme.surfaceCont
 fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.refresh() }
+    val snackbar = remember { SnackbarHostState() }
+    // A note just deleted from its screen: offer Undo here, once.
+    LaunchedEffect(Unit) {
+        vm.trashed.collect { t ->
+            if (t == null) return@collect
+            vm.trashed.value = null
+            val result = snackbar.showSnackbar("Deleted “${t.title}”", actionLabel = "Undo", duration = SnackbarDuration.Long)
+            if (result == SnackbarResult.ActionPerformed) vm.undoTrash(t)?.let { snackbar.showSnackbar(it) }
+        }
+    }
 
     val inFolder = { n: NoteMeta -> state.folder.isEmpty() || n.path.startsWith(state.folder + "/") }
     val list = (state.results ?: state.notes).filter(inFolder)
@@ -177,6 +191,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
         ) { Icon(Icons.Outlined.Edit, "New note") }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
     }
 }
 

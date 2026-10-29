@@ -33,11 +33,19 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="nz.joshp.sink" android:host="auth" />
             </intent-filter>
-            <!-- Text shared from any app (a link, a quote) opens as a new note. -->
+            <!-- Text shared from any app (a link, a quote) opens as a new note; photos and PDFs are attached to one. -->
             <intent-filter android:label="@string/share_label">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+            <intent-filter android:label="@string/share_label">
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
             </intent-filter>
         </activity>
 

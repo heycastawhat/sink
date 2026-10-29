@@ -345,6 +345,74 @@ a {
   margin-bottom: 16px;
 }
 
+/* ---------- trash ---------- */
+.trash {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 760px;
+  padding-top: 8px;
+}
+
+.trash-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px 10px 14px;
+  border-radius: 18px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.trash-row .grow {
+  min-width: 0;
+}
+
+.trash-row m3e-icon {
+  --m3e-icon-size: 16px;
+  vertical-align: -3px;
+}
+
+.trash-row m3e-icon-button m3e-icon,
+.trash-icon m3e-icon {
+  --m3e-icon-size: 20px;
+}
+
+.trash-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.trash-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trash-excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- settings ---------- */
 .settings {
   display: flex;
@@ -579,7 +647,8 @@ a {
     z-index: 24;
   }
 
-  .shell[data-view='settings'] #new-fab {
+  .shell[data-view='settings'] #new-fab,
+  .shell[data-view='trash'] #new-fab {
     display: none !important;
   }
 

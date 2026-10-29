@@ -45,6 +45,10 @@ export const api = {
   noteMeta: (path, body) => request(`/notes/meta?${p(path)}`, json('PATCH', body)),
   moveNote: (from, to) => request('/notes/move', json('POST', { from, to })),
   trashNote: (path) => request(`/notes/file?${p(path)}`, { method: 'DELETE' }),
+  trash: () => request('/notes/trash'),
+  restoreNote: (path) => request('/notes/trash/restore', json('POST', { path })),
+  deleteForever: (path) => request(`/notes/trash?${p(path)}`, { method: 'DELETE' }),
+  emptyTrash: () => request('/notes/trash?all=true', { method: 'DELETE' }),
   attach: (file) => {
     const form = new FormData();
     form.set('file', file);
