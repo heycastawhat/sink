@@ -9,9 +9,10 @@ import { now } from "./db";
 /**
  * OAuth 2.1 authorization server for MCP connectors (claude.ai, ChatGPT, Poke, …): metadata discovery
  * (RFC 8414 / 9728), dynamic client registration (RFC 7591), code + PKCE S256, refresh tokens.
- * Signing in is the normal authentik login; access tokens are ordinary Sink tokens, revocable from the web.
+ * Signing in is the normal OIDC login; access tokens are ordinary Sink tokens, revocable from the web.
  */
 
+const MAX_CLIENTS = 100;
 const CODE_TTL_MS = 5 * 60 * 1000;
 const CONSENT_TTL_MS = 10 * 60 * 1000;
 const SCOPE = "sink";
@@ -96,6 +97,12 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
   }
 
   app.post("/oauth/register", async (c) => {
+    // Registration is open by design (MCP clients self-register), so keep it from piling up: clients that never got
+    // a token go after a day, and there's a ceiling.
+    db.query("DELETE FROM oauth_clients WHERE created_at < ? AND id NOT IN (SELECT client_id FROM oauth_refresh)").run(now() - 86_400_000);
+    if (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM oauth_clients").get()!.n >= MAX_CLIENTS) {
+      return c.json({ error: "temporarily_unavailable", error_description: "too many registered clients" }, 429);
+    }
     const parsed = registerBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return tokenError(c, "invalid_client_metadata", "expected redirect_uris");
     const b = parsed.data;
@@ -181,8 +188,8 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
       "Allow access",
       `<h1>Allow ${esc(client.name)} to use your Sink?</h1>
 <p>It will be able to:</p>
-<ul><li>search and read your captures, including the screenshots</li><li>edit titles, notes, tags, pins and collections</li><li>see upcoming reminders</li></ul>
-<p>You'll go back to <code>${esc(host)}</code>. Revoke it any time from Sink's “Connect an AI assistant” panel.</p>
+<ul><li>search and read your notes</li><li>create notes and replace their text</li><li>see and add todos</li></ul>
+<p>You'll go back to <code>${esc(host)}</code>. Revoke it any time in Sink's Settings.</p>
 <form method="post" action="/oauth/authorize" class="row">
   <input type="hidden" name="request" value="${id}">
   <button class="deny" name="decision" value="deny">Cancel</button>
@@ -225,7 +232,7 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
   }
 
   function issue(clientId: string, clientName: string, subject: string) {
-    const access = auth.issueToken(`${clientName} (MCP)`, subject);
+    const access = auth.issueToken(`${clientName} (MCP)`, subject, "mcp");
     const tokenId = auth.verify(access)!;
     const refresh = `sinkr_${random()}`;
     db.query("INSERT INTO oauth_refresh (token_hash, token_id, client_id, created_at) VALUES (?, ?, ?, ?)").run(

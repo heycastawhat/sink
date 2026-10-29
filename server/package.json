@@ -9,14 +9,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.3.1",
     "@modelcontextprotocol/sdk": "1.31.0",
     "hono": "^4.13.13",
-    "sharp": "^0.35.5",
+    "imapflow": "^2.9.1",
+    "mailparser": "^3.12.4",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
+    "@types/mailparser": "^3.9.0",
     "typescript": "^5"
   }
 }

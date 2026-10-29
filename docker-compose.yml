@@ -1,10 +1,13 @@
 services:
   sink:
-    build: .
+    image: ghcr.io/heycastawhat/sink:latest
     container_name: sink
     restart: unless-stopped
     env_file: .env
     ports:
       - "8787:8787"
     volumes:
+      # Database, sign-ins and backups. Keep this on local disk: SQLite on a network share can corrupt.
       - ./data:/data
+      # Your notes as plain markdown files. Point it at a NAS share or an Obsidian vault if you like.
+      - ./notes:/notes

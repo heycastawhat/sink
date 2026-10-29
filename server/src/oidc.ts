@@ -4,6 +4,7 @@ const discoverySchema = z.object({
   issuer: z.string(),
   authorization_endpoint: z.string(),
   token_endpoint: z.string(),
+  token_endpoint_auth_methods_supported: z.array(z.string()).optional(),
 });
 
 const tokenSchema = z.object({ id_token: z.string() });
@@ -15,6 +16,8 @@ const claimsSchema = z.object({
   exp: z.number(),
   nonce: z.string().optional(),
   email: z.string().optional(),
+  // Some providers send "true" as a string.
+  email_verified: z.union([z.boolean(), z.string()]).optional(),
   preferred_username: z.string().optional(),
   groups: z.array(z.string()).optional(),
 });
@@ -24,14 +27,19 @@ export type Identity = { sub: string; email?: string; username?: string; groups:
 export type OidcConfig = {
   issuer: string;
   clientId: string;
+  // Empty for a public client (PKCE only).
   clientSecret: string;
-  // Optional extra gate on top of authentik's own application policies.
+  // Who may sign in: sub, preferred_username or verified email; or group names. Empty lists let nobody in,
+  // unless allowAnyone is set (only sensible when the provider itself restricts who can use the app).
   allowedUsers: string[];
   allowedGroups: string[];
+  allowAnyone: boolean;
+  // Provider name for the sign-in button.
+  name?: string;
 };
 
 /**
- * Authorization code flow with PKCE against authentik (or any OIDC provider).
+ * Authorization code flow with PKCE against any OIDC provider (authentik, Pocket ID, Keycloak, Google, …).
  *
  * The ID token comes straight from the token endpoint over TLS with client authentication,
  * so per OIDC Core 3.1.3.7 we check iss/aud/exp/nonce but don't need to verify its signature.
@@ -44,6 +52,10 @@ export class Oidc {
     private fetchImpl: typeof fetch = fetch,
   ) {}
 
+  get name(): string {
+    return this.cfg.name ?? "";
+  }
+
   private discover() {
     this.discovery ??= (async () => {
       const url = this.cfg.issuer.replace(/\/?$/, "/") + ".well-known/openid-configuration";
@@ -51,7 +63,7 @@ export class Oidc {
       if (!res.ok) throw new Error(`discovery failed: HTTP ${res.status}`);
       return discoverySchema.parse(await res.json());
     })().catch((err) => {
-      // Don't cache failures; authentik might just be restarting.
+      // Don't cache failures; the provider might just be restarting.
       this.discovery = undefined;
       throw err;
     });
@@ -76,20 +88,24 @@ export class Oidc {
 
   async exchange(p: { code: string; redirectUri: string; verifier: string; nonce: string }): Promise<Identity> {
     const d = await this.discover();
-    const res = await this.fetchImpl(d.token_endpoint, {
-      method: "POST",
-      signal: AbortSignal.timeout(15_000),
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        authorization: "Basic " + btoa(`${encodeURIComponent(this.cfg.clientId)}:${encodeURIComponent(this.cfg.clientSecret)}`),
-      },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code: p.code,
-        redirect_uri: p.redirectUri,
-        code_verifier: p.verifier,
-      }),
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: p.code,
+      redirect_uri: p.redirectUri,
+      code_verifier: p.verifier,
     });
+    const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
+    // Client secret in a Basic header (the OIDC default), in the body if that's all the provider takes,
+    // or not at all for a public client.
+    const methods = d.token_endpoint_auth_methods_supported ?? ["client_secret_basic"];
+    if (!this.cfg.clientSecret) body.set("client_id", this.cfg.clientId);
+    else if (!methods.includes("client_secret_basic") && methods.includes("client_secret_post")) {
+      body.set("client_id", this.cfg.clientId);
+      body.set("client_secret", this.cfg.clientSecret);
+    } else {
+      headers.authorization = "Basic " + btoa(`${encodeURIComponent(this.cfg.clientId)}:${encodeURIComponent(this.cfg.clientSecret)}`);
+    }
+    const res = await this.fetchImpl(d.token_endpoint, { method: "POST", signal: AbortSignal.timeout(15_000), headers, body });
     if (!res.ok) throw new Error(`token endpoint: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
     const { id_token } = tokenSchema.parse(await res.json());
 
@@ -103,16 +119,33 @@ export class Oidc {
     if (claims.exp * 1000 < Date.now()) throw new Error("id_token expired");
     if (claims.nonce !== p.nonce) throw new Error("nonce mismatch");
 
-    return { sub: claims.sub, email: claims.email, username: claims.preferred_username, groups: claims.groups ?? [] };
+    // An unverified email is just a string the user typed; it can't grant access.
+    const verified = claims.email_verified === true || claims.email_verified === "true";
+    return {
+      sub: claims.sub,
+      email: verified ? claims.email : undefined,
+      username: claims.preferred_username,
+      groups: claims.groups ?? [],
+    };
   }
 
+  /**
+   * Each allowlist entry matches one kind of claim only, so a username someone picks at the provider can't pose as
+   * an email or subject: `you@example.com` / `email:…` = verified email, `user:name` = preferred_username (only safe
+   * where usernames are admin-assigned), `sub:…` or anything else = the provider's subject ID.
+   */
   allowed(id: Identity): boolean {
-    const { allowedUsers, allowedGroups } = this.cfg;
-    if (!allowedUsers.length && !allowedGroups.length) return true;
-    const names = [id.sub, id.email, id.username].filter(Boolean).map((s) => s!.toLowerCase());
-    return (
-      allowedUsers.some((u) => names.includes(u.toLowerCase())) ||
-      allowedGroups.some((g) => id.groups.includes(g))
-    );
+    const { allowedUsers, allowedGroups, allowAnyone } = this.cfg;
+    if (allowAnyone) return true;
+    const lower = (s?: string) => s?.toLowerCase();
+    const matches = (entry: string) => {
+      const [, kind, value] = /^(email|user|sub):(.*)$/i.exec(entry) ?? [null, entry.includes("@") ? "email" : "sub", entry];
+      const want = value!.toLowerCase();
+      if (kind!.toLowerCase() === "email") return !!id.email && lower(id.email) === want;
+      if (kind!.toLowerCase() === "user") return !!id.username && lower(id.username) === want;
+      return id.sub.toLowerCase() === want;
+    };
+    return allowedUsers.some(matches) || allowedGroups.some((g) => id.groups.includes(g));
   }
+
 }

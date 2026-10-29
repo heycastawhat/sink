@@ -9,7 +9,7 @@ import java.security.SecureRandom
 import android.util.Base64
 
 /**
- * authentik sign-in: open the server's OIDC start URL in a Custom Tab, then the server redirects
+ * Sign-in (any OIDC provider): open the server's OIDC start URL in a Custom Tab, then the server redirects
  * back to nz.joshp.sink://auth?code=… and we exchange that code with a PKCE verifier only this app knows.
  */
 object SignIn {

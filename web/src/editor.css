@@ -1,0 +1,347 @@
+/* Note editor styles, shared by the web app and the Android editor page. */
+/* CodeMirror, styled as a page not a code box. */
+.note-editor .cm-editor {
+  background: none;
+  color: var(--md-sys-color-on-surface);
+  font-size: 17px;
+  line-height: 1.6;
+}
+
+.note-editor .cm-editor.cm-focused,
+.note-editor .cm-content:focus,
+.note-editor .cm-content:focus-visible {
+  outline: none;
+}
+
+.note-editor .cm-editor .cm-scroller {
+  font-family: 'Roboto Flex', system-ui, sans-serif;
+  line-height: inherit;
+  overflow: visible;
+}
+
+.note-editor .cm-editor .cm-content {
+  padding: 0;
+  caret-color: var(--md-sys-color-primary);
+}
+
+.note-editor .cm-editor .cm-line {
+  padding: 0;
+}
+
+.note-editor .cm-content ::selection {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
+}
+
+.note-editor .cm-placeholder {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.cm-h1,
+.cm-h2,
+.cm-h3,
+.cm-h4,
+.cm-h5,
+.cm-h6 {
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+/* Obsidian's default scale. */
+.cm-h1 {
+  font-size: 1.8em;
+}
+
+.cm-h2 {
+  font-size: 1.6em;
+}
+
+.cm-h3 {
+  font-size: 1.42em;
+  font-weight: 650;
+}
+
+.cm-h4 {
+  font-size: 1.27em;
+  font-weight: 650;
+}
+
+.cm-h5 {
+  font-size: 1.13em;
+  font-weight: 650;
+}
+
+.cm-h6 {
+  font-size: 1em;
+  font-weight: 650;
+}
+
+/* The # on a heading being edited, quiet like Obsidian's. */
+.cm-h1.cm-meta,
+.cm-h2.cm-meta,
+.cm-h3.cm-meta,
+.cm-h4.cm-meta,
+.cm-h5.cm-meta,
+.cm-h6.cm-meta {
+  color: var(--md-sys-color-on-surface-variant);
+  font-weight: 400;
+}
+
+.cm-link,
+.cm-link-text,
+.cm-url,
+.cm-wikilink {
+  color: var(--md-sys-color-primary);
+}
+
+.cm-link-text,
+.cm-wikilink {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--md-sys-color-primary) 40%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.cm-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent);
+  color: var(--md-sys-color-primary);
+  font-size: 0.9em;
+}
+
+.cm-mono {
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.88em;
+}
+
+.cm-meta {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.cm-line.cm-fm,
+.cm-line.cm-fm * {
+  color: var(--md-sys-color-on-surface-variant) !important;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  text-decoration: none !important;
+  line-height: 1.7;
+}
+
+.cm-taskfield {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.82em;
+}
+
+.cm-task-done .cm-taskfield {
+  text-decoration: none;
+}
+
+.cm-task {
+  width: 18px;
+  height: 18px;
+  margin: 0 8px 0 0;
+  vertical-align: -3px;
+  accent-color: var(--md-sys-color-primary);
+  cursor: pointer;
+}
+
+.cm-task-done {
+  color: var(--md-sys-color-on-surface-variant);
+  text-decoration: line-through;
+}
+
+.cm-bullet {
+  display: inline-block;
+  width: 1ch;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.cm-embed {
+  display: block;
+  margin: 6px 0;
+}
+
+.cm-embed img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  border-radius: 12px;
+}
+
+.cm-embed.broken::after {
+  content: 'Image not found';
+  color: var(--md-sys-color-error);
+  font-size: 14px;
+}
+
+.cm-tooltip.cm-tooltip-autocomplete {
+  border: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container-high);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--md-sys-color-shadow) 24%, transparent);
+  color: var(--md-sys-color-on-surface);
+  font-family: 'Roboto Flex', system-ui, sans-serif;
+}
+
+.cm-tooltip-autocomplete ul li[aria-selected] {
+  background: var(--md-sys-color-secondary-container) !important;
+  color: var(--md-sys-color-on-secondary-container) !important;
+}
+
+.cm-panels {
+  background: var(--md-sys-color-surface-container) !important;
+  color: var(--md-sys-color-on-surface) !important;
+}
+
+
+/* Fenced code: one shaded box across its lines. */
+.note-editor .cm-editor .cm-line.cm-codeblock {
+  padding: 0 16px;
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.86em;
+  line-height: 1.6;
+}
+
+.note-editor .cm-editor .cm-line.cm-codeblock-first {
+  padding-top: 8px;
+  border-radius: 8px 8px 0 0;
+}
+
+.note-editor .cm-editor .cm-line.cm-codeblock-last {
+  padding-bottom: 8px;
+  border-radius: 0 0 8px 8px;
+}
+
+.note-editor .cm-editor .cm-line.cm-codeblock-first.cm-codeblock-last {
+  border-radius: 8px;
+}
+
+.cm-codeblock .cm-mono {
+  padding: 0;
+  background: none;
+  font-size: 1em;
+}
+
+.note-editor .cm-editor .cm-line.cm-blockquote {
+  padding-left: 18px;
+  border-left: 3px solid var(--md-sys-color-primary);
+}
+
+/* Callouts: > [!note] Title */
+.note-editor .cm-editor .cm-line.cm-callout {
+  --callout: var(--md-sys-color-primary);
+  padding: 0 16px;
+  background: color-mix(in srgb, var(--callout) 10%, transparent);
+}
+
+.note-editor .cm-editor .cm-line.cm-callout-first {
+  padding-top: 8px;
+  border-radius: 8px 8px 0 0;
+  color: var(--callout);
+  font-weight: 650;
+}
+
+.note-editor .cm-editor .cm-line.cm-callout-last {
+  padding-bottom: 8px;
+  border-radius: 0 0 8px 8px;
+}
+
+.note-editor .cm-editor .cm-line.cm-callout-first.cm-callout-last {
+  border-radius: 8px;
+}
+
+.cm-callout-warning,
+.cm-callout-caution,
+.cm-callout-attention {
+  --callout: #e0912f !important;
+}
+
+.cm-callout-danger,
+.cm-callout-error,
+.cm-callout-failure,
+.cm-callout-fail,
+.cm-callout-missing,
+.cm-callout-bug {
+  --callout: #e5484d !important;
+}
+
+.cm-callout-success,
+.cm-callout-check,
+.cm-callout-done,
+.cm-callout-tip,
+.cm-callout-hint {
+  --callout: #2fa36b !important;
+}
+
+.cm-callout-question,
+.cm-callout-help,
+.cm-callout-faq,
+.cm-callout-example {
+  --callout: #8e6bd8 !important;
+}
+
+.cm-callout-label {
+  color: var(--callout);
+  font-weight: 650;
+}
+
+.cm-hr {
+  display: inline-block;
+  width: 100%;
+  height: 0;
+  vertical-align: middle;
+  border-top: 1px solid var(--md-sys-color-outline-variant, color-mix(in srgb, var(--md-sys-color-on-surface) 25%, transparent));
+}
+
+.cm-highlight {
+  border-radius: 2px;
+  background: color-mix(in srgb, #ffd400 40%, transparent);
+}
+
+/* Properties (frontmatter) */
+.cm-properties {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 14px;
+  padding: 6px 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+  font-size: 14px;
+  line-height: 1.5;
+  cursor: text;
+}
+
+.cm-prop {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.cm-prop-key {
+  flex: none;
+  width: 110px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.cm-prop-value {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cm-prop-pill {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--md-sys-color-primary) 14%, transparent);
+  color: var(--md-sys-color-primary);
+  font-size: 13px;
+}

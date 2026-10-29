@@ -54,7 +54,7 @@ import nz.joshp.sink.data.normalizeServerUrl
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error: String?) {
-    var server by rememberSaveable(initialServer) { mutableStateOf(initialServer ?: "https://sink.notahomelab.xyz") }
+    var server by rememberSaveable(initialServer) { mutableStateOf(initialServer ?: "") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -91,7 +91,8 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
                     .background(MaterialTheme.colorScheme.primary),
             )
             Spacer(Modifier.height(8.dp))
-            Text("Sink", style = MaterialTheme.typography.displaySmall)
+            // Not inside a Surface, so content colour has to be explicit (it would default to black).
+            Text("Sink", style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.onSurface)
             Text(
                 "Everything but the kitchen sink. Well, including it.",
                 style = MaterialTheme.typography.bodyLarge,
@@ -120,7 +121,7 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
                     .height(56.dp),
             ) {
                 if (busy) LoadingIndicator(Modifier.size(32.dp), color = MaterialTheme.colorScheme.onPrimary)
-                else Text("Sign in with authentik", style = MaterialTheme.typography.titleMedium)
+                else Text("Sign in", style = MaterialTheme.typography.titleMedium)
             }
         }
     }

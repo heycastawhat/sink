@@ -6,6 +6,7 @@
     <title>Sink</title>
     <meta name="theme-color" content="#6750A4" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link
       href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wdth,wght@8..144,25..151,100..1000&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
@@ -23,29 +24,22 @@
           <p class="muted">Everything but the kitchen sink. Well, including it.</p>
           <p id="login-error" class="error" hidden></p>
           <m3e-button id="login-submit" variant="filled" size="medium">
-            <m3e-icon slot="icon" name="key"></m3e-icon>Sign in with authentik
+            <m3e-icon slot="icon" name="key"></m3e-icon><span id="login-label">Sign in</span>
           </m3e-button>
         </div>
       </section>
 
-      <!-- App: sidebar | main | detail panel. On phones the sidebar is the Library tab and the panel is full screen. -->
+      <!-- App: sidebar | main. On phones the sidebar becomes the tab bar, and a note opens full screen. -->
       <div id="app" class="shell" hidden>
-        <aside id="nav" class="nav" aria-label="Library">
-          <a class="brand" href="#/">
+        <aside id="nav" class="nav" aria-label="Sections">
+          <a class="brand" href="#/notes">
             <m3e-shape id="logo" name="7-sided-cookie"></m3e-shape>
             <span class="wordmark">Sink</span>
           </a>
           <m3e-button id="add-btn" class="add-btn" variant="tonal">
-            <m3e-icon slot="icon" name="add_photo_alternate"></m3e-icon>Add screenshots
+            <m3e-icon slot="icon" name="edit_square"></m3e-icon>New note
           </m3e-button>
           <nav id="nav-views" class="nav-list"></nav>
-          <div class="nav-heading">
-            <span>Collections</span>
-            <m3e-icon-button id="collection-new" aria-label="New collection" title="New collection">
-              <m3e-icon name="add"></m3e-icon>
-            </m3e-icon-button>
-          </div>
-          <nav id="nav-collections" class="nav-list"></nav>
           <div class="nav-foot">
             <a class="nav-item" href="#/settings" data-route="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
           </div>
@@ -55,95 +49,88 @@
           <header class="main-head">
             <div class="title-row">
               <h1 id="view-title" class="view-title">Sink</h1>
-              <span id="view-sub" class="view-sub"></span>
-              <span class="spacer"></span>
-              <div id="collection-tools" class="collection-tools" hidden>
-                <m3e-icon-button id="collection-rename" aria-label="Rename collection" title="Rename"><m3e-icon name="edit"></m3e-icon></m3e-icon-button>
-                <m3e-icon-button id="collection-delete" aria-label="Delete collection" title="Delete"><m3e-icon name="delete"></m3e-icon></m3e-icon-button>
-              </div>
             </div>
             <div id="search-row" class="search-row">
               <m3e-search-bar class="search" clearable>
                 <m3e-icon name="search" slot="leading"></m3e-icon>
-                <input id="search" slot="input" placeholder="Search by words or meaning" aria-label="Search" />
+                <input id="search" slot="input" placeholder="Search notes" aria-label="Search notes" />
               </m3e-search-bar>
             </div>
-            <m3e-filter-chip-set id="kinds" class="kinds" aria-label="Kind"></m3e-filter-chip-set>
           </header>
 
-          <section id="digest" class="digest" hidden></section>
+          <!-- Notes: Keep-style grid; a card opens fullscreen. -->
+          <section id="notes" class="notes" hidden>
+            <div id="take-note" class="take-note">
+              <input id="take-title" class="take-title" placeholder="Title" aria-label="Title" autocomplete="off" />
+              <div class="take-row">
+                <textarea id="take-body" class="take-body" rows="1" placeholder="Take a note…" aria-label="Take a note"></textarea>
+                <m3e-icon-button id="take-list" class="take-quick" aria-label="New list" title="New list"><m3e-icon name="check_box"></m3e-icon></m3e-icon-button>
+                <m3e-icon-button id="take-board" class="take-quick" aria-label="New board" title="New board"><m3e-icon name="draw"></m3e-icon></m3e-icon-button>
+              </div>
+              <div class="take-actions">
+                <m3e-icon-button id="take-open" aria-label="Open fullscreen" title="Open fullscreen"><m3e-icon name="open_in_full"></m3e-icon></m3e-icon-button>
+                <span class="spacer"></span>
+                <m3e-button id="take-close" variant="text" size="small">Close</m3e-button>
+              </div>
+            </div>
+            <div id="note-folders" class="note-folders" role="toolbar" aria-label="Folders"></div>
+            <h2 id="notes-pinned-head" class="notes-head" hidden>Pinned</h2>
+            <div id="notes-pinned" class="note-grid"></div>
+            <h2 id="notes-others-head" class="notes-head" hidden>Others</h2>
+            <div id="notes-grid" class="note-grid"></div>
+            <div id="notes-empty" class="empty" hidden>
+              <m3e-shape name="soft-burst" class="empty-shape"></m3e-shape>
+              <h2 id="notes-empty-title" class="empty-title"></h2>
+              <p id="notes-empty-body" class="muted"></p>
+            </div>
+          </section>
+
+          <!-- Todos: every checkbox in every note. -->
+          <section id="todos" class="todos" hidden>
+            <form id="todo-form" class="todo-form">
+              <m3e-icon name="add_task"></m3e-icon>
+              <input id="todo-text" placeholder="Add a todo" aria-label="New todo" autocomplete="off" />
+              <input id="todo-date" type="date" aria-label="Due date" />
+              <input id="todo-time" type="time" aria-label="Remind at" />
+              <m3e-button type="submit" variant="tonal" size="small" id="todo-add">Add</m3e-button>
+            </form>
+            <div id="todo-list"></div>
+            <m3e-button id="todo-done-toggle" variant="text" size="small">Show done</m3e-button>
+            <div id="todo-done" class="todo-done"></div>
+          </section>
+
           <section id="settings" class="settings" hidden></section>
-          <div id="grid" class="grid"></div>
-          <div id="empty" class="empty" hidden>
-            <m3e-shape name="ghost-ish" class="empty-shape"></m3e-shape>
-            <h2 id="empty-title" class="empty-title">Sink's empty</h2>
-            <p class="muted" id="empty-body">Drop a screenshot anywhere, paste one, or hit the button.</p>
-          </div>
-          <div id="more" class="more"><m3e-loading-indicator hidden id="loading"></m3e-loading-indicator></div>
         </main>
 
-        <aside id="panel" class="panel" aria-label="Capture" hidden>
-          <div class="panel-bar">
-            <m3e-icon-button id="panel-close" aria-label="Close"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="panel-prev" class="desk-only" aria-label="Previous (k)" title="Previous (k)"><m3e-icon name="keyboard_arrow_up"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="panel-next" class="desk-only" aria-label="Next (j)" title="Next (j)"><m3e-icon name="keyboard_arrow_down"></m3e-icon></m3e-icon-button>
-            <span class="spacer"></span>
-            <div id="panel-actions" class="panel-actions"></div>
-          </div>
-          <div id="panel-body" class="panel-body"></div>
-        </aside>
-
         <nav class="tabbar" aria-label="Sections">
-          <a href="#/" data-tab="all"><m3e-icon name="inventory_2"></m3e-icon><span>Sink</span></a>
-          <a href="#/review" data-tab="digest"><m3e-icon name="auto_awesome"></m3e-icon><span>Review</span><b id="tab-badge" class="badge" hidden></b></a>
-          <a href="#/library" data-tab="library"><m3e-icon name="folder"></m3e-icon><span>Library</span></a>
+          <a href="#/notes" data-tab="notes"><m3e-icon name="sticky_note_2"></m3e-icon><span>Notes</span></a>
+          <a href="#/todos" data-tab="todos"><m3e-icon name="checklist"></m3e-icon><span>Todos</span></a>
           <a href="#/settings" data-tab="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
         </nav>
 
-        <m3e-fab id="upload-fab" class="phone-only" variant="primary-container" size="small" aria-label="Add screenshots">
-          <m3e-icon name="add"></m3e-icon>
+        <m3e-fab id="new-fab" class="phone-only" variant="primary-container" aria-label="New note">
+          <m3e-icon id="fab-icon" name="edit"></m3e-icon>
         </m3e-fab>
-        <input id="file-input" type="file" accept="image/*" multiple hidden />
 
-        <div id="bulk-bar" class="bulk-bar" hidden role="toolbar" aria-label="Selected captures">
-          <m3e-icon-button id="bulk-clear" aria-label="Clear selection"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
-          <span id="bulk-count" class="bulk-count"></span>
-          <m3e-button id="bulk-all" variant="text" size="small">All</m3e-button>
-          <span class="spacer"></span>
-          <div id="bulk-actions" class="bulk-actions"></div>
-        </div>
+        <!-- One note, fullscreen. -->
+        <section id="note-screen" class="note-screen" hidden aria-label="Note">
+          <header class="note-bar">
+            <m3e-icon-button id="note-back" aria-label="Back (Esc)" title="Back (Esc)"><m3e-icon name="arrow_back"></m3e-icon></m3e-icon-button>
+            <span id="note-crumb" class="note-crumb"></span>
+            <span class="spacer"></span>
+            <span id="note-status" class="note-status" aria-live="polite"></span>
+            <m3e-icon-button id="note-pin" aria-label="Pin" title="Pin"><m3e-icon name="push_pin"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-palette" aria-label="Colour" title="Colour"><m3e-icon name="palette"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-move" aria-label="Move or rename" title="Move or rename"><m3e-icon name="drive_file_move"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-download" aria-label="Download .md" title="Download .md"><m3e-icon name="download"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-delete" aria-label="Delete" title="Delete"><m3e-icon name="delete"></m3e-icon></m3e-icon-button>
+          </header>
+          <div id="note-colors" class="note-colors" hidden></div>
+          <div class="note-scroll"><div id="note-editor" class="note-editor"></div></div>
+        </section>
 
-        <div id="dropzone" class="dropzone" hidden>
-          <m3e-shape name="very-sunny" class="drop-shape"></m3e-shape>
-          <h2>Drop to stash</h2>
-        </div>
       </div>
 
-      <!-- Upload note -->
-      <m3e-dialog id="upload-dialog" dismissible>
-        <span slot="header">Why are you saving this?</span>
-        <div class="upload-body">
-          <div id="upload-previews" class="upload-previews"></div>
-          <m3e-form-field variant="outlined" class="full">
-            <label slot="label" for="upload-note">Note (optional)</label>
-            <textarea id="upload-note" rows="2" placeholder="e.g. book this before Friday"></textarea>
-          </m3e-form-field>
-        </div>
-        <div slot="actions" end>
-          <m3e-button id="upload-cancel">Cancel</m3e-button>
-          <m3e-button id="upload-go" variant="filled">Stash</m3e-button>
-        </div>
-      </m3e-dialog>
-
-      <!-- Bulk: file selected captures into collections -->
-      <m3e-dialog id="bulk-collect" dismissible>
-        <span slot="header">Add to collections</span>
-        <div class="chip-row" id="bulk-collect-chips"></div>
-        <div slot="actions" end>
-          <m3e-button id="bulk-collect-cancel">Cancel</m3e-button>
-          <m3e-button id="bulk-collect-go" variant="filled">Add</m3e-button>
-        </div>
-      </m3e-dialog>
     </m3e-theme>
     <script type="module" src="/src/main.js"></script>
   </body>

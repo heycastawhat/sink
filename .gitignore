@@ -6,3 +6,7 @@ node_modules/
 *.log
 dist/
 .DS_Store
+# Copied from node_modules at build time.
+/web/public/excalidraw/
+# Your own deployment tweaks (e.g. build from source, mount a NAS share).
+docker-compose.override.yml

@@ -17,7 +17,10 @@ const dataDir = resolve(env("SINK_DATA_DIR", "./data")!);
 export const config = {
   port: Number(env("SINK_PORT", "8787")),
   dataDir,
-  mediaDir: join(dataDir, "media"),
+  // The markdown vault. Can be a NAS share; never put the database there (SQLite over SMB corrupts).
+  notesDir: resolve(env("SINK_NOTES_DIR", join(dataDir, "notes"))!),
+  // CIFS has no inotify, so edits made outside Sink (Obsidian, Finder) are found by rescanning.
+  notesScanSeconds: Number(env("SINK_NOTES_SCAN_SECONDS", "30")),
   dbPath: join(dataDir, "sink.db"),
   webDir: env("SINK_WEB_DIR") ? resolve(env("SINK_WEB_DIR")!) : undefined,
 
@@ -27,39 +30,41 @@ export const config = {
   secureCookies: env("SINK_SECURE_COOKIES", "false") === "true",
 
   oidc: {
-    // e.g. https://auth.notahomelab.xyz/application/o/sink/
+    // The provider's issuer URL, e.g. https://auth.example.com/application/o/sink/ (authentik) or https://id.example.com (Pocket ID)
     issuer: env("SINK_OIDC_ISSUER") ?? "",
     clientId: env("SINK_OIDC_CLIENT_ID") ?? "",
     clientSecret: env("SINK_OIDC_CLIENT_SECRET") ?? "",
     allowedUsers: list(env("SINK_OIDC_ALLOWED_USERS")),
     allowedGroups: list(env("SINK_OIDC_ALLOWED_GROUPS")),
+    // Let every account the provider will sign in through. Only for providers that already restrict the app.
+    allowAnyone: env("SINK_OIDC_ALLOW_ANY_USER", "false") === "true",
+    // Shown on the sign-in button: "Sign in with <name>".
+    name: env("SINK_OIDC_NAME", "")!,
   },
 
-  // Where the user lives: AI resolves "Friday 9am" and writes dates in this zone.
-  timeZone: env("SINK_TIMEZONE", "Pacific/Auckland")!,
+  // Where the user lives: todo reminders and note dates use this zone.
+  timeZone: env("SINK_TIMEZONE", process.env.TZ || "UTC")!,
 
   // Daily database snapshots in data/backups; how many to keep (0 turns them off).
   backupDir: join(dataDir, "backups"),
   backupKeep: Number(env("SINK_BACKUP_KEEP", "7")),
 
-  // How often each watched product page is re-checked.
-  priceCheckHours: Number(env("SINK_PRICE_CHECK_HOURS", "12")),
-
   maxUploadBytes: Number(env("SINK_MAX_UPLOAD_MB", "25")) * 1024 * 1024,
 
-  ai: {
-    // Any OpenAI-compatible endpoint: OpenRouter by default, Ollama via http://ollama:11434/v1.
-    baseUrl: env("SINK_AI_BASE_URL", "https://openrouter.ai/api/v1")!.replace(/\/$/, ""),
-    apiKey: env("SINK_AI_API_KEY"),
-    // Comma-separated fallback chain, tried in order.
-    models: list(env("SINK_AI_MODELS")),
-    maxImagePx: Number(env("SINK_AI_MAX_IMAGE_PX", "1024")),
-    timeoutMs: Number(env("SINK_AI_TIMEOUT_MS", "90000")),
-  },
-
-  worker: {
-    pollMs: Number(env("SINK_WORKER_POLL_MS", "2000")),
-    maxAttempts: Number(env("SINK_WORKER_MAX_ATTEMPTS", "5")),
+  // Email in: a mailbox that forwarded mail goes to. Off while host is empty.
+  imap: {
+    host: env("SINK_IMAP_HOST") ?? "",
+    port: Number(env("SINK_IMAP_PORT", "993")),
+    secure: env("SINK_IMAP_SECURE", "true") !== "false",
+    user: env("SINK_IMAP_USER") ?? "",
+    password: env("SINK_IMAP_PASSWORD") ?? "",
+    mailbox: env("SINK_IMAP_MAILBOX", "INBOX")!,
+    processedFolder: env("SINK_IMAP_PROCESSED_FOLDER", "Sink/Processed")!,
+    rejectedFolder: env("SINK_IMAP_REJECTED_FOLDER", "Sink/Rejected")!,
+    // Addresses or @domains whose mail is accepted; empty accepts nothing.
+    allowedFrom: list(env("SINK_IMAP_ALLOWED_FROM")).map((a) => a.toLowerCase()),
+    // Only trust Authentication-Results added by this server (the first word of the header, e.g. mx.google.com).
+    authservId: env("SINK_IMAP_AUTHSERV_ID", "")!,
   },
 };
 

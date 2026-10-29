@@ -215,6 +215,81 @@ export const migrations: string[] = [
     VALUES (new.rowid, new.title, new.summary, new.note_text, new.ocr_text, new.tags);
   END;
   `,
+  // Notes: an index of the markdown vault (the files on the NAS are the truth), and captures promoted into it.
+  `
+  CREATE TABLE notes (
+    path TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT '[]',
+    body TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    indexed_at INTEGER NOT NULL
+  );
+  CREATE INDEX notes_mtime ON notes(mtime DESC);
+  CREATE VIRTUAL TABLE notes_fts USING fts5(
+    path, title, body, tags,
+    content='notes', content_rowid='rowid',
+    tokenize='porter unicode61 remove_diacritics 2'
+  );
+  CREATE TRIGGER notes_ai AFTER INSERT ON notes BEGIN
+    INSERT INTO notes_fts(rowid, path, title, body, tags) VALUES (new.rowid, new.path, new.title, new.body, new.tags);
+  END;
+  CREATE TRIGGER notes_ad AFTER DELETE ON notes BEGIN
+    INSERT INTO notes_fts(notes_fts, rowid, path, title, body, tags) VALUES ('delete', old.rowid, old.path, old.title, old.body, old.tags);
+  END;
+  CREATE TRIGGER notes_au AFTER UPDATE OF path, title, body, tags ON notes BEGIN
+    INSERT INTO notes_fts(notes_fts, rowid, path, title, body, tags) VALUES ('delete', old.rowid, old.path, old.title, old.body, old.tags);
+    INSERT INTO notes_fts(rowid, path, title, body, tags) VALUES (new.rowid, new.path, new.title, new.body, new.tags);
+  END;
+  ALTER TABLE captures ADD COLUMN note_path TEXT;
+  `,
+  // Todos: checkbox lines found in notes, re-read whenever their note is indexed. Moves and deletes follow the note.
+  `
+  CREATE TABLE todos (
+    path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE,
+    line INTEGER NOT NULL,
+    raw TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL,
+    due TEXT,
+    remind_at INTEGER,
+    done_on TEXT,
+    PRIMARY KEY (path, line)
+  );
+  CREATE INDEX todos_open ON todos(status, due);
+  `,
+  // Keep-style pin and card colour, read from frontmatter. mtime 0 makes the next scan re-read every note.
+  `
+  ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE notes ADD COLUMN color TEXT;
+  UPDATE notes SET mtime = 0;
+  `,
+  // Emails already filed, so a failed move out of the inbox can't file them twice after a restart.
+  `
+  CREATE TABLE email_seen (message_id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+  `,
+  // Sink is notes only now: the screenshot inbox (captures, AI actions, collections, price watch, embeddings) goes.
+  `
+  DROP TABLE IF EXISTS price_points;
+  DROP TABLE IF EXISTS price_watches;
+  DROP TABLE IF EXISTS capture_vectors;
+  DROP TABLE IF EXISTS capture_collections;
+  DROP TABLE IF EXISTS collections;
+  DROP TABLE IF EXISTS actions;
+  DROP TABLE IF EXISTS jobs;
+  DROP TRIGGER IF EXISTS captures_ai;
+  DROP TRIGGER IF EXISTS captures_ad;
+  DROP TRIGGER IF EXISTS captures_au;
+  DROP TABLE IF EXISTS captures_fts;
+  DROP TABLE IF EXISTS captures;
+  `,
+  // What a token may do: "full" (browsers, the phone) or "mcp" (AI assistants: notes and todos only, never other tokens).
+  `
+  ALTER TABLE tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'full';
+  UPDATE tokens SET scope = 'mcp' WHERE name LIKE '% (MCP)';
+  `,
 ];
 
 export function openDb(path: string): Database {

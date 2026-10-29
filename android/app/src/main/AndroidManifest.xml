@@ -3,11 +3,6 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
@@ -31,61 +26,20 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- authentik sign-in comes back here via the server's hand-back redirect. -->
+            <!-- OIDC sign-in comes back here via the server's hand-back redirect. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="nz.joshp.sink" android:host="auth" />
             </intent-filter>
-        </activity>
-
-        <!-- Share target + post-screenshot note sheet. Floats over whatever app you were in. -->
-        <activity
-            android:name=".ui.CaptureActivity"
-            android:exported="true"
-            android:excludeFromRecents="true"
-            android:launchMode="singleTask"
-            android:taskAffinity="nz.joshp.sink.capture"
-            android:theme="@style/Theme.Sink.Translucent"
-            android:windowSoftInputMode="adjustResize">
+            <!-- Text shared from any app (a link, a quote) opens as a new note. -->
             <intent-filter android:label="@string/share_label">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="image/*" />
-            </intent-filter>
-            <intent-filter android:label="@string/share_label">
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="image/*" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
-
-        <!-- The "Essential Key": accessibility button / tile screenshot without a consent prompt. -->
-        <service
-            android:name=".capture.CaptureAccessibilityService"
-            android:exported="false"
-            android:label="@string/accessibility_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service" />
-        </service>
-
-        <receiver
-            android:name=".widget.SinkWidgetReceiver"
-            android:exported="true"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/sink_widget" />
-        </receiver>
 
         <receiver
             android:name=".reminders.ReminderReceiver"
@@ -96,40 +50,15 @@
             </intent-filter>
         </receiver>
 
-        <!-- Default digital assistant: hold power to stash the screen with its text and URL. -->
-        <service
-            android:name=".capture.SinkAssistantService"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_VOICE_INTERACTION">
-            <intent-filter>
-                <action android:name="android.service.voice.VoiceInteractionService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.voice_interaction"
-                android:resource="@xml/assistant" />
-        </service>
-        <service
-            android:name=".capture.SinkAssistantSessionService"
-            android:exported="true"
-            android:permission="android.permission.BIND_VOICE_INTERACTION" />
-        <service
-            android:name=".capture.SinkRecognitionService"
-            android:exported="true"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.speech.RecognitionService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.speech"
-                android:resource="@xml/recognition_service" />
-        </service>
+        <receiver
+            android:name=".reminders.TodoReminderReceiver"
+            android:exported="false" />
 
         <service
-            android:name=".capture.CaptureTileService"
+            android:name=".capture.NoteTileService"
             android:exported="true"
-            android:icon="@drawable/ic_tile"
-            android:label="@string/tile_label"
+            android:icon="@drawable/ic_note_tile"
+            android:label="@string/note_tile_label"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

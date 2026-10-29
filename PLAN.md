@@ -1,184 +1,121 @@
 # Sink — plan
 
-Name: Sink. Pixel Screenshots + Nothing Essential Space, self-hosted.
+Self-hosted notes app replacing Google Keep, Notion and Google Docs (personal use): a Keep-style grid of notes
+that open fullscreen in an Obsidian-style markdown editor, plus todos, Excalidraw boards and email in.
+Web client + Android app, both talking to one Docker container. One user per install.
 
-Capture a screen (plus optional voice/text note saying *why*), AI reads it, pulls out
-what matters, offers actions, and makes everything searchable later. Android app +
-web client, both talking to one Docker container on `thonk`.
+History: Sink started (2026-10-22) as a Pixel Screenshots / Nothing Essential Space clone. On 2026-10-29 it became a
+notes app, and the screenshot inbox (captures, AI extraction, OCR, collections, price watch, semantic search) was
+removed along with its data.
 
 ## Goals
 
-- One-gesture capture on Android, with intent note.
-- AI extraction: type, title, summary, key fields, suggested actions.
-- Natural-language search across everything.
-- Free or near-free to run. No paid SaaS beyond optional OpenRouter pennies.
-- Material 3 Expressive everywhere, one shared seed color.
-- Single container, single volume, trivial backup.
+- Notes are plain markdown files on the NAS, laid out the way Obsidian expects. Losing the database loses nothing
+  a rescan can't rebuild.
+- Keep's feel for capture and browsing (grid, pin, colour, take-a-note), Obsidian's for writing (live preview).
+- Works offline on the phone; never silently overwrites an edit made elsewhere.
+- Material 3 Expressive everywhere, one shared seed colour.
 
-## Non-goals (v1)
+## Non-goals
 
-- Multi-user / sharing.
-- iOS, Mac capture (web client covers desktop viewing + upload).
-- Audio-only "Flip to Record" captures (maybe v2).
+- Multi-user, sharing, real-time co-editing.
+- Notion-style databases (relations, rollups).
 
 ## Architecture
 
 ```
-Android (Kotlin/Compose)             Web (Vite + @m3e/web)
-  capture -> upload queue               browse / search / edit / upload
-          \                           /
-           HTTPS + bearer token (Cloudflare tunnel or LAN)
-                        |
+Android (Kotlin/Compose + WebView editor)      Web (Vite + @m3e/web + CodeMirror)
+                  \                              /
+          HTTPS + bearer token / cookie (Cloudflare tunnel or LAN)
+                               |
         sink container (Bun + Hono)  ── serves API + built web client
-          ├─ SQLite (WAL) + FTS5 (+ sqlite-vec, phase 3)
-          ├─ /data/media  (original PNG/JPEG + thumbnails)
-          └─ job worker  -> AI provider (OpenRouter | Ollama)
+          ├─ /notes  NAS vault (markdown, attachments/, .trash/)
+          ├─ /data   local disk: SQLite (index, todos, tokens, OAuth), backups
+          └─ IMAP watcher (optional)
 ```
 
-Single process: API, static web, and an in-process job queue (SQLite table polled by
-the worker). No Redis, no Postgres. One volume: `/data`.
+## Vault
 
-## AI: cheap or free
-
-Provider interface, picked by env var. Two implementations:
-
-| Provider | Use | Cost |
-|---|---|---|
-| `openrouter` | default. Vision model via OpenAI-compatible API. Model id from env, so swapping to whatever `:free` vision model is current is a config change | free tier (rate-limited) or cents per 1k captures |
-| `ollama` | fully local. Point at an Ollama URL (thonk, or a box with a GPU). Small vision model (Qwen-VL / Gemma 3 class) | free, slower |
-
-Keeping cost down:
-- **OCR first, locally.** Android does ML Kit on-device text recognition (free, offline)
-  and sends text with the image. Web uploads fall back to Tesseract in the container.
-  The LLM gets OCR text + downscaled image (max 1024px) so token use stays small.
-- **Voice notes transcribed on-device** with Android `SpeechRecognizer`, so only text
-  goes to the server. No Whisper container needed.
-- One LLM call per capture, strict JSON schema output. Retry with backoff on free-tier
-  429s. Captures stay usable (OCR-searchable) even if AI is down.
-- Fallback chain: primary model -> secondary model -> OCR-only.
-
-Extraction schema (LLM output):
-
-```json
-{
-  "kind": "event|receipt|product|place|code|article|message|recipe|other",
-  "title": "string",
-  "summary": "1-2 sentences",
-  "entities": { "dates": [], "urls": [], "prices": [], "addresses": [], "people": [] },
-  "tags": ["string"],
-  "actions": [{ "type": "reminder|calendar|todo|open_url|copy", "label": "string", "payload": {} }]
-}
-```
-
-## Data model (SQLite)
-
-- `captures`: id, created_at, source (`share|auto|tile|web`), app_package, image_path,
-  thumb_path, width, height, note_text, ocr_text, status (`pending|processing|done|failed`),
-  kind, title, summary, tags (json), entities (json), pinned, archived_at, deleted_at
-- `actions`: id, capture_id, type, label, payload (json), state (`suggested|accepted|done|dismissed`), due_at
-- `collections` + `capture_collections`: user folders/boards.
-- `jobs`: id, capture_id, kind, attempts, run_after, last_error.
-- `captures_fts`: FTS5 over title, summary, note_text, ocr_text, tags.
-- phase 3: `capture_vec` (sqlite-vec) for semantic search, embeddings via same provider.
-
-## API (REST, JSON, bearer token)
-
-- `POST /api/captures` multipart: image, note, ocr_text, source, app_package, client_id (idempotency)
-- `GET /api/captures?q=&kind=&tag=&collection=&cursor=`
-- `GET/PATCH/DELETE /api/captures/:id`, `POST /api/captures/:id/reprocess`
-- `GET /api/media/:id/{original,thumb}`
-- `PATCH /api/actions/:id`
-- `GET /api/digest`: unreviewed + due items
-- `GET /api/health`
-- `POST /api/captures/bulk`: one change (flags, tags, collections) across many captures.
-- `/api/collections` CRUD.
-- Price watch: `PATCH /captures/:id {watch_price}` on products with a link. Server re-checks every
-  `SINK_PRICE_CHECK_HOURS` (12) reading the page's JSON-LD / meta price, refuses LAN/loopback hosts on every redirect
-  hop, and records a `price_drop` action on a drop over 1%. `GET /api/alerts` lists them; the phone notifies once each.
-- `/mcp`: MCP (Streamable HTTP, stateless) for AI assistants, same bearer tokens. Tools: search_captures,
-  get_capture (optionally with the image), list_collections, upcoming_reminders, update_capture, create_collection.
-  Connectors (claude.ai, ChatGPT, Poke) use OAuth 2.1 served by Sink itself: RFC 8414/9728 discovery, dynamic
-  client registration, code + PKCE S256, rotating refresh tokens; sign-in is the authentik login, then a consent page.
-  Claude Code can use the same URL, or a token minted in the web "Connect an AI assistant" dialog (`POST /api/auth/tokens`).
-- Auth: authentik OIDC (see Decisions). `GET /api/auth/oidc/start`, `/oidc/callback`,
-  `POST /oidc/exchange` (Android), `/logout`, `/me`, `/tokens`.
-
-## Android app (Kotlin, Compose, M3 Expressive)
-
-minSdk 30 (needed for accessibility `takeScreenshot`), target latest.
-
-Capture modes, all landing in one bottom sheet ("add note? speak / type / skip"):
-1. **Share target.** Share from the system screenshot preview or any image. Zero perms.
-2. **Auto-import.** Watch `Screenshots/` via MediaStore observer + WorkManager;
-   new screenshots get uploaded automatically (Pixel Screenshots behaviour). Toggle in settings.
-3. **Quick Settings tile / button.** Optional AccessibilityService that calls
-   `takeScreenshot()` with no MediaProjection consent prompt each time, then pops the note sheet.
-   This is the Essential Key equivalent. Can be mapped to a gesture or button-mapper app.
-
-Pipeline: capture -> on-device ML Kit OCR -> Room upload queue -> WorkManager uploads
-when online (retries, idempotent `client_id`) -> polls / refreshes for AI result.
-
-Screens: Home (grid, staggered, grouped by day), Search (M3 search bar, kind chips),
-Detail (image, summary, entities, action chips -> Calendar/Reminder intents, note),
-Collections, Settings (server URL, login, auto-import, provider status).
-Actions open intents locally: `CalendarContract` insert, alarm/reminder, browser, clipboard.
-
-Theme: `MaterialExpressiveTheme`, dynamic color on Android 12+ with seed fallback,
-expressive motion, shape morphing on capture button, Material Symbols.
-
-## Web client (Vite + @m3e/web)
-
-Same stack as `~/material`. No framework unless it starts to hurt; plain modules +
-`@m3e/web` components, small router. Built into the container and served by Hono.
-
-- Masonry grid, infinite scroll, day headers.
-- Search bar with live FTS results, kind/tag chips.
-- Detail side sheet: zoomable image, editable title/note/tags, actions, reprocess.
-- Drag-and-drop / paste upload (desktop capture path).
-- Digest view: "saved this week, still care?" with keep / archive / done swipes.
-- Theme: `<m3e-theme>` with the shared seed color, dark mode toggle.
-
-## Deploy (thonk)
-
-- `Dockerfile`: multi-stage. Build web with Bun, then runtime `oven/bun:slim` + tesseract.
-- `docker-compose.yml`: one service, volume `./data:/data`, env file, port 8787.
-- Deploy: rsync repo (minus `data/`, `.env`, `node_modules`, `dist`, `android`) to `josh@192.168.86.245:~/sink`, then `docker compose up -d --build` there. No git checkout on thonk.
-- Add to thonk's Docker host; public access via Cloudflare tunnel (same pattern as
-  `meow.110463.xyz`) or LAN-only to start.
-- Ollama optional: separate container, `SINK_OLLAMA_URL=http://ollama:11434`, same network.
-  Remember thonk's containers must talk by container name, not host IP.
-- Backup = copy `/data`. Server writes a daily `VACUUM INTO` snapshot to `/data/backups` (keeps `SINK_BACKUP_KEEP`, default 7).
-
-## Repo layout
+Whatever folder is mounted at `/notes` (`SINK_NOTES_DIR`): `./notes`, a NAS share, an Obsidian vault.
 
 ```
-sink/
-  server/     Bun + Hono + bun:sqlite
-  web/        Vite + @m3e/web
-  android/    Gradle, Compose
-  Dockerfile
-  docker-compose.yml
-  .env.example
+notes/
+  Inbox/                  emailed notes land here
+  <any folders>/*.md
+  Boards/*.excalidraw.md
+  attachments/            images and files referenced from notes (![[name.png]])
+  Todo.md                 quick todos
+  .trash/                 deleted notes (same convention as Obsidian)
 ```
 
-## Phases
+- **Index only in SQLite** (`notes` + `notes_fts`, `todos`): path, title, tags, body, hash, mtime, pinned, colour.
+- **Exact text.** The server never reformats markdown. Title = first `# heading`, else frontmatter `title`, else
+  file name. Tags = frontmatter `tags` + inline `#tags`. Keep's pin and colour are frontmatter `pinned:` / `color:`.
+- **Saves carry the hash the client last saw**; a mismatch is a 409 with the current file, and clients keep their
+  version as a "(conflict …)" sibling note. Writes are atomic (temp file + rename).
+- **Paths are checked**: relative, no `..`, no hidden folders, `.md` only for notes.
+- **External edits** (Obsidian via Syncthing, Finder over SMB): CIFS has no inotify, so the vault is rescanned every
+  `SINK_NOTES_SCAN_SECONDS` (30) by mtime + size; opening a note re-reads it anyway.
+- Network shares: a `soft` CIFS/NFS mount turns an outage into EIO, which the API returns as 503 instead of hanging.
+  SQLite never goes on the share. Symlinks are followed only while they stay inside the vault.
 
-1. **Server core.** Schema, upload, media, FTS search, auth, OpenRouter provider,
-   job worker, Docker image. Test with curl.
-2. **Web client.** Grid, search, detail, upload, login. Deploy to thonk.
-3. **Android MVP.** Login, share target, note sheet with voice, ML Kit OCR, upload queue, grid + search + detail.
-4. **Android capture++.** Auto-import, accessibility tile capture, action intents.
-5. **Smarts.** Ollama provider, embeddings + semantic search, digest, collections, reminders sync.
+## Todos
+
+Checkbox lines in any note, in Obsidian Tasks syntax so both apps agree: `- [ ] Pay rates 📅 2026-11-02`,
+done `- [x] … ✅ 2026-10-29`, reminder time `(@2026-10-30 18:00)` (Obsidian Reminder plugin syntax). A due date with
+no time reminds at 9am. The web lists and ticks them; Android also schedules the reminder notifications.
+
+## Boards
+
+Excalidraw, loaded on demand on the web. Files use the Obsidian Excalidraw plugin's format (plain ```json drawing
+block; compressed-json is read too). Pasted images go to `attachments/` and `## Embedded Files`. Fonts are copied
+from node_modules at build, so no CDN. Android opens boards in the browser for now.
+
+## Email in (optional)
+
+IMAP IDLE on a dedicated mailbox. Only mail From `SINK_IMAP_ALLOWED_FROM` with an aligned DKIM/SPF pass in the
+topmost `Authentication-Results` is accepted. `sink+todo@…` appends `- [ ] subject` to `Todo.md`; anything else
+becomes a note in `Inbox/` with attachments embedded. Handled mail moves to `Sink/Processed` (or `Sink/Rejected`);
+handled Message-IDs are remembered in SQLite.
+
+## API (REST, JSON, bearer token or session cookie)
+
+- `GET /api/notes` (all, with card excerpts) · `GET /api/notes?q=` (search with snippets)
+- `GET/PUT/DELETE /api/notes/file?path=` · `POST /api/notes` · `PATCH /api/notes/meta?path=` · `POST /api/notes/move`
+- `POST /api/notes/folders` · `POST /api/notes/scan` · `GET /api/notes/attachment?name=|path=` · `POST /api/notes/attachments`
+- `GET /api/todos?view=open|done|all` · `POST /api/todos` · `POST /api/todos/toggle`
+- `/mcp`: MCP for AI assistants (search_notes, read_note, save_note, list_todos, add_todo). Connectors sign in
+  with OAuth 2.1 served by Sink (OIDC login, then consent); Claude Code can use a token from Settings. Assistant
+  tokens have the `mcp` scope: notes and todos only, never `/api/auth/tokens`.
+- Auth: any OIDC provider; typed allowlist (`email:`, `user:`, `sub:`); Sink refuses to start with nobody allowed.
+  Cookie-authenticated writes must come from a `SINK_PUBLIC_URLS` origin. `GET /api/auth/oidc/start`, `/oidc/callback`, `POST /oidc/exchange` (Android), `/logout`,
+  `/me`, `/tokens`.
+
+## Clients
+
+- **Web**: notes grid (pinned first, folder chips, search, take-a-note, new board), fullscreen note in the
+  CodeMirror editor (`web/src/editor.js`: Obsidian-style live preview, properties, callouts, tasks, embeds,
+  wikilinks), todos, settings (theme, MCP connector, devices).
+- **Android**: Notes, Todos and Settings tabs; the note screen hosts the same editor (`web/editor.html`, copied into
+  the APK at build, so `bun run build` in `web/` first). Offline edits queue in WorkManager. "New note" Quick Settings
+  tile; text shared from other apps opens a new note.
+
+## Release
+
+- Push to `main`: CI runs the tests, and `ghcr.io/heycastawhat/sink:main` / `:latest` is built for amd64 and arm64.
+- Tag `v1.2.3`: also `:1.2.3` / `:1.2`, and a signed APK on the GitHub release (key from Actions secrets
+  `SINK_KEYSTORE_BASE64`, `SINK_KEYSTORE_PASSWORD`, `SINK_KEY_ALIAS`, `SINK_KEY_PASSWORD`).
+- The image starts as root only to chown fresh `/data` and `/notes` folders, then drops to `PUID:PGID`.
+
+## Next
+
+- Tables in live preview; syntax colouring in code blocks.
+- Boards on Android (WebView with the board bundle).
+- Version history; Keep (Takeout) and Notion import.
 
 ## Decisions
 
-- Name: **Sink**.
-- Seed color: **`#6750A4`** (M3 baseline purple, same as the M3 playground). Dynamic color still wins on Android 12+ if enabled in settings.
-- AI: OpenRouter default. thonk has no discrete GPU (Intel UHD 620 only), so local Ollama vision is impractical there; only worth it pointed at another box with a GPU.
-- Public at `sink.notahomelab.xyz` via the existing Cloudflare tunnel on thonk.
-- Auth: **authentik only** (`auth.notahomelab.xyz`, provider/app slug `sink`, bound to user `josh`).
-  OIDC code flow + PKCE on the server. Web gets an httpOnly cookie; Android opens a Custom Tab and
-  gets a one-time code back on `nz.joshp.sink://auth`, swapped (with the app's own PKCE verifier)
-  for a per-device revocable token. No password login.
-- Android package: `nz.joshp.sink`.
-- Auto-import screenshots: **on by default** (can be turned off in settings).
+- Name: **Sink**. Seed colour **`#6750A4`**. Android package `nz.joshp.sink`.
+- Auth: OIDC only (no passwords stored); any provider.
+- Editor: CodeMirror 6 on raw markdown (no WYSIWYG round-tripping). It must be given `root: document`, because the web
+  app sits inside `<m3e-theme>` and CodeMirror otherwise follows the slot into its shadow root and loses the caret.

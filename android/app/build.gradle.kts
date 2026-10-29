@@ -1,3 +1,5 @@
+import org.gradle.api.file.DirectoryProperty
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -10,13 +12,25 @@ android {
 
     defaultConfig {
         applicationId = "nz.joshp.sink"
-        // 30 for AccessibilityService.takeScreenshot().
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
-        // Target device is a Pixel 9 (arm64 only); drops ML Kit's other native libs.
-        ndk { abiFilters += "arm64-v8a" }
+        // CI sets these from the release tag (v1.2.3 -> 1.2.3, code from the run number).
+        versionCode = providers.environmentVariable("SINK_VERSION_CODE").orNull?.toInt() ?: 1
+        versionName = providers.environmentVariable("SINK_VERSION_NAME").orNull ?: "0.1.0-dev"
+    }
+
+    // Release key from the environment (GitHub Actions secrets). Without it, release builds use the debug key,
+    // which is fine for trying a build locally but can't update an APK from a GitHub release.
+    val keystore = providers.environmentVariable("SINK_KEYSTORE_FILE").orNull
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = providers.environmentVariable("SINK_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("SINK_KEY_ALIAS").get()
+                keyPassword = providers.environmentVariable("SINK_KEY_PASSWORD").get()
+            }
+        }
     }
 
     buildTypes {
@@ -24,8 +38,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Sideloaded personal app: sign release with the debug key until there is a real one.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
@@ -36,6 +49,58 @@ android {
 
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG gates the emulator sign-in shortcut.
+        buildConfig = true
+    }
+}
+
+/**
+ * The note editor is the web app's CodeMirror page (web/dist/editor.html), shipped inside the APK so notes edit
+ * offline. The main app's and the board's bundles aren't needed here.
+ */
+abstract class CopyEditorTask : DefaultTask() {
+    @get:Internal
+    abstract val webDist: DirectoryProperty
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    val distFiles get() = webDist.asFileTree.matching { include("editor.html", "assets/**") }
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val dist = webDist.get().asFile
+        if (!dist.resolve("editor.html").isFile) {
+            throw GradleException("${dist.resolve("editor.html")} is missing: run `bun run build` in web/ first")
+        }
+        val out = outputDir.get().asFile.resolve("web")
+        out.deleteRecursively()
+        dist.resolve("editor.html").copyTo(out.resolve("editor.html"))
+        // Only what the editor page loads, following imports from file to file.
+        val assets = dist.resolve("assets")
+        val ref = Regex("""[\"'(/]([\w.-]+\.(?:js|css))[\"')]""")
+        val seen = mutableSetOf<String>()
+        val queue = ArrayDeque(ref.findAll(dist.resolve("editor.html").readText()).map { it.groupValues[1] }.toList())
+        while (queue.isNotEmpty()) {
+            val name = queue.removeFirst()
+            val file = assets.resolve(name)
+            if (!seen.add(name) || !file.isFile) continue
+            file.copyTo(out.resolve("assets/$name"))
+            if (name.endsWith(".js")) queue.addAll(ref.findAll(file.readText()).map { it.groupValues[1] })
+        }
+    }
+}
+
+val copyEditor = tasks.register<CopyEditorTask>("copyEditor") {
+    webDist.set(rootProject.layout.projectDirectory.dir("../web/dist"))
+    outputDir.set(layout.buildDirectory.dir("generated/editorAssets"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(copyEditor, CopyEditorTask::outputDir)
     }
 }
 
@@ -59,9 +124,5 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.coil.compose)
-    implementation(libs.coil.okhttp)
-    implementation(libs.mlkit.text)
-    implementation(libs.glance.appwidget)
-    implementation(libs.glance.material3)
+    implementation(libs.androidx.webkit)
 }

@@ -2,80 +2,35 @@ import { describe, expect, test, beforeEach } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import sharp from "sharp";
 import { migrations, openDb } from "./db";
 import { Auth, s256 } from "./auth";
 import { Oidc } from "./oidc";
-import { MediaStore } from "./media";
-import { Worker, dueAt } from "./worker";
 import { createApp } from "./app";
-import { ProviderError, type Provider } from "./ai/provider";
-import { buildUserText, parseExtraction, localIso, utcOffset, type ExtractInput } from "./ai/extract";
-import { toFtsQuery } from "./routes/captures";
-import { VectorIndex, fuse, type Embedder } from "./semantic";
 import { Backups } from "./backup";
-import { PriceWatcher, extractPrice } from "./prices";
-import { assertPublicUrl, pageText } from "./net";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
+import { Vault, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery } from "./notes";
+import { localIso, localTime, utcOffset } from "./time";
+import { parseTodos, setDone, todoLine } from "./todos";
 
-/** Embeds by concept so synonyms land together, the way a real model would. */
-class FakeEmbedder implements Embedder {
-  model = "fake-embedder";
-  minLift = 0.3;
-  band = 1;
-  static concepts = [
-    ["wifi", "internet", "network", "password", "router"],
-    ["gig", "concert", "music", "tickets", "band"],
-    ["receipt", "groceries", "total", "supermarket"],
-  ];
-  async embed(texts: string[]) {
-    return texts.map((t) => {
-      const words = t.toLowerCase().match(/[a-z]+/g) ?? [];
-      const v = new Float32Array(FakeEmbedder.concepts.length + 1);
-      FakeEmbedder.concepts.forEach((group, i) => (v[i] = words.filter((w) => group.includes(w)).length));
-      v[v.length - 1] = 0.01;
-      const norm = Math.hypot(...v);
-      return v.map((x) => x / norm);
-    });
-  }
-}
-
-class FakeProvider implements Provider {
-  enabled = true;
-  calls: ExtractInput[] = [];
-  fail: ProviderError | null = null;
-  async extract(input: ExtractInput) {
-    this.calls.push(input);
-    if (this.fail) throw this.fail;
-    return {
-      model: "fake",
-      extraction: parseExtraction(
-        JSON.stringify({
-          kind: "event",
-          title: "Laneway gig",
-          summary: "Concert at the Powerstation",
-          tags: ["Music", "gig"],
-          entities: { dates: ["2026-11-01T20:00:00+13:00"] },
-          actions: [{ type: "calendar", label: "Add to calendar", payload: { title: "Gig" } }],
-        }),
-      ),
-    };
-  }
-}
-
-const png = await sharp({ create: { width: 64, height: 128, channels: 3, background: "#c8693a" } })
-  .png()
-  .toBuffer();
+// A 1x1 PNG, for attachment uploads.
+const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 
 let setup: ReturnType<typeof makeSetup>;
 
 const ISSUER = "https://auth.test/application/o/sink/";
 const PUBLIC = "https://sink.test";
 
-/** Stand-in for authentik: discovery + token endpoint, minting an id_token for `user`. */
+/** Stand-in for an OIDC provider: discovery + token endpoint, minting an id_token for `user`. */
 function fakeAuthentik() {
-  const state = { nonce: "", user: { sub: "abc123", preferred_username: "josh", email: "josh@example.com" }, tokenCalls: 0 };
+  const state = {
+    nonce: "",
+    user: { sub: "abc123", preferred_username: "sam", email: "sam@example.com", email_verified: true } as Record<string, unknown>,
+    tokenCalls: 0,
+    authMethods: undefined as string[] | undefined,
+    lastToken: null as { headers: Headers; body: URLSearchParams } | null,
+  };
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/.well-known/openid-configuration")) {
@@ -83,11 +38,13 @@ function fakeAuthentik() {
         issuer: ISSUER,
         authorization_endpoint: "https://auth.test/application/o/authorize/",
         token_endpoint: "https://auth.test/application/o/token/",
+        ...(state.authMethods && { token_endpoint_auth_methods_supported: state.authMethods }),
       });
     }
     if (url === "https://auth.test/application/o/token/") {
       state.tokenCalls++;
       const body = new URLSearchParams(String(init?.body));
+      state.lastToken = { headers: new Headers(init?.headers), body };
       if (body.get("code") !== "good-code" || !body.get("code_verifier")) return new Response("bad", { status: 400 });
       const claims = { iss: ISSUER, aud: "sink-client", exp: Date.now() / 1000 + 300, nonce: state.nonce, ...state.user };
       const id_token = `x.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`;
@@ -98,34 +55,33 @@ function fakeAuthentik() {
   return { state, fetchImpl };
 }
 
-function makeSetup(allowedUsers: string[] = []) {
+function makeSetup(allowedUsers: string[] = [], oidcExtra: { clientSecret?: string; allowAnyone?: boolean } = {}) {
   const db = openDb(":memory:");
-  const media = new MediaStore(mkdtempSync(join(tmpdir(), "sink-test-")));
+  const vaultDir = mkdtempSync(join(tmpdir(), "sink-vault-"));
+  const vault = new Vault(db, vaultDir);
   const auth = new Auth(db);
   const authentik = fakeAuthentik();
   const oidc = new Oidc(
-    { issuer: ISSUER, clientId: "sink-client", clientSecret: "secret", allowedUsers, allowedGroups: [] },
+    {
+      issuer: ISSUER,
+      clientId: "sink-client",
+      clientSecret: oidcExtra.clientSecret ?? "secret",
+      allowedUsers,
+      allowedGroups: [],
+      // Most tests don't care who signs in.
+      allowAnyone: oidcExtra.allowAnyone ?? allowedUsers.length === 0,
+      name: "Pocket ID",
+    },
     authentik.fetchImpl,
   );
-  const provider = new FakeProvider();
-  const index = new VectorIndex(db, new FakeEmbedder());
-  // Pages a bare link reads as, instead of the network.
-  const pages = new Map<string, string>();
-  const readLink = async (url: string) => {
-    if (!pages.has(url)) throw new Error("page returned HTTP 404");
-    return pages.get(url)!;
-  };
-  const worker = new Worker(db, media, provider, { pollMs: 1000, maxAttempts: 3 }, 512, index, "Pacific/Auckland", readLink);
   const app = createApp({
     db,
-    media,
+    vault,
     auth,
     oidc,
-    index,
-    provider,
     config: { secureCookies: false, maxUploadBytes: 5 * 1024 * 1024, webDir: undefined, publicUrls: [PUBLIC] },
   });
-  return { db, app, provider, worker, authentik, auth, pages };
+  return { db, app, authentik, auth, vault, vaultDir };
 }
 
 /** Runs /oidc/start, plays authentik, returns the callback response. */
@@ -141,20 +97,6 @@ async function login(): Promise<string> {
   return setup.auth.issueToken("test", "abc123");
 }
 
-async function upload(token: string, fields: Record<string, string> = {}, variant = 0) {
-  const form = new FormData();
-  const bytes = variant
-    ? await sharp({ create: { width: 64, height: 128, channels: 3, background: { r: variant * 40, g: 10, b: 10 } } }).png().toBuffer()
-    : png;
-  form.set("image", new File([bytes], "s.png", { type: "image/png" }));
-  for (const [k, v] of Object.entries(fields)) form.set(k, v);
-  return setup.app.request("/api/captures", {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}` },
-    body: form,
-  });
-}
-
 const get = (token: string, path: string) =>
   setup.app.request(path, { headers: { authorization: `Bearer ${token}` } });
 
@@ -164,8 +106,9 @@ beforeEach(() => {
 
 describe("auth", () => {
   test("rejects unauthenticated api calls", async () => {
-    expect((await setup.app.request("/api/captures")).status).toBe(401);
-    expect((await setup.app.request("/api/media/x/thumb")).status).toBe(401);
+    expect((await setup.app.request("/api/notes")).status).toBe(401);
+    expect((await setup.app.request("/api/todos")).status).toBe(401);
+    expect((await setup.app.request("/api/notes/attachment?name=x.png")).status).toBe(401);
   });
 
   test("web sign-in through authentik sets a session cookie", async () => {
@@ -178,7 +121,7 @@ describe("auth", () => {
     const cookie = callback.headers.get("set-cookie")!;
     expect(cookie).toContain("HttpOnly");
     const session = cookie.split(";")[0]!;
-    expect((await setup.app.request("/api/captures", { headers: { cookie: session } })).status).toBe(200);
+    expect((await setup.app.request("/api/notes", { headers: { cookie: session } })).status).toBe(200);
   });
 
   test("state is single use and unknown origins fall back to the configured one", async () => {
@@ -195,8 +138,94 @@ describe("auth", () => {
     expect((await signIn("client=web", "bad-code")).callback.status).toBe(502);
     setup = makeSetup(["someone-else"]);
     expect((await signIn()).callback.status).toBe(403);
-    setup = makeSetup(["JOSH"]);
+    setup = makeSetup(["user:SAM"]);
     expect((await signIn()).callback.status).toBe(302);
+    setup = makeSetup(["sub:abc123"]);
+    expect((await signIn()).callback.status).toBe(302);
+  });
+
+  test("allowlist entries only match their own kind of claim", async () => {
+    // A bare name is a subject ID, not a username someone could pick.
+    setup = makeSetup(["sam"]);
+    expect((await signIn()).callback.status).toBe(403);
+    // A username that looks like the owner's email doesn't pass as the email.
+    setup = makeSetup(["owner@example.com"]);
+    setup.authentik.state.user = { sub: "evil", preferred_username: "owner@example.com", email: "evil@example.com", email_verified: true };
+    expect((await signIn()).callback.status).toBe(403);
+    setup.authentik.state.user = { sub: "owner", preferred_username: "o", email: "Owner@Example.com", email_verified: true };
+    expect((await signIn()).callback.status).toBe(302);
+  });
+
+  test("nobody gets in without an allowlist; unverified email doesn't count", async () => {
+    setup = makeSetup([], { allowAnyone: false });
+    expect((await signIn()).callback.status).toBe(403);
+
+    setup = makeSetup(["sam@example.com"]);
+    setup.authentik.state.user = { sub: "zzz", preferred_username: "mallory", email: "sam@example.com", email_verified: false };
+    expect((await signIn()).callback.status).toBe(403);
+    setup.authentik.state.user.email_verified = "true";
+    expect((await signIn()).callback.status).toBe(302);
+  });
+
+  test("client secret goes where the provider wants it, or nowhere for a public client", async () => {
+    await signIn();
+    expect(setup.authentik.state.lastToken!.headers.get("authorization")).toStartWith("Basic ");
+
+    setup = makeSetup();
+    setup.authentik.state.authMethods = ["client_secret_post"];
+    await signIn();
+    expect(setup.authentik.state.lastToken!.headers.get("authorization")).toBeNull();
+    expect(setup.authentik.state.lastToken!.body.get("client_secret")).toBe("secret");
+
+    setup = makeSetup([], { clientSecret: "" });
+    expect((await signIn()).callback.status).toBe(302);
+    expect(setup.authentik.state.lastToken!.headers.get("authorization")).toBeNull();
+    expect(setup.authentik.state.lastToken!.body.get("client_id")).toBe("sink-client");
+    expect(setup.authentik.state.lastToken!.body.get("client_secret")).toBeNull();
+  });
+
+  test("cookie sessions only change things from Sink's own pages", async () => {
+    const { callback } = await signIn();
+    const session = callback.headers.get("set-cookie")!.split(";")[0]!;
+    const post = (headers: Record<string, string>) =>
+      setup.app.request("/api/notes", {
+        method: "POST",
+        headers: { cookie: session, "content-type": "application/json", ...headers },
+        body: JSON.stringify({ title: "x" }),
+      });
+    expect((await post({})).status).toBe(403);
+    expect((await post({ origin: "https://wiki.sink.test", "sec-fetch-site": "same-site" })).status).toBe(403);
+    expect((await post({ origin: PUBLIC })).status).toBe(201);
+    expect((await post({ "sec-fetch-site": "same-origin" })).status).toBe(201);
+    // Reading is fine, and bearer tokens aren't sent by browsers on their own.
+    expect((await setup.app.request("/api/notes", { headers: { cookie: session } })).status).toBe(200);
+    expect((await setup.app.request("/api/notes", { method: "POST", headers: { authorization: `Bearer ${await login()}` }, body: "{}" })).status).toBe(201);
+  });
+
+  test("assistant tokens reach notes and todos, never other tokens", async () => {
+    const owner = await login();
+    const res = await setup.app.request("/api/auth/tokens", {
+      method: "POST",
+      headers: { authorization: `Bearer ${owner}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Claude Code" }),
+    });
+    const mcp = ((await res.json()) as any).token;
+    const as = (method: string, path: string, body?: unknown) =>
+      setup.app.request(path, { method, headers: { authorization: `Bearer ${mcp}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+    expect((await as("GET", "/api/notes")).status).toBe(200);
+    expect((await as("GET", "/api/todos")).status).toBe(200);
+    expect((await as("GET", "/api/auth/tokens")).status).toBe(403);
+    expect((await as("POST", "/api/auth/tokens", { name: "backdoor" })).status).toBe(403);
+    const ownerId = ((await (await get(owner, "/api/auth/me")).json()) as any).tokenId;
+    expect((await as("DELETE", `/api/auth/tokens/${ownerId}`)).status).toBe(403);
+  });
+
+  test("the public health check says nothing about the notes", async () => {
+    expect(await (await setup.app.request("/api/health")).json()).toEqual({ ok: true });
+  });
+
+  test("the login screen can name the provider", async () => {
+    expect(await (await setup.app.request("/api/auth/info")).json()).toEqual({ provider: "Pocket ID" });
   });
 
   test("nonce mismatch is refused", async () => {
@@ -231,297 +260,13 @@ describe("auth", () => {
       body: JSON.stringify({ code: code2, verifier }),
     });
     const { token } = (await res.json()) as { token: string };
-    expect((await get(token, "/api/captures")).status).toBe(200);
+    expect((await get(token, "/api/notes")).status).toBe(200);
   });
 
   test("revoked token stops working", async () => {
     const token = await login();
     await setup.app.request("/api/auth/logout", { method: "POST", headers: { authorization: `Bearer ${token}` } });
-    expect((await get(token, "/api/captures")).status).toBe(401);
-  });
-});
-
-describe("captures", () => {
-  test("notes and links need no image", async () => {
-    const token = await login();
-    const post = (fields: Record<string, string>) => {
-      const form = new FormData();
-      for (const [k, v] of Object.entries(fields)) form.set(k, v);
-      return setup.app.request("/api/captures", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
-    };
-
-    expect((await post({ note: "just a note field" })).status).toBe(400);
-
-    const note = (await (await post({ text: "Door code 4821, gate on the left" })).json()) as any;
-    expect(note.image_url).toBeNull();
-    expect(note.thumb_url).toBeNull();
-    expect(note.ocr_text).toBe("Door code 4821, gate on the left");
-    expect((await post({ text: "Door code 4821, gate on the left" })).status).toBe(200);
-    expect((await get(token, `/api/media/${note.id}/thumb`)).status).toBe(404);
-
-    setup.pages.set("https://example.com/ramen", "Title: Best ramen in Ponsonby\n\nTonkotsu, open late.");
-    const link = (await (await post({ source_url: "https://example.com/ramen", note: "try this" })).json()) as any;
-    const dead = (await (await post({ source_url: "https://example.com/gone" })).json()) as any;
-    await setup.worker.tick();
-
-    const calls = setup.provider.calls.filter((c) => !c.imageDataUrl);
-    expect(calls).toHaveLength(3);
-    expect(buildUserText(calls.find((c) => c.sourceUrl === "https://example.com/ramen")!)).toContain("Saved text:\nTitle: Best ramen");
-    const read = (await (await get(token, `/api/captures/${link.id}`)).json()) as any;
-    expect(read.status).toBe("done");
-    expect(read.ocr_text).toContain("Tonkotsu");
-    // An unreadable page still gets filed from the URL alone.
-    expect(((await (await get(token, `/api/captures/${dead.id}`)).json()) as any).status).toBe("done");
-    expect(((await (await get(token, "/api/captures?q=tonkotsu")).json()) as any).items.map((i: any) => i.id)).toEqual([link.id]);
-
-    expect((await setup.app.request(`/api/captures/${note.id}`, { method: "DELETE", headers: { authorization: `Bearer ${token}` } })).status).toBe(200);
-  });
-
-  test("reads a page's title, description and text", () => {
-    const html = `<html><head><title>Ignored</title><meta property="og:title" content="Ramen &amp; More">
-      <meta name="description" content="Late night noodles"><style>.x{}</style></head>
-      <body><nav>Home About</nav><article><h1>Tonkotsu</h1><p>Open till 2am.</p><script>track()</script></article></body></html>`;
-    expect(pageText(html)).toBe("Title: Ramen & More\n\nDescription: Late night noodles\n\nTonkotsu\nOpen till 2am.");
-  });
-
-  test("migrating keeps captures, their children and search", () => {
-    const path = join(mkdtempSync(join(tmpdir(), "sink-mig-")), "old.db");
-    const old = new Database(path, { create: true, strict: true });
-    old.exec("PRAGMA foreign_keys = ON;");
-    // Everything before the rebuild that made image columns optional.
-    for (const m of migrations.slice(0, 7)) old.exec(m);
-    old.exec("PRAGMA user_version = 7");
-    old.exec(`INSERT INTO captures (id, created_at, updated_at, source, image_path, thumb_path, mime, width, height, ocr_text, title)
-      VALUES ('c1', 1, 1, 'auto', 'c1.png', 'c1.thumb.webp', 'image/png', 10, 20, 'laneway tickets', 'Gig')`);
-    old.exec("INSERT INTO actions (id, capture_id, type, label, created_at) VALUES ('a1', 'c1', 'todo', 'Buy', 1)");
-    old.exec("INSERT INTO collections (id, name, created_at) VALUES ('col', 'Gigs', 1)");
-    old.exec("INSERT INTO capture_collections VALUES ('c1', 'col')");
-    old.close();
-
-    const db = openDb(path);
-    expect(db.query("SELECT COUNT(*) AS n FROM actions").get()).toEqual({ n: 1 });
-    expect(db.query("SELECT COUNT(*) AS n FROM capture_collections").get()).toEqual({ n: 1 });
-    const hit = db.query("SELECT c.id FROM captures_fts f JOIN captures c ON c.rowid = f.rowid WHERE captures_fts MATCH 'laneway'").all();
-    expect(hit).toEqual([{ id: "c1" }]);
-    db.exec("INSERT INTO captures (id, created_at, updated_at, source, ocr_text) VALUES ('c2', 2, 2, 'mcp', 'a note')");
-    db.exec("UPDATE captures SET title = 'Concert' WHERE id = 'c1'");
-    expect(db.query("SELECT rowid FROM captures_fts WHERE captures_fts MATCH 'concert OR note'").all()).toHaveLength(2);
-    // Foreign keys are back on: deleting cascades.
-    db.exec("DELETE FROM captures WHERE id = 'c1'");
-    expect(db.query("SELECT COUNT(*) AS n FROM actions").get()).toEqual({ n: 0 });
-  });
-
-  test("upload, process, search, fetch media", async () => {
-    const token = await login();
-    const res = await upload(token, { note: "want tickets", ocr_text: "Powerstation Saturday 8pm" });
-    expect(res.status).toBe(201);
-    const created = (await res.json()) as { id: string; status: string; width: number };
-    expect(created.status).toBe("pending");
-    expect(created.width).toBe(64);
-
-    // AI processing, then the embedding for semantic search.
-    expect(await setup.worker.tick()).toBe(2);
-    expect(setup.provider.calls[0]!.note).toBe("want tickets");
-    expect(setup.provider.calls[0]!.imageDataUrl).toStartWith("data:image/jpeg;base64,");
-
-    const detail = (await (await get(token, `/api/captures/${created.id}`)).json()) as any;
-    expect(detail.status).toBe("done");
-    expect(detail.kind).toBe("event");
-    expect(detail.tags).toEqual(["music", "gig"]);
-    expect(detail.actions).toHaveLength(1);
-
-    // Search hits AI title, OCR text and note.
-    for (const q of ["laneway", "powerst", "tickets"]) {
-      const list = (await (await get(token, `/api/captures?q=${q}`)).json()) as any;
-      expect(list.items.map((i: any) => i.id)).toEqual([created.id]);
-    }
-    const none = (await (await get(token, "/api/captures?q=zzz")).json()) as any;
-    expect(none.items).toHaveLength(0);
-
-    const thumb = await get(token, `/api/media/${created.id}/thumb`);
-    expect(thumb.headers.get("content-type")).toBe("image/webp");
-  });
-
-  test("client_id makes uploads idempotent", async () => {
-    const token = await login();
-    const a = (await (await upload(token, { client_id: "abc" })).json()) as any;
-    const b = (await (await upload(token, { client_id: "abc" })).json()) as any;
-    expect(a.id).toBe(b.id);
-  });
-
-  test("same image twice merges, keeping the note", async () => {
-    const token = await login();
-    const a = (await (await upload(token, { source: "auto" })).json()) as any;
-    const b = (await (await upload(token, { note: "remember this", source: "share" })).json()) as any;
-    expect(b.id).toBe(a.id);
-    expect(b.note_text).toBe("remember this");
-    const list = (await (await get(token, "/api/captures")).json()) as any;
-    expect(list.items).toHaveLength(1);
-  });
-
-  test("assistant captures keep screen text, OCR and page URL", async () => {
-    const token = await login();
-    const res = await upload(token, {
-      source: "assist",
-      screen_text: "Laneway 2027 lineup",
-      ocr_text: "LANEWAY",
-      source_url: "https://lanewayfestival.com/auckland",
-    });
-    const c = (await res.json()) as any;
-    expect(c.source).toBe("assist");
-    expect(c.source_url).toBe("https://lanewayfestival.com/auckland");
-    expect(c.ocr_text).toBe("Laneway 2027 lineup\n\n--- OCR ---\nLANEWAY");
-    await setup.worker.tick();
-    expect(setup.provider.calls[0]!.sourceUrl).toBe("https://lanewayfestival.com/auckland");
-  });
-
-  test("rejects non-images", async () => {
-    const token = await login();
-    const form = new FormData();
-    form.set("image", new File(["not an image"], "x.png"));
-    const res = await setup.app.request("/api/captures", {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-      body: form,
-    });
-    expect(res.status).toBe(415);
-  });
-
-  test("retryable AI failure reschedules, permanent failure marks failed", async () => {
-    const token = await login();
-    const { id } = (await (await upload(token)).json()) as any;
-
-    setup.provider.fail = new ProviderError("429", true);
-    await setup.worker.tick();
-    let detail = (await (await get(token, `/api/captures/${id}`)).json()) as any;
-    expect(detail.status).toBe("pending");
-
-    setup.db.query("UPDATE jobs SET run_after = 0").run();
-    setup.provider.fail = new ProviderError("bad", false);
-    await setup.worker.tick();
-    detail = (await (await get(token, `/api/captures/${id}`)).json()) as any;
-    expect(detail.status).toBe("failed");
-  });
-
-  test("paging, views and patch", async () => {
-    const token = await login();
-    const ids: string[] = [];
-    for (let i = 0; i < 5; i++) ids.push(((await (await upload(token, { captured_at: String(1000 + i) }, i)).json()) as any).id);
-
-    const p1 = (await (await get(token, "/api/captures?limit=3")).json()) as any;
-    expect(p1.items).toHaveLength(3);
-    const p2 = (await (await get(token, `/api/captures?limit=3&cursor=${p1.next_cursor}`)).json()) as any;
-    expect(p2.items).toHaveLength(2);
-    expect(p2.next_cursor).toBeNull();
-    expect([...p1.items, ...p2.items].map((i: any) => i.id)).toEqual([...ids].reverse());
-
-    await setup.app.request(`/api/captures/${ids[0]}`, {
-      method: "PATCH",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ deleted: true }),
-    });
-    const all = (await (await get(token, "/api/captures")).json()) as any;
-    expect(all.items).toHaveLength(4);
-    const trash = (await (await get(token, "/api/captures?view=trash")).json()) as any;
-    expect(trash.items.map((i: any) => i.id)).toEqual([ids[0]]);
-  });
-});
-
-describe("collections", () => {
-  const send = (token: string, method: string, path: string, body?: unknown) =>
-    setup.app.request(path, {
-      method,
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-
-  test("create, rename, file captures, filter, count, delete", async () => {
-    const token = await login();
-    const a = ((await (await upload(token, {}, 1)).json()) as any).id;
-    const b = ((await (await upload(token, {}, 2)).json()) as any).id;
-
-    const created = await send(token, "POST", "/api/collections", { name: " Trip " });
-    expect(created.status).toBe(201);
-    const trip = (await created.json()) as any;
-    expect(trip).toMatchObject({ name: "Trip", count: 0, cover_url: null });
-    expect((await send(token, "POST", "/api/collections", { name: "trip" })).status).toBe(409);
-    expect((await send(token, "POST", "/api/collections", { name: "" })).status).toBe(400);
-    const gifts = (await (await send(token, "POST", "/api/collections", { name: "Gifts" })).json()) as any;
-
-    const patched = (await (await send(token, "PATCH", `/api/captures/${a}`, { collections: [trip.id, gifts.id] })).json()) as any;
-    expect(patched.collections.sort()).toEqual([trip.id, gifts.id].sort());
-    await send(token, "PATCH", `/api/captures/${b}`, { collections: [trip.id] });
-    expect((await send(token, "PATCH", `/api/captures/${b}`, { collections: ["nope"] })).status).toBe(400);
-    expect(((await (await get(token, `/api/captures/${b}`)).json()) as any).collections).toEqual([trip.id]);
-
-    const inTrip = (await (await get(token, `/api/captures?collection=${trip.id}`)).json()) as any;
-    expect(inTrip.items.map((i: any) => i.id).sort()).toEqual([a, b].sort());
-    const inGifts = (await (await get(token, `/api/captures?collection=${gifts.id}`)).json()) as any;
-    expect(inGifts.items.map((i: any) => i.id)).toEqual([a]);
-
-    // Trashed captures drop out of counts.
-    await send(token, "PATCH", `/api/captures/${b}`, { deleted: true });
-    let list = ((await (await get(token, "/api/collections")).json()) as any).collections;
-    expect(list.map((c: any) => [c.name, c.count])).toEqual([["Gifts", 1], ["Trip", 1]]);
-    expect(list[1].cover_url).toBe(`/api/media/${a}/thumb`);
-
-    expect((await send(token, "PATCH", `/api/collections/${trip.id}`, { name: "gifts" })).status).toBe(409);
-    expect(((await (await send(token, "PATCH", `/api/collections/${trip.id}`, { name: "Japan" })).json()) as any).name).toBe("Japan");
-
-    expect((await send(token, "DELETE", `/api/collections/${gifts.id}`)).status).toBe(200);
-    expect((await send(token, "DELETE", `/api/collections/${gifts.id}`)).status).toBe(404);
-    expect(((await (await get(token, `/api/captures/${a}`)).json()) as any).collections).toEqual([trip.id]);
-    list = ((await (await get(token, "/api/collections")).json()) as any).collections;
-    expect(list.map((c: any) => c.name)).toEqual(["Japan"]);
-  });
-});
-
-describe("bulk", () => {
-  const post = (token: string, body: unknown) =>
-    setup.app.request("/api/captures/bulk", {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-  test("tags, collections and flags across many captures", async () => {
-    const token = await login();
-    const ids: string[] = [];
-    for (let i = 1; i <= 3; i++) ids.push(((await (await upload(token, {}, i)).json()) as any).id);
-    await setup.app.request(`/api/captures/${ids[0]}`, {
-      method: "PATCH",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ tags: ["old", "keep"] }),
-    });
-    const col = (await (
-      await setup.app.request("/api/collections", {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ name: "Trip" }),
-      })
-    ).json()) as any;
-
-    const res = await post(token, { ids: [ids[0], ids[1], "missing"], add_tags: ["Japan"], remove_tags: ["old"], add_collections: [col.id], pinned: true });
-    expect(((await res.json()) as any).updated).toBe(2);
-    const first = (await (await get(token, `/api/captures/${ids[0]}`)).json()) as any;
-    expect(first.tags).toEqual(["keep", "japan"]);
-    expect(first.pinned).toBe(true);
-    expect(first.collections).toEqual([col.id]);
-    const third = (await (await get(token, `/api/captures/${ids[2]}`)).json()) as any;
-    expect(third.pinned).toBe(false);
-
-    // Adding twice is harmless; removing takes it out.
-    await post(token, { ids: [ids[0]], add_collections: [col.id] });
-    await post(token, { ids: [ids[1]], remove_collections: [col.id] });
-    const inCol = (await (await get(token, `/api/captures?collection=${col.id}`)).json()) as any;
-    expect(inCol.items.map((i: any) => i.id)).toEqual([ids[0]]);
-
-    await post(token, { ids, archived: true });
-    expect(((await (await get(token, "/api/captures")).json()) as any).items).toHaveLength(0);
-    expect(((await (await get(token, "/api/captures?view=archived")).json()) as any).items).toHaveLength(3);
-
-    expect((await post(token, { ids: [ids[0]], add_collections: ["nope"] })).status).toBe(400);
-    expect((await post(token, { ids: [] })).status).toBe(400);
+    expect((await get(token, "/api/notes")).status).toBe(401);
   });
 });
 
@@ -550,75 +295,6 @@ describe("mcp", () => {
     expect((await rpc(null, "tools/list")).status).toBe(401);
   });
 
-  test("initialize, list tools, search, get with image, update by collection name", async () => {
-    const token = await login();
-    const init = await rpc(token, "initialize", {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "test", version: "1" },
-    });
-    expect(init.body.result.serverInfo.name).toBe("sink");
-
-    const tools = (await rpc(token, "tools/list")).body.result.tools.map((t: any) => t.name);
-    expect(tools).toEqual(
-      expect.arrayContaining(["search_captures", "get_capture", "list_collections", "update_capture", "create_collection", "upcoming_reminders"]),
-    );
-
-    const id = ((await (await upload(token, { note: "laneway tickets" })).json()) as any).id;
-    await setup.worker.tick();
-
-    const search = await call(token, "search_captures", { query: "laneway" });
-    expect(search.data.results.map((r: any) => r.id)).toEqual([id]);
-    expect(search.data.results[0].title).toBe("Laneway gig");
-
-    const got = await call(token, "get_capture", { id, include_image: true });
-    expect(got.data.note_text).toBe("laneway tickets");
-    expect(got.result.content[1]).toMatchObject({ type: "image", mimeType: "image/jpeg" });
-
-    await call(token, "create_collection", { name: "Gigs" });
-    const updated = await call(token, "update_capture", { id, add_to_collections: ["gigs"], pinned: true });
-    expect(updated.data.updated.pinned).toBe(true);
-    expect((await call(token, "get_capture", { id })).data.collections).toEqual(["Gigs"]);
-    expect((await call(token, "list_collections")).data.collections).toMatchObject([{ name: "Gigs", count: 1 }]);
-    expect((await call(token, "search_captures", { collection: "Gigs" })).data.results).toHaveLength(1);
-
-    const bad = await call(token, "update_capture", { id, add_to_collections: ["nope"] });
-    expect(bad.result.isError).toBe(true);
-    expect(bad.result.content[0].text).toContain("Existing: Gigs");
-  });
-
-  test("add_capture saves notes, links and images, filed into collections", async () => {
-    const token = await login();
-    await call(token, "create_collection", { name: "Recipes" });
-
-    const added = await call(token, "add_capture", {
-      text: "Pikelets: 1 cup flour, 1 egg, 3/4 cup milk",
-      url: "https://example.com/pikelets",
-      note: "from chat",
-      collections: ["recipes"],
-    });
-    const id = added.data.added.id;
-    expect(added.data.added).toMatchObject({ note: "from chat", has_image: false, status: "pending" });
-    const got = await call(token, "get_capture", { id, include_image: true });
-    expect(got.data).toMatchObject({ source: "mcp", has_image: false, source_url: "https://example.com/pikelets", collections: ["Recipes"] });
-    expect(got.data.ocr_text).toBe("Pikelets: 1 cup flour, 1 egg, 3/4 cup milk");
-    expect(got.result.content).toHaveLength(1);
-
-    const again = await call(token, "add_capture", { text: "Pikelets: 1 cup flour, 1 egg, 3/4 cup milk", url: "https://example.com/pikelets" });
-    expect(again.data.added.id).toBe(id);
-
-    const link = await call(token, "add_capture", { url: "https://example.com/article" });
-    expect(link.data.added.id).not.toBe(id);
-
-    const img = await call(token, "add_capture", { image_base64: png.toString("base64"), note: "screenshot from chat" });
-    expect(img.data.added.has_image).toBe(true);
-
-    expect((await call(token, "add_capture", {})).result.isError).toBe(true);
-    expect((await call(token, "add_capture", { image_base64: Buffer.from("nope").toString("base64") })).result.isError).toBe(true);
-    const local = await call(token, "add_capture", { image_url: "http://127.0.0.1/x.png" });
-    expect(local.result.content[0].text).toContain("not a public address");
-  });
-
   test("tokens can be minted for other clients", async () => {
     const token = await login();
     const res = await setup.app.request("/api/auth/tokens", {
@@ -629,6 +305,36 @@ describe("mcp", () => {
     expect(res.status).toBe(201);
     const minted = ((await res.json()) as any).token;
     expect((await rpc(minted, "tools/list")).status).toBe(200);
+  });
+
+  test("notes and todos: save, search, read, edit with hash, add and list todos", async () => {
+    const token = await login();
+    const tools = (await rpc(token, "tools/list")).body.result.tools.map((t: any) => t.name);
+    expect(tools.sort()).toEqual(["add_todo", "list_todos", "read_note", "save_note", "search_notes"]);
+
+    const created = await call(token, "save_note", { title: "Packing list", folder: "Trips", content: "# Packing list\n\n- [ ] passport\n" });
+    expect(created.data.created.path).toBe("Trips/Packing list.md");
+    const found = await call(token, "search_notes", { query: "passport" });
+    expect(found.data.results.map((r: any) => r.path)).toEqual(["Trips/Packing list.md"]);
+
+    const read = await call(token, "read_note", { path: "Trips/Packing list.md" });
+    expect(read.result.content[1].text).toContain("- [ ] passport");
+    // Assistants often pass the title or drop ".md".
+    for (const ref of ["Packing list", "packing list.md", "Trips/Packing list"]) {
+      expect((await call(token, "read_note", { path: ref })).data.path).toBe("Trips/Packing list.md");
+    }
+    expect((await call(token, "read_note", { path: "Nope" })).result.isError).toBe(true);
+    const noHash = await call(token, "save_note", { path: "Trips/Packing list.md", content: "x" });
+    expect(noHash.result.isError).toBe(true);
+    const stale = await call(token, "save_note", { path: "Trips/Packing list.md", hash: "0".repeat(64), content: "x" });
+    expect(stale.result.isError).toBe(true);
+    const edited = await call(token, "save_note", { path: "Trips/Packing list.md", hash: read.data.hash, content: read.result.content[1].text + "- [ ] charger\n" });
+    expect(edited.data.saved.title).toBe("Packing list");
+
+    const added = await call(token, "add_todo", { text: "call the bank", due: "2026-11-02", time: "09:30" });
+    expect(added.data).toEqual({ added: "- [ ] call the bank 📅 2026-11-02 (@2026-11-02 09:30)", path: "Todo.md" });
+    const todos = await call(token, "list_todos");
+    expect(todos.data.todos.map((t: any) => t.text)).toEqual(["call the bank", "passport", "charger"]);
   });
 });
 
@@ -733,198 +439,14 @@ describe("oauth for mcp connectors", () => {
   });
 });
 
-describe("price watch", () => {
-  const page = (body: string) => `<html><head>${body}</head><body>…</body></html>`;
-
-  test("reads prices from JSON-LD, graphs, aggregate offers, meta and microdata", () => {
-    expect(
-      extractPrice(page(`<script type="application/ld+json">{"@type":"Product","offers":{"@type":"Offer","price":"129.00","priceCurrency":"NZD"}}</script>`)),
-    ).toEqual({ price: 129, currency: "NZD" });
-    expect(
-      extractPrice(
-        page(`<script type="application/ld+json">broken</script><script type="application/ld+json">{"@graph":[{"@type":"WebPage"},{"@type":["Product"],"offers":[{"@type":"AggregateOffer","lowPrice":49.5,"priceCurrency":"AUD"}]}]}</script>`),
-      ),
-    ).toEqual({ price: 49.5, currency: "AUD" });
-    expect(extractPrice(page(`<meta property="product:price:amount" content="1,299.99"><meta property="product:price:currency" content="USD">`))).toEqual({
-      price: 1299.99,
-      currency: "USD",
-    });
-    expect(extractPrice(`<span itemprop="price" content="15.00">$15</span>`)).toEqual({ price: 15, currency: null });
-    expect(extractPrice(page("<title>no price here</title>"))).toBeNull();
-  });
-
-  test("refuses LAN and loopback pages", async () => {
-    for (const url of ["http://192.168.86.245:8787/", "http://127.0.0.1/", "http://10.0.0.1", "http://[::1]/", "file:///etc/passwd"]) {
-      await expect(assertPublicUrl(url)).rejects.toThrow();
-    }
-    expect((await assertPublicUrl("https://93.184.215.14/item")).hostname).toBe("93.184.215.14");
-  });
-
-  test("watch, check, drop becomes an alert; errors and private redirects are recorded", async () => {
-    const token = await login();
-    const send = (path: string, body: unknown) =>
-      setup.app.request(path, {
-        method: "PATCH",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    const plain = ((await (await upload(token, {}, 1)).json()) as any).id;
-    expect((await send(`/api/captures/${plain}`, { watch_price: true })).status).toBe(400);
-
-    const id = ((await (await upload(token, { source_url: "https://shop.example/kettle" }, 2)).json()) as any).id;
-    const watched = (await (await send(`/api/captures/${id}`, { watch_price: true })).json()) as any;
-    expect(watched.price_watch).toMatchObject({ url: "https://shop.example/kettle", last_price: null });
-
-    let price = "100.00";
-    let redirect: string | null = null;
-    const fakeFetch = (async () =>
-      redirect
-        ? new Response(null, { status: 302, headers: { location: redirect } })
-        : new Response(page(`<meta property="product:price:amount" content="${price}"><meta property="product:price:currency" content="NZD">`))) as unknown as typeof fetch;
-    // Pretend shop.example is public; anything else goes through the real check.
-    const checkUrl = async (u: string) => (new URL(u).hostname === "shop.example" ? new URL(u) : assertPublicUrl(u));
-    const watcher = new PriceWatcher(setup.db, 12 * 3600_000, fakeFetch, checkUrl);
-
-    const t0 = Date.now();
-    expect(await watcher.tick(t0)).toBe(1);
-    expect(await watcher.tick(t0 + 1000)).toBe(0); // not due again yet
-    price = "99.50"; // under 1%: not a drop
-    await watcher.tick(t0 + 14 * 3600_000);
-    price = "79.00";
-    await watcher.tick(t0 + 28 * 3600_000);
-
-    const detail = (await (await get(token, `/api/captures/${id}`)).json()) as any;
-    expect(detail.price_watch).toMatchObject({ first_price: 100, last_price: 79, lowest_price: 79, currency: "NZD", last_error: null });
-    expect(detail.price_watch.history.map((h: any) => h.price)).toEqual([100, 99.5, 79]);
-    const drop = detail.actions.find((a: any) => a.type === "price_drop");
-    expect(drop.label).toBe("Price dropped to NZD 79.00 (was NZD 99.50)");
-
-    const alerts = ((await (await get(token, "/api/alerts")).json()) as any).alerts;
-    expect(alerts.map((a: any) => a.id)).toEqual([drop.id]);
-
-    redirect = "http://192.168.1.1/admin";
-    await watcher.tick(t0 + 42 * 3600_000);
-    const blocked = ((await (await get(token, `/api/captures/${id}`)).json()) as any).price_watch;
-    expect(blocked.last_error).toBe("not a public address");
-    expect(blocked.last_price).toBe(79);
-
-    await send(`/api/captures/${id}`, { watch_price: false });
-    expect(((await (await get(token, `/api/captures/${id}`)).json()) as any).price_watch).toBeNull();
-  });
-});
-
-describe("reminders", () => {
-  test("future reminders are listed, accepted and snoozed; past ones are not", async () => {
-    const token = await login();
-    const { id } = (await (await upload(token)).json()) as any;
-    const soon = new Date(Date.now() + 3600_000).toISOString();
-    setup.provider.extract = async () => ({
-      model: "fake",
-      extraction: parseExtraction(
-        JSON.stringify({
-          kind: "event",
-          title: "Tickets",
-          actions: [
-            { type: "reminder", label: "Tickets on sale", payload: { text: "Buy tickets", due: soon } },
-            { type: "reminder", label: "Too late", payload: { text: "old", due: "2020-01-01T09:00:00+13:00" } },
-            { type: "copy", label: "Copy", payload: { text: "x" } },
-          ],
-        }),
-      ),
-    });
-    await setup.worker.tick();
-
-    let list = (await (await get(token, "/api/reminders")).json()) as any;
-    expect(list.reminders.map((r: any) => r.label)).toEqual(["Tickets on sale"]);
-    expect(list.reminders[0].due_at).toBe(Date.parse(soon));
-    expect(list.reminders[0].capture_id).toBe(id);
-
-    const patch = (body: object) =>
-      setup.app.request(`/api/actions/${list.reminders[0].id}`, {
-        method: "PATCH",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    const later = Date.now() + 7200_000;
-    expect((await patch({ state: "accepted", due_at: later })).status).toBe(200);
-    list = (await (await get(token, "/api/reminders")).json()) as any;
-    expect(list.reminders[0].state).toBe("accepted");
-    expect(list.reminders[0].due_at).toBe(later);
-
-    await patch({ state: "done" });
-    expect(((await (await get(token, "/api/reminders")).json()) as any).reminders).toHaveLength(0);
-  });
-
-  test("due times without a zone are the user's local time", () => {
-    const tz = "Pacific/Auckland";
-    expect(dueAt({ type: "reminder", payload: { due: "2026-10-30" } }, tz)).toBe(Date.parse("2026-10-30T09:00:00+13:00"));
-    expect(dueAt({ type: "reminder", payload: { due: "2026-07-01T08:30:00" } }, tz)).toBe(Date.parse("2026-07-01T08:30:00+12:00"));
-    expect(dueAt({ type: "calendar", payload: { start: "2026-11-07T07:05:00+13:00" } }, tz)).toBe(Date.parse("2026-11-06T18:05:00Z"));
-    expect(dueAt({ type: "reminder", payload: { due: "next tuesday" } }, tz)).toBeNull();
-    expect(dueAt({ type: "copy", payload: {} }, tz)).toBeNull();
-  });
-});
-
-describe("semantic search", () => {
-  // Extraction would rewrite titles; keep the stored text exactly what we uploaded.
-  beforeEach(() => {
-    setup.provider.enabled = false;
-  });
-
-  test("finds by meaning when no words match", async () => {
-    const token = await login();
-    const wifi = ((await (await upload(token, { ocr_text: "Network: KiwiNest_5G Password: sunflower42" }, 1)).json()) as any).id;
-    await upload(token, { ocr_text: "Laneway concert tickets $89" }, 2);
-    await setup.worker.tick();
-
-    const list = (await (await get(token, "/api/captures?q=internet%20details")).json()) as any;
-    expect(list.items.map((i: any) => i.id)).toEqual([wifi]);
-  });
-
-  test("keyword and meaning hits merge, filters still apply", async () => {
-    const token = await login();
-    const a = ((await (await upload(token, { ocr_text: "router admin page" }, 1)).json()) as any).id;
-    const b = ((await (await upload(token, { ocr_text: "wifi password on the fridge" }, 2)).json()) as any).id;
-    const trashed = ((await (await upload(token, { ocr_text: "network password for work" }, 3)).json()) as any).id;
-    await setup.worker.tick();
-    await setup.app.request(`/api/captures/${trashed}`, {
-      method: "PATCH",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ deleted: true }),
-    });
-
-    const ids = ((await (await get(token, "/api/captures?q=wifi")).json()) as any).items.map((i: any) => i.id);
-    expect(ids[0]).toBe(b); // both halves agree on b
-    expect(ids).toContain(a); // meaning only
-    expect(ids).not.toContain(trashed);
-  });
-
-  test("editing a note re-embeds the capture", async () => {
-    const token = await login();
-    const id = ((await (await upload(token, { ocr_text: "blurry photo" }, 1)).json()) as any).id;
-    await setup.worker.tick();
-    expect(((await (await get(token, "/api/captures?q=concert")).json()) as any).items).toHaveLength(0);
-
-    await setup.app.request(`/api/captures/${id}`, {
-      method: "PATCH",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ note_text: "band poster" }),
-    });
-    await setup.worker.tick();
-    const ids = ((await (await get(token, "/api/captures?q=concert")).json()) as any).items.map((i: any) => i.id);
-    expect(ids).toEqual([id]);
-  });
-
-  test("fuse ranks agreement first", () => {
-    expect(fuse(["a", "b", "c"], ["c", "a"])[0]).toBe("a");
-    expect(fuse([], ["x"])).toEqual(["x"]);
-  });
-});
-
 describe("backups", () => {
   test("one snapshot per day, oldest pruned, snapshot is a readable copy", async () => {
     const token = await login();
-    await upload(token, { note: "keep me" });
+    await setup.app.request("/api/auth/tokens", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "keep me" }),
+    });
     const dir = mkdtempSync(join(tmpdir(), "sink-backup-"));
     const backups = new Backups(setup.db, dir, 2);
     const path = backups.run(new Date("2026-10-20T12:00:00Z"))!;
@@ -934,27 +456,315 @@ describe("backups", () => {
     expect(readdirSync(dir).sort()).toEqual(["sink-2026-10-21.db", "sink-2026-10-22.db"]);
 
     const copy = new Database(join(dir, "sink-2026-10-22.db"), { readonly: true });
-    expect(copy.query<{ note_text: string }, []>("SELECT note_text FROM captures").get()!.note_text).toBe("keep me");
+    expect(copy.query<{ name: string }, []>("SELECT name FROM tokens WHERE name = 'keep me'").get()!.name).toBe("keep me");
     copy.close();
     expect(path).toEndWith("sink-2026-10-20.db");
   });
 });
 
+
+describe("notes", () => {
+  const send = (token: string, method: string, path: string, body?: unknown) =>
+    setup.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const file = (rel: string) => join(setup.vaultDir, rel);
+  const q = (path: string) => `/api/notes/file?path=${encodeURIComponent(path)}`;
+
+  test("create, read, save with hash, conflicts, list, search", async () => {
+    const token = await login();
+    const a = (await (await send(token, "POST", "/api/notes", { folder: "Ideas", title: "Garden: beds?", content: "# Garden beds\n\nRaised #garden beds, cedar.\n" })).json()) as any;
+    expect(a.path).toBe("Ideas/Garden beds.md");
+    expect(a.title).toBe("Garden beds");
+    expect(a.tags).toEqual(["garden"]);
+    expect(readFileSync(file("Ideas/Garden beds.md"), "utf8")).toBe("# Garden beds\n\nRaised #garden beds, cedar.\n");
+    // Same title again gets a number, like Obsidian's "Untitled 1".
+    expect(((await (await send(token, "POST", "/api/notes", { folder: "Ideas", title: "Garden: beds?" })).json()) as any).path).toBe("Ideas/Garden beds 1.md");
+
+    const read = (await (await get(token, q(a.path))).json()) as any;
+    expect(read.hash).toBe(a.hash);
+    const saved = (await (await send(token, "PUT", q(a.path), { content: read.content + "Order soil.\n", base_hash: read.hash })).json()) as any;
+    expect(saved.hash).not.toBe(read.hash);
+
+    // Stale hash: refused, and the reply carries the file as it is now.
+    const stale = await send(token, "PUT", q(a.path), { content: "overwrite", base_hash: read.hash });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as any).current.content).toContain("Order soil.");
+    expect((await send(token, "PUT", q(a.path), { content: "x", base_hash: null })).status).toBe(409);
+    expect((await send(token, "PUT", q("Ideas/Gone.md"), { content: "x", base_hash: "abc" })).status).toBe(409);
+    expect(readFileSync(file(a.path), "utf8")).toContain("Order soil.");
+
+    const list = (await (await get(token, "/api/notes")).json()) as any;
+    expect(list.notes.map((n: any) => n.path).sort()).toEqual(["Ideas/Garden beds 1.md", "Ideas/Garden beds.md"]);
+    expect(list.folders).toEqual(["Ideas"]);
+    const hits = (await (await get(token, "/api/notes?q=soil")).json()) as any;
+    expect(hits.items.map((n: any) => n.path)).toEqual([a.path]);
+    expect(hits.items[0].snippet).toContain("[soil]");
+    expect((await get(token, q("Ideas/Nope.md"))).status).toBe(404);
+  });
+
+  test("keep-style pin, colour and card excerpts live in frontmatter", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { title: "Old", content: "# Old\nfirst" });
+    const n = (await (await send(token, "POST", "/api/notes", { title: "Shopping", content: "# Shopping\n\n- [ ] eggs\n- [ ] oat milk\n" })).json()) as any;
+    await send(token, "POST", "/api/notes", { title: "Newest", content: "newest" });
+
+    const pinned = (await (await send(token, "PATCH", `/api/notes/meta?path=${encodeURIComponent(n.path)}`, { pinned: true, color: "yellow" })).json()) as any;
+    expect(pinned).toMatchObject({ pinned: true, color: "yellow", title: "Shopping" });
+    expect(readFileSync(file(n.path), "utf8")).toBe("---\npinned: true\ncolor: yellow\n---\n# Shopping\n\n- [ ] eggs\n- [ ] oat milk\n");
+
+    const list = (await (await get(token, "/api/notes")).json()) as any;
+    // Pinned first, whatever its age.
+    expect(list.notes[0].title).toBe("Shopping");
+    expect(list.notes.slice(1).map((x: any) => x.title).sort()).toEqual(["Newest", "Old"]);
+    expect(list.notes[0].excerpt).toBe("- [ ] eggs\n- [ ] oat milk");
+    expect((await send(token, "PATCH", `/api/notes/meta?path=${encodeURIComponent(n.path)}`, { color: "chartreuse" })).status).toBe(400);
+
+    await send(token, "PATCH", `/api/notes/meta?path=${encodeURIComponent(n.path)}`, { pinned: false, color: null });
+    expect(readFileSync(file(n.path), "utf8")).toBe("# Shopping\n\n- [ ] eggs\n- [ ] oat milk\n");
+  });
+
+  test("symlinks can't reach outside the vault", async () => {
+    const token = await login();
+    const outside = mkdtempSync(join(tmpdir(), "sink-outside-"));
+    writeFileSync(join(outside, "secret.md"), "SINK_OIDC_CLIENT_SECRET=hunter2");
+    symlinkSync(join(outside, "secret.md"), file("env.md"));
+    symlinkSync(outside, file("Inbox"));
+    writeFileSync(file("real.md"), "# Real");
+    symlinkSync(file("real.md"), file("alias.md"));
+
+    expect((await get(token, q("env.md"))).status).toBe(400);
+    expect((await send(token, "PUT", q("env.md"), { content: "x", base_hash: "abc" })).status).toBe(400);
+    expect((await send(token, "POST", "/api/notes", { folder: "Inbox", title: "Planted", content: "x" })).status).toBe(400);
+    expect(existsSync(join(outside, "Planted.md"))).toBe(false);
+    expect((await send(token, "POST", "/api/notes/move", { from: "real.md", to: "Inbox/real.md" })).status).toBe(400);
+    expect(readFileSync(join(outside, "secret.md"), "utf8")).toBe("SINK_OIDC_CLIENT_SECRET=hunter2");
+    // A link that stays inside the vault is just another way to the same note.
+    expect(((await (await get(token, q("alias.md"))).json()) as any).title).toBe("Real");
+  });
+
+  test("paths are checked", async () => {
+    const token = await login();
+    for (const bad of ["../escape.md", "Ideas/../../x.md", ".obsidian/workspace.md", "a\\b.md", "notes.txt", "/", "Ideas/ .md"]) {
+      expect((await send(token, "PUT", q(bad), { content: "x", base_hash: null })).status).toBe(400);
+    }
+    expect((await send(token, "POST", "/api/notes/move", { from: "a.md", to: "../a.md" })).status).toBe(400);
+    expect((await send(token, "POST", "/api/notes", { folder: "../up", title: "x" })).status).toBe(400);
+    expect(existsSync(join(setup.vaultDir, "..", "escape.md"))).toBe(false);
+  });
+
+  test("edits made outside Sink are found by a scan or a read", async () => {
+    const token = await login();
+    mkdirSync(file("Journal"), { recursive: true });
+    writeFileSync(file("Journal/2026-10-29.md"), "---\ntags: [daily]\n---\nWrote this in Obsidian.\n");
+    writeFileSync(file("Loose.md"), "loose");
+    mkdirSync(file(".obsidian"));
+    writeFileSync(file(".obsidian/hidden.md"), "not a note");
+    mkdirSync(file("Empty"));
+    expect(await setup.vault.scan()).toEqual({ added: 2, updated: 0, removed: 0, notes: 2 });
+    let list = (await (await get(token, "/api/notes")).json()) as any;
+    expect(list.notes.find((n: any) => n.path === "Journal/2026-10-29.md").tags).toEqual(["daily"]);
+    expect(list.folders).toEqual(["Empty", "Journal"]);
+
+    // Changed on disk: a read sees the new text and re-indexes before the next scan.
+    writeFileSync(file("Loose.md"), "# Tidied\nnow with a heading");
+    const read = (await (await get(token, q("Loose.md"))).json()) as any;
+    expect(read.title).toBe("Tidied");
+    expect(((await (await get(token, "/api/notes?q=heading")).json()) as any).items).toHaveLength(1);
+
+    rmSync(file("Journal/2026-10-29.md"));
+    const later = new Date(Date.now() + 5000);
+    writeFileSync(file("Loose.md"), "# Tidied again");
+    utimesSync(file("Loose.md"), later, later);
+    expect(await setup.vault.scan()).toEqual({ added: 0, updated: 1, removed: 1, notes: 1 });
+    expect(((await (await get(token, "/api/notes?q=obsidian")).json()) as any).items).toHaveLength(0);
+  });
+
+  test("move and trash notes and folders", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "Work/Projects", title: "Sink", content: "# Sink\nnotes pivot" });
+    await send(token, "POST", "/api/notes", { title: "Scratch", content: "scratch" });
+    expect((await send(token, "POST", "/api/notes/move", { from: "Scratch.md", to: "Work/Scratch.md" })).status).toBe(200);
+    expect(existsSync(file("Work/Scratch.md"))).toBe(true);
+    expect((await send(token, "POST", "/api/notes/move", { from: "Work/Scratch.md", to: "Work/Projects/Sink.md" })).status).toBe(409);
+    expect((await send(token, "POST", "/api/notes/move", { from: "Work", to: "Work/Inner" })).status).toBe(400);
+
+    expect((await send(token, "POST", "/api/notes/move", { from: "Work/Projects", to: "Archive/Projects" })).status).toBe(200);
+    const hits = (await (await get(token, "/api/notes?q=pivot")).json()) as any;
+    expect(hits.items.map((n: any) => n.path)).toEqual(["Archive/Projects/Sink.md"]);
+    expect(((await (await get(token, "/api/notes")).json()) as any).folders).toEqual(["Archive", "Archive/Projects", "Work"]);
+
+    const t1 = (await (await send(token, "DELETE", q("Work/Scratch.md"))).json()) as any;
+    expect(t1.trashed_to).toBe(".trash/Work/Scratch.md");
+    await send(token, "POST", "/api/notes", { folder: "Work", title: "Scratch", content: "again" });
+    expect(((await (await send(token, "DELETE", q("Work/Scratch.md"))).json()) as any).trashed_to).toBe(".trash/Work/Scratch 1.md");
+    expect((await send(token, "DELETE", q("Archive"))).status).toBe(200);
+    expect(existsSync(file(".trash/Archive/Projects/Sink.md"))).toBe(true);
+    expect(((await (await get(token, "/api/notes")).json()) as any).notes).toEqual([]);
+    // The trash stays out of the index.
+    await setup.vault.scan();
+    expect(((await (await get(token, "/api/notes")).json()) as any).notes).toEqual([]);
+  });
+
+  test("attachments: upload, embed by name, served without script", async () => {
+    const token = await login();
+    const upload = async (name: string, bytes: Uint8Array | string) => {
+      const form = new FormData();
+      form.set("file", new File([bytes], name));
+      return setup.app.request("/api/notes/attachments", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
+    };
+    const first = (await (await upload("photo.png", png)).json()) as any;
+    expect(first).toEqual({ path: "attachments/photo.png", embed: "![[photo.png]]" });
+    expect(((await (await upload("photo.png", png)).json()) as any).path).toBe("attachments/photo 1.png");
+
+    const byName = await get(token, "/api/notes/attachment?name=photo.png");
+    expect(byName.status).toBe(200);
+    expect(byName.headers.get("content-type")).toBe("image/png");
+    expect(byName.headers.get("content-security-policy")).toContain("sandbox");
+
+    await upload("evil.svg", "<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>");
+    expect((await get(token, "/api/notes/attachment?name=evil.svg")).headers.get("content-security-policy")).toStartWith("sandbox");
+    await upload("page.html", "<script>alert(1)</script>");
+    const html = await get(token, "/api/notes/attachment?path=attachments/page.html");
+    expect(html.headers.get("content-type")).toBe("application/octet-stream");
+    expect(html.headers.get("content-disposition")).toContain("attachment");
+    expect((await get(token, "/api/notes/attachment?path=../sink.db")).status).toBe(404);
+  });
+
+  test("parsing: titles, frontmatter tags, inline tags, names", () => {
+    expect(parseNote("a/My file.md", "no heading").title).toBe("My file");
+    expect(parseNote("x.md", "---\ntitle: \"From FM\"\n---\nbody").title).toBe("From FM");
+    expect(parseNote("x.md", "---\ntitle: FM\n---\n# Heading wins ##\n").title).toBe("Heading wins");
+    expect(readFrontmatter("tags:\n  - one\n  - '#two'\nother: 1").tags).toEqual(["one", "two"]);
+    expect(readFrontmatter("tags: a, b").tags).toEqual(["a", "b"]);
+    expect(inlineTags("#real and `#code` and #123 and #nested/tag/ and a#not\n```\n#fenced\n```")).toEqual(["real", "nested/tag"]);
+    expect(parseNote("x.md", "---\ntags: [Work]\n---\n#work #home").tags).toEqual(["Work", "home"]);
+    expect(fileNameFor("  a/b: c?  ")).toBe("a b c");
+    expect(fileNameFor("...")).toBe("Untitled");
+    expect(cleanPath("/Inbox/x.md/", "note")).toBe("Inbox/x.md");
+  });
+});
+
+describe("todos", () => {
+  const send = (token: string, method: string, path: string, body?: unknown) =>
+    setup.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  test("parses Tasks syntax, skipping frontmatter and code", () => {
+    const md = [
+      "---",
+      "- [ ] not a task, frontmatter",
+      "---",
+      "- [ ] Pay rates 📅 2026-11-02 ⏫",
+      "  * [x] Book flights ✅ 2026-10-20",
+      "1. [-] Cancelled thing",
+      "- [/] Half done 🔁 every week 📅 2026-11-09",
+      "- [ ] Call mum (@2026-10-30 18:00)",
+      "```",
+      "- [ ] in code",
+      "```",
+      "- [] not a task",
+    ].join("\n");
+    const todos = parseTodos(md, "America/New_York");
+    expect(todos.map((t) => [t.line, t.text, t.status, t.due, t.done_on])).toEqual([
+      [3, "Pay rates", "open", "2026-11-02", null],
+      [4, "Book flights", "done", null, "2026-10-20"],
+      [5, "Cancelled thing", "cancelled", null, null],
+      [6, "Half done", "open", "2026-11-09", null],
+      [7, "Call mum", "open", "2026-10-30", null],
+    ]);
+    // Due date alone reminds at 9am local; a reminder time wins. New York leaves daylight saving on 1 November.
+    expect(new Date(todos[0]!.remind_at!).toISOString()).toBe("2026-11-02T14:00:00.000Z");
+    expect(new Date(todos[4]!.remind_at!).toISOString()).toBe("2026-10-30T22:00:00.000Z");
+    expect(setDone("- [ ] Pay rates 📅 2026-11-02", true, "2026-10-29")).toBe("- [x] Pay rates 📅 2026-11-02 ✅ 2026-10-29");
+    expect(setDone("  - [x] Book ✅ 2026-10-20", false, "2026-10-29")).toBe("  - [ ] Book");
+    expect(todoLine("  milk  ", "2026-11-01", "08:30")).toBe("- [ ] milk 📅 2026-11-01 (@2026-11-01 08:30)");
+  });
+
+  test("list, tick, untick, quick add, and they follow their note", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "Trips", title: "Japan", content: "# Japan\n\n- [ ] passport 📅 2026-11-20\n- [ ] yen\n" });
+    const added = (await (await send(token, "POST", "/api/todos", { text: "milk", due: "2026-11-01" })).json()) as any;
+    expect(added).toMatchObject({ path: "Todo.md", raw: "- [ ] milk 📅 2026-11-01" });
+    await send(token, "POST", "/api/todos", { text: "bread" });
+    expect(readFileSync(join(setup.vaultDir, "Todo.md"), "utf8")).toBe("# Todo\n\n- [ ] milk 📅 2026-11-01\n- [ ] bread\n");
+
+    let open = ((await (await get(token, "/api/todos")).json()) as any).todos;
+    // Dated first, soonest first; then the rest.
+    expect(open.slice(0, 2).map((t: any) => t.text)).toEqual(["milk", "passport"]);
+    expect(open.slice(2).map((t: any) => t.text).sort()).toEqual(["bread", "yen"]);
+    expect(open.find((t: any) => t.text === "passport").note_title).toBe("Japan");
+
+    const passport = open.find((t: any) => t.text === "passport");
+    // Someone added a line above it since the list loaded: the same text is still found.
+    const note = (await (await get(token, "/api/notes/file?path=Trips%2FJapan.md")).json()) as any;
+    await send(token, "PUT", "/api/notes/file?path=Trips%2FJapan.md", { content: note.content.replace("\n\n", "\n\n- [ ] jr pass\n"), base_hash: note.hash });
+    const ticked = (await (await send(token, "POST", "/api/todos/toggle", { path: passport.path, line: passport.line, raw: passport.raw, done: true })).json()) as any;
+    expect(ticked.line).toBe(passport.line + 1);
+    expect(ticked.raw).toStartWith("- [x] passport 📅 2026-11-20 ✅ ");
+    const done = ((await (await get(token, "/api/todos?view=done")).json()) as any).todos;
+    expect(done.map((t: any) => t.text)).toEqual(["passport"]);
+    expect((await send(token, "POST", "/api/todos/toggle", { path: passport.path, line: 0, raw: "- [ ] gone", done: true })).status).toBe(409);
+    const unticked = (await (await send(token, "POST", "/api/todos/toggle", { path: passport.path, line: ticked.line, raw: ticked.raw, done: false })).json()) as any;
+    expect(unticked.raw).toBe("- [ ] passport 📅 2026-11-20");
+
+    await send(token, "POST", "/api/notes/move", { from: "Trips", to: "Travel" });
+    open = ((await (await get(token, "/api/todos")).json()) as any).todos;
+    expect(open.filter((t: any) => t.path === "Travel/Japan.md")).toHaveLength(3);
+    await send(token, "DELETE", "/api/notes/file?path=Travel");
+    open = ((await (await get(token, "/api/todos")).json()) as any).todos;
+    expect(open.map((t: any) => t.text)).toEqual(["milk", "bread"]);
+  });
+
+  test("excalidraw boards index by name, not drawing JSON", () => {
+    const board = "---\nexcalidraw-plugin: parsed\ntags: [excalidraw]\n---\n# Text Elements\nKitchen layout ^abc\n\n%%\n# Drawing\n```json\n{\"elements\":[{\"id\":\"zzz\"}]}\n```\n%%\n";
+    const parsed = parseNote("Boards/House plan.excalidraw.md", board);
+    expect(parsed.title).toBe("House plan");
+    expect(parsed.body).toContain("Kitchen layout");
+    expect(parsed.body).not.toContain("elements");
+    expect(parseNote("b.excalidraw.md", "==⚠  Switch to EXCALIDRAW VIEW in the MORE OPTIONS menu. ⚠== blah\n\n## Text Elements\nHi ^x\n").body).not.toContain("EXCALIDRAW VIEW");
+  });
+});
+
 describe("helpers", () => {
-  test("capture time is given to the AI in the user's zone", () => {
-    expect(localIso(new Date("2026-10-22T04:12:07Z"), "Pacific/Auckland")).toBe("2026-10-22T17:12:07+13:00 (Thursday)");
-    expect(utcOffset(new Date("2026-07-01T00:00:00Z"), "Pacific/Auckland")).toBe("+12:00");
+  test("dates are the user's wall clock", () => {
+    const tz = "America/New_York";
+    expect(localIso(new Date("2026-10-22T04:12:07Z"), tz)).toBe("2026-10-22T00:12:07-04:00");
+    expect(utcOffset(new Date("2026-01-15T00:00:00Z"), tz)).toBe("-05:00");
+    expect(localTime("2026-10-30", tz)).toBe(Date.parse("2026-10-30T09:00:00-04:00"));
+    expect(localTime("2026-07-01T08:30:00", tz)).toBe(Date.parse("2026-07-01T08:30:00-04:00"));
+    expect(localTime("2026-11-07T07:05:00+13:00", tz)).toBe(Date.parse("2026-11-06T18:05:00Z"));
+    expect(localTime("next tuesday", tz)).toBeNull();
+  });
+
+  test("upgrading drops the old screenshot inbox and keeps notes and sign-ins", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "sink-migrate-")), "sink.db");
+    const old = new Database(path, { create: true, strict: true });
+    // The database as it was just before the inbox went.
+    const drop = migrations.findIndex((m) => m.includes("DROP TABLE IF EXISTS captures"));
+    for (const m of migrations.slice(0, drop)) old.exec(m);
+    old.exec(`PRAGMA user_version = ${drop}`);
+    old.exec("INSERT INTO captures (id, created_at, updated_at, source, status) VALUES ('c1', 1, 1, 'web', 'done')");
+    old.exec("INSERT INTO actions (id, capture_id, type, label, created_at) VALUES ('a1', 'c1', 'todo', 'x', 1)");
+    old.exec("INSERT INTO tokens (id, name, token_hash, created_at) VALUES ('t1', 'phone', 'h', 1)");
+    old.close();
+
+    const db = openDb(path);
+    const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
+    expect(tables).not.toContain("captures");
+    expect(tables).not.toContain("actions");
+    expect(tables).toContain("notes");
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tokens").get()!.n).toBe(1);
+    db.close();
   });
 
   test("fts query is sanitized", () => {
     expect(toFtsQuery(`wifi "pass" OR -x*`)).toBe(`"wifi"* "pass"* "OR"* "x"*`);
     expect(toFtsQuery("   ")).toBeNull();
-  });
-
-  test("extraction parser tolerates fences and junk", () => {
-    const e = parseExtraction('Sure!\n```json\n{"kind":"weird","title":"T","tags":"nope","actions":[{"type":"bad"}]}\n```');
-    expect(e.kind).toBe("other");
-    expect(e.tags).toEqual([]);
-    expect(e.actions).toEqual([]);
   });
 });

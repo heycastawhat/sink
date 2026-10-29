@@ -2,13 +2,24 @@
 
 export class Unauthorized extends Error {}
 
+/** A non-2xx reply. `status` and the parsed `body` let callers handle conflicts (409 carries the current note). */
+export class ApiError extends Error {
+  constructor(status, body) {
+    super(body?.error ?? `HTTP ${status}`);
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`/api${path}`, { credentials: 'same-origin', ...options });
   if (res.status === 401) throw new Unauthorized();
   const body = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
-  if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, body);
   return body;
 }
+
+const p = (path) => `path=${encodeURIComponent(path)}`;
 
 const json = (method, body) => ({
   method,
@@ -24,30 +35,23 @@ export const api = {
   createToken: (name) => request('/auth/tokens', json('POST', { name })),
   revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
 
-  list: (params) => {
-    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ''));
-    return request(`/captures?${qs}`);
-  },
-  get: (id) => request(`/captures/${id}`),
-  patch: (id, body) => request(`/captures/${id}`, json('PATCH', body)),
-  purge: (id) => request(`/captures/${id}`, { method: 'DELETE' }),
-  bulk: (body) => request('/captures/bulk', json('POST', body)),
-  reprocess: (id) => request(`/captures/${id}/reprocess`, { method: 'POST' }),
-  setAction: (id, state) => request(`/actions/${id}`, json('PATCH', { state })),
-  reminders: () => request('/reminders'),
-  digest: () => request('/digest'),
-
-  collections: () => request('/collections'),
-  createCollection: (name) => request('/collections', json('POST', { name })),
-  renameCollection: (id, name) => request(`/collections/${id}`, json('PATCH', { name })),
-  deleteCollection: (id) => request(`/collections/${id}`, { method: 'DELETE' }),
-
-  upload: (file, note) => {
+  notes: () => request('/notes'),
+  searchNotes: (q) => request(`/notes?q=${encodeURIComponent(q)}&limit=100`),
+  note: (path) => request(`/notes/file?${p(path)}`),
+  saveNote: (path, content, baseHash, init = {}) =>
+    request(`/notes/file?${p(path)}`, { ...json('PUT', { content, base_hash: baseHash }), ...init }),
+  createNote: (body) => request('/notes', json('POST', body)),
+  noteMeta: (path, body) => request(`/notes/meta?${p(path)}`, json('PATCH', body)),
+  moveNote: (from, to) => request('/notes/move', json('POST', { from, to })),
+  trashNote: (path) => request(`/notes/file?${p(path)}`, { method: 'DELETE' }),
+  attach: (file) => {
     const form = new FormData();
-    form.set('image', file);
-    form.set('source', 'web');
-    if (note) form.set('note', note);
-    if (file.lastModified) form.set('captured_at', String(file.lastModified));
-    return request('/captures', { method: 'POST', body: form });
+    form.set('file', file);
+    return request('/notes/attachments', { method: 'POST', body: form });
   },
+  attachmentUrl: (ref) => `/api/notes/attachment?${ref.includes('/') ? 'path' : 'name'}=${encodeURIComponent(ref)}`,
+
+  todos: (view = 'open') => request(`/todos?view=${view}`),
+  addTodo: (body) => request('/todos', json('POST', body)),
+  toggleTodo: (t, done) => request('/todos/toggle', json('POST', { path: t.path, line: t.line, raw: t.raw, done })),
 };

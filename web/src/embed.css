@@ -1,0 +1,44 @@
+/* Standalone editor page: the app's Material colours arrive as CSS variables from sink.load(). */
+:root {
+  --md-sys-color-primary: #6750a4;
+  --md-sys-color-on-surface: #1d1b20;
+  --md-sys-color-on-surface-variant: #49454f;
+  --md-sys-color-surface-container-high: #ece6f0;
+  --md-sys-color-surface-container: #f3edf7;
+  --md-sys-color-secondary-container: #e8def8;
+  --md-sys-color-on-secondary-container: #1d192b;
+  --md-sys-color-error: #b3261e;
+  --md-sys-color-shadow: #000;
+}
+
+:root[data-theme='dark'] {
+  --md-sys-color-primary: #d0bcff;
+  --md-sys-color-on-surface: #e6e0e9;
+  --md-sys-color-on-surface-variant: #cac4d0;
+  --md-sys-color-surface-container-high: #2b2930;
+  --md-sys-color-surface-container: #211f26;
+  --md-sys-color-secondary-container: #4a4458;
+  --md-sys-color-on-secondary-container: #e8def8;
+  --md-sys-color-error: #f2b8b5;
+}
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font-family: 'Roboto Flex', Roboto, system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.note-editor {
+  padding: 16px 20px 50vh;
+}
+
+.note-editor .cm-editor {
+  font-size: 17px;
+}

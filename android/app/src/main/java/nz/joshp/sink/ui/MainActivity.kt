@@ -8,16 +8,16 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Inventory2
+import android.net.Uri
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
+import androidx.compose.material.icons.automirrored.outlined.StickyNote2
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import nz.joshp.sink.BuildConfig
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -33,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -51,11 +50,14 @@ import nz.joshp.sink.ui.theme.SinkTheme
 private data class Tab(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
 
 private val TABS = listOf(
-    Tab("home", "Sink", Icons.Outlined.Inventory2, Icons.Filled.Inventory2),
-    Tab("review", "Review", Icons.Outlined.AutoAwesome, Icons.Filled.AutoAwesome),
-    Tab("library", "Library", Icons.Outlined.Folder, Icons.Filled.Folder),
+    Tab("notes", "Notes", Icons.AutoMirrored.Outlined.StickyNote2, Icons.AutoMirrored.Filled.StickyNote2),
+    Tab("todos", "Todos", Icons.Outlined.Checklist, Icons.Filled.Checklist),
     Tab("settings", "Settings", Icons.Outlined.Settings, Icons.Filled.Settings),
 )
+
+/** Route for one note (or a new draft when [path] is null, optionally starting with [text]). */
+fun noteRoute(path: String?, line: Int? = null, folder: String = "", text: String = "") =
+    "note?path=${path?.let(Uri::encode) ?: ""}&line=${line ?: -1}&folder=${Uri.encode(folder)}&text=${Uri.encode(text)}"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,7 +66,8 @@ class MainActivity : ComponentActivity() {
         val settings = (application as SinkApp).settings
         val openSettings = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)
         handleSignIn(intent)
-        openCapture.value = intent.getStringExtra(EXTRA_OPEN_CAPTURE)
+        handleDebugSignIn(intent)
+        openNote.value = noteTarget(intent)
 
         setContent {
             val dynamic by settings.dynamicColor.collectAsState(initial = false)
@@ -86,13 +89,39 @@ class MainActivity : ComponentActivity() {
     private val signingIn = mutableStateOf(false)
     private val signInError = mutableStateOf<String?>(null)
 
-    // Set by reminder notifications and the widget; LoggedIn navigates to it.
-    private val openCapture = mutableStateOf<String?>(null)
+    // A note route from a todo reminder, the New note tile, or text shared from another app.
+    private val openNote = mutableStateOf<String?>(null)
+
+    private fun noteTarget(intent: Intent): String? = when {
+        intent.action == Intent.ACTION_SEND -> {
+            // Shared text becomes a new note: the subject (a page title, say) as its heading.
+            val text = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty().trim()
+            val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim().orEmpty()
+            val body = if (subject.isNotEmpty() && subject != text) "# $subject\n\n$text\n" else if (text.isNotEmpty()) "$text\n" else ""
+            body.takeIf { it.isNotEmpty() }?.let { noteRoute(null, text = it) }
+        }
+        intent.getBooleanExtra(EXTRA_NEW_NOTE, false) -> noteRoute(null)
+        intent.getStringExtra(EXTRA_OPEN_NOTE) != null ->
+            noteRoute(intent.getStringExtra(EXTRA_OPEN_NOTE), intent.getIntExtra(EXTRA_OPEN_LINE, -1).takeIf { it >= 0 })
+        else -> null
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleSignIn(intent)
-        intent.getStringExtra(EXTRA_OPEN_CAPTURE)?.let { openCapture.value = it }
+        handleDebugSignIn(intent)
+        noteTarget(intent)?.let { openNote.value = it }
+    }
+
+    /**
+     * Debug builds only: sign in to a dev server without the OIDC provider, for the emulator:
+     * adb shell am start -n nz.joshp.sink/.ui.MainActivity --es debug_server http://10.0.2.2:8799 --es debug_token <token>
+     */
+    private fun handleDebugSignIn(intent: Intent) {
+        if (!BuildConfig.DEBUG) return
+        val server = intent.getStringExtra("debug_server") ?: return
+        val token = intent.getStringExtra("debug_token") ?: return
+        lifecycleScope.launch { (application as SinkApp).settings.saveSession(server, token) }
     }
 
     private fun handleSignIn(intent: Intent) {
@@ -109,33 +138,27 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun LoggedIn(session: Session, openSettings: Boolean) {
         val settings = (application as SinkApp).settings
-        CaptureImages.base = session.serverUrl
-        val vm: SinkViewModel = viewModel(key = session.token)
+        val notesVm: NotesViewModel = viewModel(key = "notes:" + session.token)
         val nav = rememberNavController()
-        val start = remember { if (openSettings) "settings" else "home" }
-        val loggedOut by vm.loggedOut.collectAsState()
+        val start = remember { if (openSettings) "settings" else "notes" }
+        val loggedOut by notesVm.loggedOut.collectAsState()
         LaunchedEffect(loggedOut) { if (loggedOut) settings.clearToken() }
-        val target = openCapture.value
-        LaunchedEffect(target) {
-            if (target != null) {
-                nav.navigate("capture/$target")
-                openCapture.value = null
+        val noteTarget = openNote.value
+        LaunchedEffect(noteTarget) {
+            if (noteTarget != null) {
+                nav.navigate(noteTarget)
+                openNote.value = null
             }
         }
 
         val entry by nav.currentBackStackEntryAsState()
         val route = entry?.destination?.route
-        // Captures are their own full-screen page; everything else keeps the tab bar.
-        val showBar = route != null && !route.startsWith("capture/")
-        val tab = when {
-            route == null -> null
-            route.startsWith("view/") || route.startsWith("collection/") -> "library"
-            else -> route
-        }
-        val open = { id: String -> nav.navigate("capture/$id") }
+        // A note is its own full-screen page; the tabs keep the bar.
+        val showBar = route != null && !route.startsWith("note?")
+        val openNoteAt = { path: String, line: Int? -> nav.navigate(noteRoute(path, line)) }
 
         Scaffold(
-            bottomBar = { if (showBar) TabBar(nav, tab, vm) },
+            bottomBar = { if (showBar) TabBar(nav, route) },
             containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         ) { inner ->
             NavHost(
@@ -143,40 +166,47 @@ class MainActivity : ComponentActivity() {
                 startDestination = start,
                 modifier = Modifier.fillMaxSize().padding(bottom = if (showBar) inner.calculateBottomPadding() else 0.dp),
             ) {
-                composable("home") { HomeScreen(vm, session.serverUrl, View.All, onOpen = open) }
-                composable("review") { HomeScreen(vm, session.serverUrl, View.Review, onOpen = open) }
-                composable("library") {
-                    LibraryScreen(
-                        vm,
-                        onView = { nav.navigate("view/${it.id}") },
-                        onCollection = { nav.navigate("collection/$it") },
+                composable("notes") {
+                    NotesScreen(notesVm, onOpen = { openNoteAt(it, null) }, onNew = { nav.navigate(noteRoute(null)) })
+                }
+                composable("todos") { TodosScreen(notesVm, onOpenNote = { p, l -> openNoteAt(p, l) }) }
+                composable(
+                    "note?path={path}&line={line}&folder={folder}&text={text}",
+                    arguments = listOf(
+                        navArgument("path") { type = NavType.StringType; defaultValue = "" },
+                        navArgument("line") { type = NavType.IntType; defaultValue = -1 },
+                        navArgument("folder") { type = NavType.StringType; defaultValue = "" },
+                        navArgument("text") { type = NavType.StringType; defaultValue = "" },
+                    ),
+                ) { e ->
+                    val path = e.arguments?.getString("path").orEmpty().ifEmpty { null }
+                    NoteScreen(
+                        notesVm,
+                        path = path,
+                        line = e.arguments?.getInt("line")?.takeIf { it >= 0 },
+                        folder = e.arguments?.getString("folder").orEmpty(),
+                        serverUrl = session.serverUrl,
+                        onBack = { nav.popBackStack() },
+                        onOpenNote = { openNoteAt(it, null) },
+                        initialText = e.arguments?.getString("text").orEmpty(),
                     )
                 }
-                composable("view/{id}") { e ->
-                    val view = View.entries.firstOrNull { it.id == e.arguments?.getString("id") } ?: View.Pinned
-                    HomeScreen(vm, session.serverUrl, view, onOpen = open, onBack = { nav.popBackStack() })
-                }
-                composable("collection/{id}") { e ->
-                    HomeScreen(vm, session.serverUrl, View.All, e.arguments?.getString("id"), onOpen = open, onBack = { nav.popBackStack() })
-                }
-                composable("settings") { SettingsScreen(settings, vm, session.serverUrl) }
-                composable("capture/{id}") { e ->
-                    DetailScreen(vm, e.arguments?.getString("id")!!, onBack = { nav.popBackStack() })
-                }
+                composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl) }
             }
         }
     }
 
     companion object {
         const val EXTRA_OPEN_SETTINGS = "open_settings"
-        const val EXTRA_OPEN_CAPTURE = "open_capture"
+        const val EXTRA_OPEN_NOTE = "open_note"
+        const val EXTRA_OPEN_LINE = "open_line"
+        const val EXTRA_NEW_NOTE = "new_note"
         private val Loading = Session("", "")
     }
 }
 
 @Composable
-private fun TabBar(nav: NavHostController, selected: String?, vm: SinkViewModel) {
-    val state by vm.state.collectAsStateWithLifecycle()
+private fun TabBar(nav: NavHostController, selected: String?) {
     NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         for (t in TABS) {
             val on = selected == t.route
@@ -190,11 +220,7 @@ private fun TabBar(nav: NavHostController, selected: String?, vm: SinkViewModel)
                         restoreState = true
                     }
                 },
-                icon = {
-                    BadgedBox(badge = { if (t.route == "review" && state.reviewCount > 0) Badge { Text("${state.reviewCount}") } }) {
-                        Icon(if (on) t.selectedIcon else t.icon, null)
-                    }
-                },
+                icon = { Icon(if (on) t.selectedIcon else t.icon, null) },
                 label = { Text(t.label) },
             )
         }

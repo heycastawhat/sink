@@ -12,6 +12,7 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 // Pending logins: OIDC round-trips (state) and Android hand-back codes both expire quickly.
 const PENDING_TTL_MS = 10 * 60 * 1000;
 const HANDBACK_TTL_MS = 2 * 60 * 1000;
+const MAX_PENDING = 500;
 export const ANDROID_REDIRECT = "nz.joshp.sink://auth";
 
 function sha256(value: string): string {
@@ -29,21 +30,26 @@ export function s256(verifier: string): string {
 export class Auth {
   constructor(private db: Database) {}
 
-  issueToken(deviceName: string, subject: string): string {
+  issueToken(deviceName: string, subject: string, scope: Scope = "full"): string {
     const token = "sink_" + randomString();
     this.db
-      .query("INSERT INTO tokens (id, name, token_hash, created_at, subject) VALUES (?, ?, ?, ?, ?)")
-      .run(newId(), deviceName, sha256(token), now(), subject);
+      .query("INSERT INTO tokens (id, name, token_hash, created_at, subject, scope) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(newId(), deviceName, sha256(token), now(), subject, scope);
     return token;
   }
 
-  verify(token: string): string | null {
+  /** The token's id and scope, or null if it isn't one of ours. */
+  check(token: string): { id: string; scope: Scope } | null {
     const row = this.db
-      .query<{ id: string }, [string]>("SELECT id FROM tokens WHERE token_hash = ?")
+      .query<{ id: string; scope: Scope }, [string]>("SELECT id, scope FROM tokens WHERE token_hash = ?")
       .get(sha256(token));
     if (!row) return null;
     this.db.query("UPDATE tokens SET last_used_at = ? WHERE id = ?").run(now(), row.id);
-    return row.id;
+    return row;
+  }
+
+  verify(token: string): string | null {
+    return this.check(token)?.id ?? null;
   }
 
   subjectOf(tokenId: string): string | null {
@@ -56,23 +62,43 @@ export class Auth {
 
   listTokens() {
     return this.db
-      .query("SELECT id, name, subject, created_at, last_used_at FROM tokens ORDER BY created_at DESC")
+      .query("SELECT id, name, subject, scope, created_at, last_used_at FROM tokens ORDER BY created_at DESC")
       .all();
   }
 }
 
-export type AuthEnv = { Variables: { tokenId: string } };
+export type Scope = "full" | "mcp";
+export type AuthEnv = { Variables: { tokenId: string; scope: Scope } };
 
-export function requireAuth(auth: Auth): MiddlewareHandler<AuthEnv> {
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * Bearer token or the web session cookie. A cookie-carrying request that changes something must come from Sink's own
+ * page: SameSite=Lax still lets sibling subdomains (same site, different origin) post as the user.
+ */
+export function requireAuth(auth: Auth, publicUrls: string[]): MiddlewareHandler<AuthEnv> {
   return async (c, next) => {
     const header = c.req.header("authorization");
-    const token = header?.startsWith("Bearer ") ? header.slice(7) : getCookie(c, SESSION_COOKIE);
-    const tokenId = token ? auth.verify(token) : null;
-    if (!tokenId) return c.json({ error: "unauthorized" }, 401);
-    c.set("tokenId", tokenId);
+    const bearer = header?.startsWith("Bearer ") ? header.slice(7) : null;
+    const token = bearer ?? getCookie(c, SESSION_COOKIE);
+    const found = token ? auth.check(token) : null;
+    if (!found) return c.json({ error: "unauthorized" }, 401);
+    if (!bearer && !SAFE_METHODS.has(c.req.method)) {
+      const origin = c.req.header("origin");
+      const sameOrigin = c.req.header("sec-fetch-site") === "same-origin";
+      if (!sameOrigin && !(origin && publicUrls.includes(origin))) return c.json({ error: "cross-origin request refused" }, 403);
+    }
+    c.set("tokenId", found.id);
+    c.set("scope", found.scope);
     await next();
   };
 }
+
+/** Routes an assistant (MCP) token may not use. */
+export const requireFullScope: MiddlewareHandler<AuthEnv> = async (c, next) => {
+  if (c.get("scope") !== "full") return c.json({ error: "not allowed with this token" }, 403);
+  await next();
+};
 
 /** The origin the browser used, honouring the Cloudflare tunnel's forwarded headers. */
 export function requestOrigin(c: Context): string {
@@ -119,7 +145,12 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     const t = now();
     for (const [k, v] of pending) if (t - v.created > PENDING_TTL_MS) pending.delete(k);
     for (const [k, v] of handbacks) if (t - v.created > HANDBACK_TTL_MS) handbacks.delete(k);
+    // Anyone can start a login; a flood of them drops the oldest instead of growing without end.
+    for (const map of [pending, handbacks] as Map<string, unknown>[]) {
+      while (map.size > MAX_PENDING) map.delete(map.keys().next().value!);
+    }
   };
+  const authed = requireAuth(auth, opts.publicUrls);
 
   // Only redirect back to origins we were told about, never to an arbitrary Host header.
   const allowedOrigin = (c: Context) => {
@@ -164,7 +195,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
 
     if (!entry || now() - entry.created > PENDING_TTL_MS) return fail("That sign-in link expired. Try again.");
     const error = c.req.query("error");
-    if (error) return fail(`authentik said: ${Bun.escapeHTML(c.req.query("error_description") ?? error)}`, 403);
+    if (error) return fail(`The sign-in provider said: ${Bun.escapeHTML(c.req.query("error_description") ?? error)}`, 403);
     const code = c.req.query("code");
     if (!code) return fail("No code in the response.");
 
@@ -178,7 +209,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
       });
     } catch (err) {
       console.warn(`[auth] oidc exchange failed: ${(err as Error).message}`);
-      return fail("authentik didn't accept the login.", 502);
+      return fail("The sign-in provider didn't accept the login.", 502);
     }
     if (!oidc.allowed(identity)) {
       console.warn(`[auth] rejected ${identity.username ?? identity.sub}`);
@@ -195,7 +226,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     setCookie(c, SESSION_COOKIE, token, {
       httpOnly: true,
       secure: opts.secureCookies || entry.origin.startsWith("https://"),
-      // Lax so the cookie survives the redirect back from authentik.
+      // Lax so the cookie survives the redirect back from the sign-in provider.
       sameSite: "Lax",
       path: "/",
       maxAge: COOKIE_MAX_AGE,
@@ -214,25 +245,29 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     return c.json({ ok: true, token: auth.issueToken(entry.device, entry.subject) });
   });
 
-  app.post("/logout", requireAuth(auth), (c) => {
+  app.post("/logout", authed, (c) => {
     auth.revoke(c.get("tokenId"));
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
   });
 
-  app.get("/me", requireAuth(auth), (c) => c.json({ ok: true, tokenId: c.get("tokenId") }));
+  // Before sign-in: what the login button should say.
+  app.get("/info", (c) => c.json({ provider: oidc.name }));
 
-  app.get("/tokens", requireAuth(auth), (c) => c.json({ tokens: auth.listTokens() }));
+  app.get("/me", authed, (c) => c.json({ ok: true, tokenId: c.get("tokenId") }));
+
+  app.get("/tokens", authed, requireFullScope, (c) => c.json({ tokens: auth.listTokens() }));
 
   // Named tokens for other clients (an MCP client like Claude Code); same account as the caller.
-  app.post("/tokens", requireAuth(auth), async (c) => {
+  // Tokens made here are for MCP clients like Claude Code, so they get the assistant scope.
+  app.post("/tokens", authed, requireFullScope, async (c) => {
     const parsed = z.object({ name: z.string().trim().min(1).max(60) }).safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
     const subject = auth.subjectOf(c.get("tokenId")) ?? "";
-    return c.json({ token: auth.issueToken(parsed.data.name, subject) }, 201);
+    return c.json({ token: auth.issueToken(parsed.data.name, subject, "mcp") }, 201);
   });
 
-  app.delete("/tokens/:id", requireAuth(auth), (c) => {
+  app.delete("/tokens/:id", authed, requireFullScope, (c) => {
     auth.revoke(c.req.param("id"));
     return c.json({ ok: true });
   });

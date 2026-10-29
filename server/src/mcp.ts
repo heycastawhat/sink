@@ -1,23 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import sharp from "sharp";
 import { z } from "zod";
-import { KINDS } from "./ai/extract";
-import { fetchPublic } from "./net";
 
 /** Calls Sink's own REST API as the MCP caller, so tools share its auth, filters and validation. */
 export type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>;
-
-type Capture = Record<string, unknown> & {
-  id: string;
-  created_at: number;
-  ocr_text?: string | null;
-  collections?: string[];
-};
-type Collection = { id: string; name: string; count: number };
-
-const IMAGE_MAX_PX = 1568;
-const FETCH_MAX_BYTES = 20 * 1024 * 1024;
 
 /**
  * MCP over Streamable HTTP, stateless: a fresh server per request (no sessions to keep),
@@ -37,18 +23,6 @@ export async function handleMcp(req: Request, api: ApiFetch, timeZone: string): 
 
 class ToolError extends Error {}
 
-/** Downloads an image an agent points at, public addresses only. */
-async function fetchImage(raw: string): Promise<Uint8Array> {
-  const res = await fetchPublic(raw, { headers: { accept: "image/*" } }).catch((err: Error) => {
-    throw new ToolError(`Can't fetch ${raw}: ${err.message}`);
-  });
-  if (!res.ok) throw new ToolError(`Image URL returned HTTP ${res.status}`);
-  if (Number(res.headers.get("content-length") ?? 0) > FETCH_MAX_BYTES) throw new ToolError("Image too large");
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  if (bytes.length > FETCH_MAX_BYTES) throw new ToolError("Image too large");
-  return bytes;
-}
-
 async function json<T>(res: Response): Promise<T> {
   const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!res.ok) throw new ToolError(body?.error ?? `HTTP ${res.status}`);
@@ -59,52 +33,19 @@ const text = (value: unknown) => ({ content: [{ type: "text" as const, text: JSO
 
 function buildServer(api: ApiFetch, timeZone: string) {
   const server = new McpServer(
-    { name: "sink", version: "1.0.0" },
+    { name: "sink", version: "2.0.0" },
     {
       instructions:
-        "Sink is the user's personal archive of screenshots, notes and links. Each capture is one the AI has read: kind, " +
-        "title, summary, extracted entities, the user's note on why they saved it, and its text. Search first, " +
-        "then get_capture for full text or to look at the image. add_capture saves something new: a note, a link or an " +
-        "image. Captures without a screenshot have has_image false.",
+        "Sink is the user's notes app: markdown files in their vault (Obsidian-compatible, organised in folders), plus " +
+        "todos, which are `- [ ]` checkbox lines inside notes (Tasks plugin syntax: `📅 YYYY-MM-DD` due date, " +
+        "`(@YYYY-MM-DD HH:mm)` reminder). Search first, then read_note for the full text. save_note creates or replaces " +
+        "a note; add_todo appends a todo to Todo.md.",
     },
   );
 
-  const when = (ms: number) => ({
-    created_at: new Date(ms).toISOString(),
-    created_local: new Date(ms).toLocaleString("en-NZ", { timeZone, dateStyle: "medium", timeStyle: "short" }),
-  });
-
-  const brief = (c: Capture) => ({
-    id: c.id,
-    ...when(c.created_at),
-    kind: c.kind,
-    title: c.title,
-    summary: c.summary,
-    note: c.note_text,
-    tags: c.tags,
-    pinned: c.pinned,
-    source_url: c.source_url ?? undefined,
-    status: c.status,
-    has_image: c.image_url !== null,
-    text_excerpt: c.ocr_text ? c.ocr_text.slice(0, 280) : undefined,
-  });
-
-  const collections = async () => (await json<{ collections: Collection[] }>(await api("/api/collections"))).collections;
-
-  /** Accepts collection ids or names (any case). */
-  async function resolveCollections(refs: string[]) {
-    if (!refs.length) return [];
-    const all = await collections();
-    return refs.map((ref) => {
-      const hit = all.find((c) => c.id === ref || c.name.toLowerCase() === ref.toLowerCase());
-      if (!hit) throw new ToolError(`No collection "${ref}". Existing: ${all.map((c) => c.name).join(", ") || "none"}`);
-      return hit.id;
-    });
-  }
-
   // Tool errors go back to the model as text it can act on, not protocol errors.
   const safe =
-    <A,>(fn: (args: A) => Promise<ReturnType<typeof text> | { content: unknown[] }>) =>
+    <A,>(fn: (args: A) => Promise<{ content: { type: "text"; text: string }[] }>) =>
     async (args: A) => {
       try {
         return (await fn(args)) as any;
@@ -113,213 +54,157 @@ function buildServer(api: ApiFetch, timeZone: string) {
         throw err;
       }
     };
+  const local = (ms: number) => new Date(ms).toLocaleString("en-GB", { timeZone, dateStyle: "medium", timeStyle: "short" });
+
+  type NoteMeta = { path: string; title: string; tags: string[]; mtime: number; hash: string; snippet?: string };
+  const noteBrief = (n: NoteMeta) => ({
+    path: n.path,
+    title: n.title,
+    tags: n.tags,
+    modified_local: local(n.mtime),
+    ...(n.snippet && { snippet: n.snippet }),
+  });
+  const pathQs = (path: string) => `path=${encodeURIComponent(path)}`;
 
   server.registerTool(
-    "search_captures",
+    "search_notes",
     {
-      title: "Search captures",
+      title: "Search notes",
       description:
-        "Search the user's screenshots by words or meaning (hybrid keyword + semantic). Leave query empty to browse newest first. " +
-        "Returns brief results; use get_capture for everything about one.",
+        "Search the user's markdown notes by words (title, text, tags, path). Leave query empty to list every note, newest " +
+        "first, plus the folder list. Use read_note for a note's full text.",
       inputSchema: {
-        query: z.string().max(200).optional().describe('Free text, e.g. "wifi password from the airbnb"'),
-        kind: z.enum(KINDS).optional(),
-        tag: z.string().max(60).optional(),
-        collection: z.string().max(60).optional().describe("Collection name or id"),
-        view: z.enum(["all", "pinned", "archived", "trash"]).optional().describe("Default all (excludes archived and trash)"),
-        limit: z.number().int().min(1).max(40).optional().describe("Default 10"),
+        query: z.string().max(200).optional(),
+        limit: z.number().int().min(1).max(100).optional().describe("Default 20"),
       },
       annotations: { readOnlyHint: true },
     },
-    safe(async ({ query, kind, tag, collection, view, limit }) => {
-      const qs = new URLSearchParams({ limit: String(limit ?? 10), view: view ?? "all" });
-      if (query) qs.set("q", query);
-      if (kind) qs.set("kind", kind);
-      if (tag) qs.set("tag", tag);
-      if (collection) qs.set("collection", (await resolveCollections([collection]))[0]!);
-      const page = await json<{ items: Capture[]; next_cursor: string | null }>(await api(`/api/captures?${qs}`));
-      return text({ results: page.items.map(brief), more: page.next_cursor !== null });
-    }),
-  );
-
-  server.registerTool(
-    "get_capture",
-    {
-      title: "Get capture",
-      description:
-        "Everything about one capture: full text in the image, entities (dates, prices, links, places, people), suggested actions, " +
-        "collections. Set include_image to also see the screenshot itself.",
-      inputSchema: {
-        id: z.string().max(60),
-        include_image: z.boolean().optional().describe("Attach the screenshot (downscaled JPEG)"),
-      },
-      annotations: { readOnlyHint: true },
-    },
-    safe(async ({ id, include_image }) => {
-      const c = await json<Capture>(await api(`/api/captures/${encodeURIComponent(id)}`));
-      const names = new Map((await collections()).map((col) => [col.id, col.name]));
-      const { image_url, thumb_url, width, height, mime, ...rest } = c;
-      const detail = {
-        ...rest,
-        ...when(c.created_at),
-        has_image: image_url !== null,
-        collections: (c.collections ?? []).map((cid) => names.get(cid) ?? cid),
-      };
-      const content: unknown[] = text(detail).content;
-      if (include_image && image_url) {
-        const res = await api(`/api/media/${encodeURIComponent(id)}/original`);
-        if (res.ok) {
-          const jpeg = await sharp(Buffer.from(await res.arrayBuffer()))
-            .resize({ width: IMAGE_MAX_PX, height: IMAGE_MAX_PX, fit: "inside", withoutEnlargement: true })
-            .jpeg({ quality: 80 })
-            .toBuffer();
-          content.push({ type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" });
-        }
+    safe(async ({ query, limit }) => {
+      if (query?.trim()) {
+        const { items } = await json<{ items: NoteMeta[] }>(
+          await api(`/api/notes?q=${encodeURIComponent(query)}&limit=${limit ?? 20}`),
+        );
+        return text({ results: items.map(noteBrief) });
       }
-      return { content };
+      const { notes, folders } = await json<{ notes: NoteMeta[]; folders: string[] }>(await api("/api/notes"));
+      return text({ notes: notes.slice(0, limit ?? 20).map(noteBrief), total: notes.length, folders });
     }),
   );
 
   server.registerTool(
-    "list_collections",
+    "read_note",
     {
-      title: "List collections",
-      description: "The user's collections (boards they file captures into), with how many captures each holds.",
-      inputSchema: {},
+      title: "Read note",
+      description:
+        "Full markdown of one note, plus the hash save_note needs to edit it. Give the path from search_notes " +
+        '(e.g. "Inbox/Door code.md"); a title or a name without ".md" also works.',
+      inputSchema: { path: z.string().max(1024).describe("Vault path, file name or title") },
       annotations: { readOnlyHint: true },
     },
-    safe(async () => text({ collections: (await collections()).map(({ id, name, count }) => ({ id, name, count })) })),
+    safe(async ({ path }) => {
+      const n = await findNote(path);
+      // The markdown goes back as its own text block, not escaped inside JSON, so it reads as the note.
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ ...noteBrief(n), hash: n.hash }, null, 2) },
+          { type: "text" as const, text: n.content },
+        ],
+      };
+    }),
   );
 
+  /** A note by vault path, falling back to file name or title, since assistants often pass what they saw. */
+  async function findNote(ref: string): Promise<NoteMeta & { content: string }> {
+    const clean = ref.trim().replace(/^\/+/, "");
+    const asPath = /\.md$/i.test(clean) ? clean : `${clean}.md`;
+    const direct = await api(`/api/notes/file?${pathQs(asPath)}`);
+    if (direct.ok) return json(direct);
+    const { notes } = await json<{ notes: NoteMeta[] }>(await api("/api/notes"));
+    const want = clean.replace(/\.md$/i, "").toLowerCase();
+    const name = (p: string) => p.split("/").pop()!.replace(/(\.excalidraw)?\.md$/i, "").toLowerCase();
+    const hits = notes.filter((n) => name(n.path) === want || n.title.toLowerCase() === want);
+    if (hits.length === 1) return json(await api(`/api/notes/file?${pathQs(hits[0]!.path)}`));
+    if (hits.length > 1) throw new ToolError(`Several notes match "${ref}": ${hits.map((h) => h.path).join(", ")}. Pass one of these paths.`);
+    throw new ToolError(`No note "${ref}". Use search_notes to find its path.`);
+  }
+
   server.registerTool(
-    "upcoming_reminders",
+    "save_note",
     {
-      title: "Upcoming reminders",
-      description: "Reminders and accepted to-dos from captures that are still in the future, soonest first.",
-      inputSchema: {},
+      title: "Save note",
+      description:
+        "Write a markdown note. To create one, give title (and optionally folder) with no path; it lands at " +
+        "<folder>/<title>.md, numbered if the name is taken. To edit one, give path and the hash from read_note; the whole " +
+        "content is replaced, so read first and keep what should stay. A stale hash fails rather than overwrite the user's edits.",
+      inputSchema: {
+        content: z.string().max(1_000_000).describe("Full markdown. Start with '# Title' so the note has a heading."),
+        path: z.string().max(1024).optional().describe("Existing note to replace"),
+        hash: z.string().max(64).optional().describe("From read_note; required with path"),
+        title: z.string().max(200).optional().describe("For a new note: its file name"),
+        folder: z.string().max(1024).optional().describe('For a new note, e.g. "Inbox" or "Projects/Sink". Default: vault root'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    safe(async ({ content, path, hash, title, folder }) => {
+      const headers = { "content-type": "application/json" };
+      if (path) {
+        if (!hash) throw new ToolError("Editing needs the hash from read_note");
+        const n = await json<NoteMeta>(
+          await api(`/api/notes/file?${pathQs(path)}`, { method: "PUT", headers, body: JSON.stringify({ content, base_hash: hash }) }),
+        );
+        return text({ saved: noteBrief(n), hash: n.hash });
+      }
+      const n = await json<NoteMeta>(
+        await api("/api/notes", { method: "POST", headers, body: JSON.stringify({ content, title: title ?? "", folder: folder ?? "" }) }),
+      );
+      return text({ created: noteBrief(n), hash: n.hash });
+    }),
+  );
+
+  type Todo = { path: string; line: number; text: string; status: string; due: string | null; remind_at: number | null; note_title: string };
+
+  server.registerTool(
+    "list_todos",
+    {
+      title: "List todos",
+      description: "Open todos from every note, dated ones first (soonest first). Set done to list finished ones instead.",
+      inputSchema: { done: z.boolean().optional() },
       annotations: { readOnlyHint: true },
     },
-    safe(async () => {
-      const { reminders } = await json<{ reminders: (Record<string, unknown> & { due_at: number })[] }>(await api("/api/reminders"));
+    safe(async ({ done }) => {
+      const { todos, today } = await json<{ todos: Todo[]; today: string }>(await api(`/api/todos?view=${done ? "done" : "open"}`));
       return text({
-        reminders: reminders.map((r) => ({
-          capture_id: r.capture_id,
-          capture_title: r.capture_title,
-          label: r.label,
-          state: r.state,
-          due_at: new Date(r.due_at).toISOString(),
-          due_local: new Date(r.due_at).toLocaleString("en-NZ", { timeZone, dateStyle: "medium", timeStyle: "short" }),
+        today,
+        todos: todos.map((t) => ({
+          text: t.text,
+          due: t.due,
+          remind_local: t.remind_at ? local(t.remind_at) : undefined,
+          note: t.note_title,
+          path: t.path,
+          line: t.line,
         })),
       });
     }),
   );
 
   server.registerTool(
-    "update_capture",
+    "add_todo",
     {
-      title: "Update capture",
-      description:
-        "Edit a capture: title, note, tags (replaces the list), pin, archive, or file it into / take it out of collections (by name or id).",
+      title: "Add todo",
+      description: "Add a todo to Todo.md (or another note by path), with an optional due date and reminder time in the user's time zone.",
       inputSchema: {
-        id: z.string().max(60),
-        title: z.string().max(200).optional(),
-        note: z.string().max(4000).optional(),
-        tags: z.array(z.string().max(40)).max(20).optional(),
-        pinned: z.boolean().optional(),
-        archived: z.boolean().optional(),
-        add_to_collections: z.array(z.string().max(60)).max(20).optional(),
-        remove_from_collections: z.array(z.string().max(60)).max(20).optional(),
+        text: z.string().min(1).max(2000),
+        due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("YYYY-MM-DD"),
+        time: z.string().regex(/^\d{1,2}:\d{2}$/).optional().describe("HH:mm reminder time on the due date"),
+        path: z.string().max(1024).optional().describe("Note to add it to; default Todo.md"),
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-    },
-    safe(async ({ id, title, note, tags, pinned, archived, add_to_collections, remove_from_collections }) => {
-      const patch: Record<string, unknown> = {};
-      if (title !== undefined) patch.title = title;
-      if (note !== undefined) patch.note_text = note;
-      if (tags !== undefined) patch.tags = tags;
-      if (pinned !== undefined) patch.pinned = pinned;
-      if (archived !== undefined) patch.archived = archived;
-      const add = await resolveCollections(add_to_collections ?? []);
-      const remove = await resolveCollections(remove_from_collections ?? []);
-      const headers = { "content-type": "application/json" };
-      if (Object.keys(patch).length) {
-        await json(await api(`/api/captures/${encodeURIComponent(id)}`, { method: "PATCH", headers, body: JSON.stringify(patch) }));
-      }
-      if (add.length || remove.length) {
-        const { updated } = await json<{ updated: number }>(
-          await api("/api/captures/bulk", {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ ids: [id], add_collections: add, remove_collections: remove }),
-          }),
-        );
-        if (!updated) throw new ToolError(`No capture ${id}`);
-      }
-      const c = await json<Capture>(await api(`/api/captures/${encodeURIComponent(id)}`));
-      return text({ updated: brief(c) });
-    }),
-  );
-
-  server.registerTool(
-    "add_capture",
-    {
-      title: "Add capture",
-      description:
-        "Save something new to the user's sink: a note (text), a link (url), an image, or any mix. A bare link is read so " +
-        "it's searchable. The AI then files it like any screenshot (kind, title, summary, reminders), which takes a few " +
-        "seconds; status is pending until then. Saving the same thing twice returns the existing capture.",
-      inputSchema: {
-        text: z.string().max(50_000).optional().describe("Text to keep, e.g. a recipe, an address, notes from this chat"),
-        url: z.string().url().max(2000).optional().describe("Link to save, or the page the text or image came from"),
-        note: z.string().max(4000).optional().describe("Why it's being saved; steers the AI and shows as the user's note"),
-        image_base64: z.string().max(28_000_000).optional().describe("PNG, JPEG, WebP or HEIC, base64"),
-        image_url: z.string().url().max(2000).optional().describe("Public URL of an image to download and keep"),
-        collections: z.array(z.string().max(60)).max(20).optional().describe("Collection names or ids to file it into"),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-    },
-    safe(async ({ text: body, url, note, image_base64, image_url, collections: cols }) => {
-      if (image_base64 && image_url) throw new ToolError("Give image_base64 or image_url, not both");
-      if (!body?.trim() && !url && !image_base64 && !image_url) throw new ToolError("Nothing to save: give text, url or an image");
-      const collectionIds = await resolveCollections(cols ?? []);
-
-      const form = new FormData();
-      form.set("source", "mcp");
-      if (body?.trim()) form.set("text", body.trim());
-      if (url) form.set("source_url", url);
-      if (note?.trim()) form.set("note", note.trim());
-      const image = image_url
-        ? await fetchImage(image_url)
-        : image_base64 && new Uint8Array(Buffer.from(image_base64.replace(/^data:[^,]*,/, ""), "base64"));
-      if (image) form.set("image", new File([image], "capture"));
-      const c = await json<Capture>(await api("/api/captures", { method: "POST", body: form }));
-
-      if (collectionIds.length) {
-        await json(
-          await api("/api/captures/bulk", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ ids: [c.id], add_collections: collectionIds }),
-          }),
-        );
-      }
-      return text({ added: brief(c), collections: cols ?? [] });
-    }),
-  );
-
-  server.registerTool(
-    "create_collection",
-    {
-      title: "Create collection",
-      description: "Make a new collection to file captures into.",
-      inputSchema: { name: z.string().min(1).max(60) },
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
-    safe(async ({ name }) => {
-      const col = await json<Collection>(
-        await api("/api/collections", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) }),
+    safe(async (args) => {
+      const added = await json<{ path: string; raw: string }>(
+        await api("/api/todos", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) }),
       );
-      return text({ created: { id: col.id, name: col.name } });
+      return text({ added: added.raw, path: added.path });
     }),
   );
 

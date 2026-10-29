@@ -1,0 +1,782 @@
+// Notes: a Keep-style grid of cards, each opening fullscreen in the markdown editor, plus the Todos list.
+// Notes are files in the vault on the NAS; saves carry the hash we last saw, so edits made elsewhere
+// (Obsidian, the phone) are never silently overwritten.
+
+import { api, ApiError, Unauthorized } from './api.js';
+import { createEditor } from './editor.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) =>
+  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
+
+export const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'brown', 'gray'];
+const SAVE_DELAY = 700;
+const POLL_MS = 15_000;
+const draftKey = (path) => `sink:unsaved:${path}`;
+
+let toast = (msg) => console.log(msg);
+let navigate = (hash) => (location.hash = hash);
+// Opened by tapping a card (so Back can pop history) rather than from a link or a reload.
+let openedInApp = false;
+const openFromApp = (hash) => {
+  openedInApp = true;
+  navigate(hash);
+};
+
+export function initNotes(deps) {
+  toast = deps.toast;
+  navigate = deps.navigate ?? navigate;
+}
+
+const state = {
+  notes: [],
+  folders: [],
+  folder: '',
+  q: '',
+  results: null,
+  loaded: false,
+};
+
+const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+const fileName = (path) => path.split('/').pop().replace(/(\.excalidraw)?\.md$/i, '');
+export const noteHash = (path, line) => `#/n/${path.split('/').map(encodeURIComponent).join('/')}${line != null ? `?line=${line}` : ''}`;
+
+function relative(ts) {
+  const d = new Date(ts);
+  const mins = Math.round((Date.now() - ts) / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  if (d.toDateString() === new Date().toDateString()) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
+
+// ---------- grid ----------
+
+export async function loadNotes() {
+  try {
+    const { notes, folders } = await api.notes();
+    state.notes = notes;
+    state.folders = folders;
+    state.loaded = true;
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    toast(`Can't load notes: ${err.message}`);
+  }
+  renderGrid();
+}
+
+export function setFolder(folder) {
+  state.folder = folder;
+  renderGrid();
+}
+
+let searchSeq = 0;
+export async function setQuery(q) {
+  state.q = q;
+  const seq = ++searchSeq;
+  if (!q) {
+    state.results = null;
+    return renderGrid();
+  }
+  try {
+    const { items } = await api.searchNotes(q);
+    if (seq === searchSeq) state.results = items;
+  } catch (err) {
+    toast(err.message);
+  }
+  if (seq === searchSeq) renderGrid();
+}
+
+/** Markdown excerpt as card text: checkboxes as boxes, markup stripped, a few lines. */
+function excerptHtml(text) {
+  const lines = (text ?? '').split('\n').filter((l) => l.trim() && !/^%%/.test(l)).slice(0, 10);
+  return lines
+    .map((l) => {
+      const task = /^\s*[-*+]\s+\[(.)\]\s+(.*)$/.exec(l);
+      const clean = (s) =>
+        esc(
+          s
+            .replace(/!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)/g, '🖼')
+            .replace(/\[\[([^\]|]+)\|?([^\]]*)\]\]/g, (_, a, b) => b || a)
+            .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+            .replace(/[📅⏳🛫✅]\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)/gu, '')
+            .replace(/^#+\s+/, '')
+            .replace(/^\s*[-*+]\s+/, '• ')
+            .replace(/^>\s?/, '')
+            .replace(/[*_~`]/g, ''),
+        );
+      if (task) return `<span class="ln task${task[1] === ' ' ? '' : ' done'}">${ic(task[1] === ' ' ? 'check_box_outline_blank' : 'check_box')}<span>${clean(task[2])}</span></span>`;
+      return `<span class="ln">${clean(l)}</span>`;
+    })
+    .join('');
+}
+
+function cardHtml(n) {
+  const board = /\.excalidraw\.md$/i.test(n.path);
+  const folder = folderOf(n.path);
+  const body = n.snippet ? esc(n.snippet).replace(/\[([^\]]+)\]/g, '<mark>$1</mark>') : excerptHtml(n.excerpt);
+  // A note with no heading is named after its first line (Keep-style); showing both would repeat it.
+  const firstLine = (n.excerpt ?? '').trimStart().split('\n')[0];
+  const showTitle = board || n.snippet || n.title !== fileName(n.path) || !firstLine.startsWith(n.title);
+  return `
+<article class="note-card${n.color ? ` c-${n.color}` : ''}" data-path="${esc(n.path)}" tabindex="0">
+  ${n.pinned ? `<span class="pin" title="Pinned">${ic('push_pin', '', ' filled')}</span>` : ''}
+  ${showTitle ? `<h3 class="note-title">${board ? ic('draw') : ''}${esc(n.title)}</h3>` : ''}
+  ${board ? '' : `<div class="note-body">${body}</div>`}
+  <div class="note-foot">
+    ${folder ? `<span class="note-folder">${ic('folder')}${esc(folder)}</span>` : ''}
+    ${(n.tags ?? []).slice(0, 3).map((t) => `<span class="note-tag">#${esc(t)}</span>`).join('')}
+    <span class="note-time">${relative(n.mtime)}</span>
+  </div>
+</article>`;
+}
+
+function renderGrid() {
+  const root = $('notes');
+  if (!root || root.hidden) return;
+  const inFolder = (n) => !state.folder || n.path.startsWith(state.folder + '/');
+  const list = (state.results ?? state.notes).filter(inFolder);
+
+  const topFolders = [...new Set(state.folders.map((f) => f.split('/')[0]))].filter((f) => f !== 'attachments');
+  $('note-folders').innerHTML = topFolders.length
+    ? [`<button class="chip${state.folder ? '' : ' on'}" data-folder="">All</button>`]
+        .concat(topFolders.map((f) => `<button class="chip${state.folder === f ? ' on' : ''}" data-folder="${esc(f)}">${ic('folder')}${esc(f)}</button>`))
+        .join('')
+    : '';
+
+  const pinned = state.results ? [] : list.filter((n) => n.pinned);
+  const others = state.results ? list : list.filter((n) => !n.pinned);
+  $('notes-pinned-head').hidden = !pinned.length;
+  $('notes-others-head').hidden = !pinned.length || !others.length;
+  $('notes-pinned').innerHTML = pinned.map(cardHtml).join('');
+  $('notes-grid').innerHTML = others.map(cardHtml).join('');
+
+  const empty = state.loaded && !list.length;
+  $('notes-empty').hidden = !empty;
+  if (empty) {
+    $('notes-empty-title').textContent = state.q ? 'Nothing matches' : 'No notes yet';
+    $('notes-empty-body').textContent = state.q ? `No notes mention “${state.q}”.` : 'Take a note above. It saves as a markdown file on the NAS.';
+  }
+}
+
+function wireGrid() {
+  const open = (e) => {
+    const card = e.target.closest('.note-card');
+    if (card) openFromApp(noteHash(card.dataset.path));
+  };
+  for (const id of ['notes-grid', 'notes-pinned']) {
+    $(id).addEventListener('click', open);
+    $(id).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') open(e);
+    });
+  }
+  $('note-folders').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-folder]');
+    if (chip) navigate(chip.dataset.folder ? `#/notes/${encodeURIComponent(chip.dataset.folder)}` : '#/notes');
+  });
+
+  // Keep's "Take a note…": collapsed until focused, saved when it loses focus or on Ctrl/Cmd+Enter.
+  const box = $('take-note');
+  const title = $('take-title');
+  const body = $('take-body');
+  const expand = () => box.classList.add('open');
+  const reset = () => {
+    title.value = body.value = '';
+    box.classList.remove('open');
+    body.style.height = '';
+  };
+  const commit = async () => {
+    const t = title.value.trim();
+    const b = body.value.replace(/\s+$/, '');
+    if (!t && !b.trim()) return reset();
+    reset();
+    const content = t ? `# ${t}\n\n${b}${b ? '\n' : ''}` : `${b}\n`;
+    try {
+      await api.createNote({ folder: state.folder, title: t || b.split('\n')[0].replace(/^[-*+]\s+(\[.\]\s+)?/, '').slice(0, 60), content });
+      await loadNotes();
+    } catch (err) {
+      toast(`Couldn't save: ${err.message}`);
+      title.value = t;
+      body.value = b;
+      expand();
+    }
+  };
+  body.addEventListener('focus', expand);
+  title.addEventListener('focus', expand);
+  body.addEventListener('input', () => {
+    body.style.height = 'auto';
+    body.style.height = `${body.scrollHeight}px`;
+  });
+  box.addEventListener('focusout', () => setTimeout(() => !box.contains(document.activeElement) && commit(), 0));
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+    if (e.key === 'Escape') document.activeElement.blur();
+  });
+  $('take-close').addEventListener('click', () => document.activeElement.blur());
+  $('take-list').addEventListener('click', () => {
+    expand();
+    if (!body.value.trim()) body.value = '- [ ] ';
+    body.focus();
+  });
+  $('take-board').addEventListener('click', () => newBoard());
+  $('take-open').addEventListener('click', () => {
+    const t = title.value.trim();
+    const b = body.value;
+    reset();
+    openDraft({ text: t ? `# ${t}\n\n${b}` : b });
+  });
+}
+
+// ---------- fullscreen note ----------
+
+const screen = {
+  path: null, // null while a new note is still a draft
+  folder: '',
+  hash: null,
+  saved: '', // text as last saved / loaded
+  editor: null,
+  timer: null,
+  saving: null,
+  poll: null,
+  color: null,
+  pinned: false,
+  failures: 0,
+};
+
+const dirty = () => screen.editor && screen.editor.getText() !== screen.saved;
+
+function setStatus(text, kind = '') {
+  const el = $('note-status');
+  el.textContent = text;
+  el.dataset.kind = kind;
+}
+
+function linkTargets() {
+  return state.notes.filter((n) => !/\.excalidraw\.md$/i.test(n.path)).map((n) => ({ label: fileName(n.path), detail: folderOf(n.path) }));
+}
+
+async function openLink(target, { external } = {}) {
+  if (external) return window.open(target, '_blank', 'noopener');
+  const name = target.split('#')[0].replace(/\.md$/i, '').trim();
+  const lower = name.toLowerCase();
+  const hit =
+    state.notes.find((n) => n.path.toLowerCase() === `${lower}.md`) ??
+    state.notes.find((n) => fileName(n.path).toLowerCase() === lower.split('/').pop()) ??
+    state.notes.find((n) => n.title.toLowerCase() === lower);
+  await flush();
+  if (hit) return navigate(noteHash(hit.path));
+  // Like Obsidian: following a link to a note that doesn't exist creates it.
+  try {
+    const created = await api.createNote({ title: name.split('/').pop(), folder: name.includes('/') ? folderOf(name) : '', content: `# ${name.split('/').pop()}\n\n` });
+    await loadNotes();
+    navigate(noteHash(created.path));
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+const isBoardPath = (path) => /\.excalidraw\.md$/i.test(path ?? '');
+
+function isDark() {
+  const scheme = document.getElementById('theme')?.getAttribute('scheme');
+  return scheme === 'dark' || (scheme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+/** Excalidraw and React download only when a board opens. */
+async function mountBoard(text) {
+  screen.editor?.destroy();
+  screen.editor = null;
+  $('note-editor').innerHTML = '';
+  $('note-screen').classList.add('board');
+  window.EXCALIDRAW_ASSET_PATH = '/excalidraw/';
+  const { createBoard } = await import('./board.js');
+  screen.editor = createBoard({
+    parent: $('note-editor'),
+    text,
+    dark: isDark(),
+    attachmentUrl: (name) => api.attachmentUrl(name),
+    upload: (file) => api.attach(file),
+    onError: (err) => toast(`Image upload failed: ${err.message}`),
+    onChange: () => {
+      setStatus('Editing…');
+      clearTimeout(screen.timer);
+      screen.timer = setTimeout(save, SAVE_DELAY * 2);
+    },
+  });
+}
+
+/** New board in Boards/, named by the time like the Excalidraw plugin does. */
+export async function newBoard() {
+  try {
+    const { emptyBoard } = await import('./board.js');
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}.${pad(d.getMinutes())}`;
+    const created = await api.createNote({ folder: 'Boards', title: `Drawing ${stamp}.excalidraw`, content: emptyBoard() });
+    openFromApp(noteHash(created.path));
+  } catch (err) {
+    toast(`Couldn't make a board: ${err.message}`);
+  }
+}
+
+function mountEditor(text) {
+  screen.editor?.destroy();
+  $('note-editor').innerHTML = '';
+  $('note-screen').classList.remove('board');
+  screen.editor = createEditor({
+    parent: $('note-editor'),
+    doc: text,
+    placeholder: 'Note',
+    onChange: () => {
+      setStatus('Editing…');
+      clearTimeout(screen.timer);
+      screen.timer = setTimeout(save, SAVE_DELAY);
+      if (screen.path) stashUnsaved();
+    },
+    onOpenLink: openLink,
+    resolveEmbed: (name) => api.attachmentUrl(name),
+    resolveImage: (src) => (/^(https?:|data:|\/)/i.test(src) ? src : api.attachmentUrl(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
+    linkTargets,
+    uploadFile: async (file) => {
+      setStatus('Uploading…');
+      const { embed } = await api.attach(file);
+      return embed;
+    },
+    onError: (err) => toast(`Upload failed: ${err.message}`),
+  });
+}
+
+/** Keeps unsaved text in the browser, so a crash or a dead NAS doesn't lose it. */
+function stashUnsaved() {
+  try {
+    localStorage.setItem(draftKey(screen.path), JSON.stringify({ base: screen.hash, text: screen.editor.getText(), at: Date.now() }));
+  } catch {}
+}
+function clearUnsaved(path) {
+  try {
+    localStorage.removeItem(draftKey(path));
+  } catch {}
+}
+function readUnsaved(path) {
+  try {
+    return JSON.parse(localStorage.getItem(draftKey(path)));
+  } catch {
+    return null;
+  }
+}
+
+function applyLook() {
+  const el = $('note-screen');
+  el.className = `note-screen${screen.color ? ` c-${screen.color}` : ''}${isBoardPath(screen.path) ? ' board' : ''}`;
+  $('note-pin').innerHTML = ic('push_pin', '', screen.pinned ? ' filled' : '');
+  $('note-pin').setAttribute('aria-label', screen.pinned ? 'Unpin' : 'Pin');
+  $('note-crumb').textContent = screen.path ? folderOf(screen.path) || 'Notes' : 'New note';
+  for (const b of $('note-colors').querySelectorAll('[data-color]')) b.classList.toggle('on', (b.dataset.color || null) === screen.color);
+}
+
+export async function openNote(path, { line } = {}) {
+  if (screen.path === path && !$('note-screen').hidden) {
+    if (line != null) screen.editor.goToLine(line);
+    return;
+  }
+  await closeEditor();
+  showScreen();
+  setStatus('Opening…');
+  try {
+    const note = await api.note(path);
+    Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
+    let text = note.content;
+    // Unsaved edits from last time, made on this exact version: bring them back.
+    const stash = readUnsaved(note.path);
+    if (stash && stash.text !== note.content) {
+      if (stash.base === note.hash) {
+        text = stash.text;
+        toast('Restored unsaved changes');
+      } else clearUnsaved(note.path);
+    }
+    if (isBoardPath(note.path)) await mountBoard(text);
+    else mountEditor(text);
+    applyLook();
+    if (text !== note.content) save();
+    else setStatus(`Edited ${relative(note.mtime)}`);
+    if (line != null) screen.editor.goToLine(line);
+    // Ready to type at the end, except on touch screens where focusing would throw the keyboard up.
+    else if (!note.content.trim() || !matchMedia('(pointer: coarse)').matches) screen.editor.focus(true);
+    startPolling();
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    toast(err.status === 404 ? 'That note is gone' : `Can't open: ${err.message}`);
+    hideScreen();
+    navigate(state.folder ? `#/notes/${encodeURIComponent(state.folder)}` : '#/notes');
+  }
+}
+
+/** A new note that becomes a file on its first save, so an abandoned "new note" leaves nothing behind. */
+/** The "new note" button: a fresh draft that Back closes. */
+export function newNote() {
+  openFromApp('#/new');
+}
+
+export async function openDraft({ text = '', folder = state.folder } = {}) {
+  await closeEditor();
+  showScreen();
+  Object.assign(screen, { path: null, folder, hash: null, saved: '', pinned: false, color: null });
+  mountEditor(text);
+  applyLook();
+  setStatus('');
+  screen.editor.focus(true);
+  if (text) save();
+}
+
+function showScreen() {
+  $('note-screen').hidden = false;
+  document.body.classList.add('note-open');
+}
+function hideScreen() {
+  $('note-screen').hidden = true;
+  document.body.classList.remove('note-open');
+}
+
+/** Saves now if there's anything unsaved; resolves when the file is written (or the save failed). */
+async function flush() {
+  clearTimeout(screen.timer);
+  if (screen.saving) await screen.saving;
+  if (dirty()) await save();
+}
+
+function save() {
+  clearTimeout(screen.timer);
+  if (screen.saving) {
+    // One save at a time; the latest text goes in the next one.
+    screen.timer = setTimeout(save, SAVE_DELAY);
+    return screen.saving;
+  }
+  screen.saving = doSave().finally(() => (screen.saving = null));
+  return screen.saving;
+}
+
+async function doSave() {
+  if (!screen.editor) return;
+  const text = screen.editor.getText();
+  if (text === screen.saved) return setStatus('Saved');
+  setStatus('Saving…');
+  try {
+    if (!screen.path) {
+      if (!text.trim()) return;
+      const heading = /^#\s+(.+)$/m.exec(text)?.[1];
+      const title = heading ?? text.trim().split('\n')[0].replace(/^[-*+]\s+(\[.\]\s+)?|^#+\s+/g, '').slice(0, 60);
+      const created = await api.createNote({ folder: screen.folder, title, content: text });
+      Object.assign(screen, { path: created.path, hash: created.hash, saved: text });
+      history.replaceState(history.state, '', noteHash(created.path));
+      applyLook();
+    } else {
+      const saved = await api.saveNote(screen.path, text, screen.hash);
+      Object.assign(screen, { hash: saved.hash, saved: text });
+      clearUnsaved(screen.path);
+    }
+    screen.failures = 0;
+    setStatus(dirty() ? 'Editing…' : 'Saved');
+    if (dirty()) screen.timer = setTimeout(save, SAVE_DELAY);
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    if (err instanceof ApiError && err.status === 409 && err.body?.current) return resolveConflict(text, err.body.current);
+    if (err instanceof ApiError && err.status === 409 && screen.path) return resolveConflict(text, null);
+    // NAS down or offline: keep the text locally and keep trying.
+    screen.failures++;
+    setStatus(navigator.onLine ? "Can't save, retrying" : 'Offline, will save', 'error');
+    if (screen.path) stashUnsaved();
+    screen.timer = setTimeout(save, Math.min(30_000, 2000 * 2 ** Math.min(screen.failures, 4)));
+  }
+}
+
+/**
+ * The file changed elsewhere since we loaded it. Their version wins the file; ours is kept as a sibling note,
+ * so nothing is lost and nothing is merged wrongly.
+ */
+async function resolveConflict(mine, current) {
+  if (current && current.content === mine) {
+    Object.assign(screen, { hash: current.hash, saved: mine });
+    return setStatus('Saved');
+  }
+  const stamp = new Date().toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[/:,]/g, '-');
+  try {
+    const copy = await api.createNote({ folder: screen.folder, title: `${fileName(screen.path)} (conflict ${stamp})`, content: mine });
+    clearUnsaved(screen.path);
+    if (current) {
+      Object.assign(screen, { hash: current.hash, saved: current.content, pinned: current.pinned, color: current.color });
+      screen.editor.setText(current.content);
+      applyLook();
+    } else {
+      // Deleted elsewhere: carry on in the copy.
+      history.replaceState(history.state, '', noteHash(copy.path));
+      Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine });
+    }
+    toast(`Changed somewhere else. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
+    setStatus('Saved');
+    loadNotes();
+  } catch (err) {
+    setStatus("Can't save", 'error');
+    toast(`Conflict, and couldn't save a copy: ${err.message}`);
+  }
+}
+
+/** Picks up edits made elsewhere while the note sits open and untouched. */
+function startPolling() {
+  clearInterval(screen.poll);
+  screen.poll = setInterval(async () => {
+    if (!screen.path || dirty() || screen.saving || document.hidden) return;
+    try {
+      const note = await api.note(screen.path);
+      if (note.hash !== screen.hash && !dirty()) {
+        Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
+        screen.editor.setText(note.content);
+        applyLook();
+        setStatus(`Updated ${relative(note.mtime)}`);
+      }
+    } catch {}
+  }, POLL_MS);
+}
+
+async function closeEditor() {
+  if (!screen.editor) return;
+  clearInterval(screen.poll);
+  await flush();
+  if (dirty() && screen.path) stashUnsaved();
+  screen.editor.destroy();
+  screen.editor = null;
+  screen.path = null;
+}
+
+export async function closeNote() {
+  await closeEditor();
+  hideScreen();
+  loadNotes();
+}
+
+export const noteIsOpen = () => !$('note-screen').hidden;
+
+async function setMeta(changes) {
+  await flush();
+  if (!screen.path) {
+    // A draft gets saved first so there's a file to pin.
+    if (!screen.editor.getText().trim()) return toast('Write something first');
+    await save();
+    if (!screen.path) return;
+  }
+  try {
+    const meta = await api.noteMeta(screen.path, changes);
+    const note = await api.note(meta.path);
+    Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
+    if (!dirty()) screen.editor.setText(note.content);
+    applyLook();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+function wireScreen() {
+  const back = () => {
+    if (openedInApp) {
+      openedInApp = false;
+      history.back();
+    } else navigate(screen.folder ? `#/notes/${encodeURIComponent(screen.folder)}` : '#/notes');
+  };
+  $('note-back').addEventListener('click', back);
+  // The empty page below the text is part of the note: clicking it puts the cursor at the end, like Keep.
+  document.querySelector('#note-screen .note-scroll').addEventListener('mousedown', (e) => {
+    if (!screen.editor || isBoardPath(screen.path) || e.target.closest('.cm-content')) return;
+    e.preventDefault();
+    screen.editor.focus(true);
+  });
+  $('note-screen').addEventListener('keydown', (e) => {
+    // Excalidraw uses Escape itself (leave a tool, deselect), so it never closes a board.
+    if (e.key === 'Escape' && !document.querySelector('.cm-tooltip-autocomplete') && !isBoardPath(screen.path)) {
+      e.preventDefault();
+      back();
+    }
+    if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      flush();
+    }
+  });
+  $('note-pin').addEventListener('click', () => setMeta({ pinned: !screen.pinned }));
+  $('note-palette').addEventListener('click', () => ($('note-colors').hidden = !$('note-colors').hidden));
+  $('note-colors').innerHTML =
+    `<button data-color="" class="note-swatch none" aria-label="No colour">${ic('format_color_reset')}</button>` +
+    COLORS.map((c) => `<button data-color="${c}" class="note-swatch c-${c}" aria-label="${c}" title="${c}"></button>`).join('');
+  $('note-colors').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-color]');
+    if (!b) return;
+    $('note-colors').hidden = true;
+    setMeta({ color: b.dataset.color || null });
+  });
+
+  $('note-move').addEventListener('click', async () => {
+    await flush();
+    if (!screen.path) return toast('Write something first');
+    const to = prompt('Move or rename (folder/name)', screen.path.replace(/\.md$/i, ''))?.trim().replace(/^\/+|\/+$/g, '');
+    if (!to || `${to}.md` === screen.path) return;
+    try {
+      const { path } = await api.moveNote(screen.path, /\.md$/i.test(to) ? to : `${to}.md`);
+      clearUnsaved(screen.path);
+      Object.assign(screen, { path, folder: folderOf(path) });
+      history.replaceState(history.state, '', noteHash(path));
+      applyLook();
+      toast('Moved');
+    } catch (err) {
+      toast(err.status === 409 ? 'A note with that name already exists' : err.message);
+    }
+  });
+
+  $('note-download').addEventListener('click', () => {
+    const blob = new Blob([screen.editor.getText()], { type: 'text/markdown' });
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: screen.path ? screen.path.split('/').pop() : 'note.md' });
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  $('note-delete').addEventListener('click', async () => {
+    if (!screen.path) {
+      screen.editor.setText('');
+      Object.assign(screen, { saved: '' });
+      return back();
+    }
+    if (!confirm(`Move “${fileName(screen.path)}” to the trash? (It goes to .trash/ in the vault.)`)) return;
+    clearTimeout(screen.timer);
+    try {
+      await api.trashNote(screen.path);
+      clearUnsaved(screen.path);
+      screen.saved = screen.editor.getText();
+      toast('Moved to trash');
+      back();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  // Last chance for unsaved text when the tab closes: a keepalive request outlives the page.
+  window.addEventListener('pagehide', () => {
+    if (!dirty() || !screen.path) return;
+    stashUnsaved();
+    api.saveNote(screen.path, screen.editor.getText(), screen.hash, { keepalive: true }).catch(() => {});
+  });
+}
+
+// ---------- todos ----------
+
+const todoState = { open: [], done: null, today: '' };
+
+export async function loadTodos() {
+  try {
+    const { todos, today } = await api.todos('open');
+    todoState.open = todos;
+    todoState.today = today;
+    if (todoState.done) todoState.done = (await api.todos('done')).todos;
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    toast(`Can't load todos: ${err.message}`);
+  }
+  renderTodos();
+}
+
+function dueLabel(due) {
+  if (!due) return '';
+  const today = todoState.today;
+  const days = Math.round((Date.parse(due) - Date.parse(today)) / 86_400_000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  if (days === -1) return 'Yesterday';
+  if (days > 1 && days < 7) return new Date(`${due}T12:00`).toLocaleDateString(undefined, { weekday: 'long' });
+  return new Date(`${due}T12:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+function todoRow(t) {
+  const done = t.status !== 'open';
+  const overdue = !done && t.due && t.due < todoState.today;
+  const time = t.remind_at && /\(@\d{4}-\d{2}-\d{2}[ T]\d/.test(t.raw) ? new Date(t.remind_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
+  return `
+<li class="todo${done ? ' done' : ''}" data-key="${esc(t.path)}:${t.line}">
+  <input type="checkbox" class="todo-box" ${done ? 'checked' : ''} aria-label="${esc(t.text)}" />
+  <div class="todo-main">
+    <span class="todo-text">${esc(t.text || '(empty)')}</span>
+    <span class="todo-meta">
+      ${t.due ? `<span class="due${overdue ? ' overdue' : ''}">${ic('event')}${esc(dueLabel(t.due))}${time ? ` ${esc(time)}` : ''}</span>` : ''}
+      ${t.path === 'Todo.md' ? '' : `<a class="todo-note" href="${noteHash(t.path, t.line)}">${ic('description')}${esc(t.note_title)}</a>`}
+    </span>
+  </div>
+</li>`;
+}
+
+function renderTodos() {
+  const root = $('todos');
+  if (!root || root.hidden) return;
+  const today = todoState.today;
+  const groups = [
+    ['Overdue', todoState.open.filter((t) => t.due && t.due < today)],
+    ['Today', todoState.open.filter((t) => t.due === today)],
+    ['Upcoming', todoState.open.filter((t) => t.due && t.due > today)],
+    ['Someday', todoState.open.filter((t) => !t.due)],
+  ].filter(([, items]) => items.length);
+  $('todo-list').innerHTML = groups.length
+    ? groups.map(([name, items]) => `<section class="todo-group"><h2 class="day">${name}<span>${items.length}</span></h2><ul>${items.map(todoRow).join('')}</ul></section>`).join('')
+    : `<div class="empty"><m3e-shape name="sunny" class="empty-shape"></m3e-shape><h2 class="empty-title">All clear</h2>
+       <p class="muted">Add one above, or write <code>- [ ] thing</code> in any note.</p></div>`;
+  $('todo-done-toggle').textContent = todoState.done ? 'Hide done' : 'Show done';
+  $('todo-done').innerHTML = todoState.done
+    ? todoState.done.length
+      ? `<ul>${todoState.done.slice(0, 100).map(todoRow).join('')}</ul>`
+      : '<p class="muted">Nothing ticked off yet.</p>'
+    : '';
+}
+
+function findTodo(key) {
+  return [...todoState.open, ...(todoState.done ?? [])].find((t) => `${t.path}:${t.line}` === key);
+}
+
+function wireTodos() {
+  $('todos').addEventListener('change', async (e) => {
+    if (!e.target.classList.contains('todo-box')) return;
+    const li = e.target.closest('.todo');
+    const t = findTodo(li.dataset.key);
+    if (!t) return;
+    li.classList.toggle('done', e.target.checked);
+    try {
+      await api.toggleTodo(t, e.target.checked);
+    } catch (err) {
+      e.target.checked = !e.target.checked;
+      toast(err.status === 409 ? 'That todo changed; reloaded' : err.message);
+    }
+    // Let the tick show before the row moves.
+    setTimeout(loadTodos, 350);
+  });
+  $('todo-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = $('todo-text').value.trim();
+    if (!text) return;
+    const due = $('todo-date').value || undefined;
+    const time = (due && $('todo-time').value) || undefined;
+    try {
+      await api.addTodo({ text, due, time });
+      $('todo-text').value = '';
+      $('todo-date').value = $('todo-time').value = '';
+      loadTodos();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  $('todo-done-toggle').addEventListener('click', async () => {
+    todoState.done = todoState.done ? null : [];
+    if (todoState.done) await loadTodos();
+    else renderTodos();
+  });
+}
+
+export function wireNotes() {
+  wireGrid();
+  wireScreen();
+  wireTodos();
+}
+
+export const notesRendered = () => renderGrid();
+export const todosRendered = () => renderTodos();

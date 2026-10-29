@@ -1,0 +1,59 @@
+name: Android release
+
+# Tag v1.2.3 -> a signed APK attached to the GitHub release for that tag.
+# Needs repository secrets: SINK_KEYSTORE_BASE64, SINK_KEYSTORE_PASSWORD, SINK_KEY_ALIAS, SINK_KEY_PASSWORD.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      # The note editor page is bundled into the APK.
+      - name: Build web
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SINK_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "SINK_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+      - name: Build APK
+        working-directory: android
+        env:
+          SINK_KEYSTORE_PASSWORD: ${{ secrets.SINK_KEYSTORE_PASSWORD }}
+          SINK_KEY_ALIAS: ${{ secrets.SINK_KEY_ALIAS }}
+          SINK_KEY_PASSWORD: ${{ secrets.SINK_KEY_PASSWORD }}
+          SINK_VERSION_CODE: ${{ github.run_number }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then export SINK_VERSION_NAME="${GITHUB_REF_NAME#v}"; else export SINK_VERSION_NAME="0.0.0-dev.$GITHUB_RUN_NUMBER"; fi
+          ./gradlew --no-daemon :app:assembleRelease
+          mv app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/sink-${GITHUB_REF_NAME#v}.apk"
+      - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          files: ${{ runner.temp }}/sink-*.apk
+          generate_release_notes: true
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type != 'tag'
+        with:
+          name: sink-apk
+          path: ${{ runner.temp }}/sink-*.apk
