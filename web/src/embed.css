@@ -37,6 +37,10 @@ body {
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .note-editor {
   padding: 16px 20px 50vh;
 }

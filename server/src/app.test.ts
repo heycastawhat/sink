@@ -549,6 +549,22 @@ describe("notes", () => {
     const items = ((await res.json()) as any).items as { path: string; lines: string[] }[];
     expect(items.map((i) => i.path).sort()).toEqual(["Links.md", "Log/Monday.md", "Plan.md"]);
     expect(items.find((i) => i.path === "Plan.md")!.lines).toEqual(["See [[Soil]] first.", "Also [[soil#pH|the dirt]]."]);
+
+    // A nested note: any end of its path, a markdown link with an anchor, frontmatter, non-ASCII capitals, its title.
+    await make("Projects/Garden", "Église", "# Église\n\nOld stone. Links [[Église]] itself.\n");
+    await make("", "Tour", "---\nup: \"[[Garden/Église]]\"\n---\n# Tour\n");
+    await make("", "Map", "# Map\n\n[the church](../Projects/Garden/%C3%89glise.md#history)\n");
+    await make("", "Diary", "# Diary\n\nVisited [[église]].\n");
+    const nested = await get(token, `/api/notes/backlinks?path=${encodeURIComponent("/Projects/Garden/Église.md")}`);
+    const paths = (((await nested.json()) as any).items as { path: string }[]).map((i) => i.path).sort();
+    expect(paths).toEqual(["Diary.md", "Map.md", "Tour.md"]);
+
+    // Edits and deletes keep the index in step.
+    const plan = (await (await get(token, q("Plan.md"))).json()) as any;
+    await send(token, "PUT", q("Plan.md"), { content: "# Plan\n\nNo links now.\n", base_hash: plan.hash });
+    await send(token, "DELETE", q("Log/Monday.md"));
+    const after = await get(token, `/api/notes/backlinks?path=${encodeURIComponent("Garden/Soil.md")}`);
+    expect((((await after.json()) as any).items as { path: string }[]).map((i) => i.path)).toEqual(["Links.md"]);
   });
 
   test("create, read, save with hash, conflicts, list, search", async () => {

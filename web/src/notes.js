@@ -2,6 +2,7 @@
 // Notes are files in the vault on the NAS; saves carry the hash we last saw, so edits made elsewhere
 // (Obsidian, the phone) are never silently overwritten.
 
+import { esc, folderOf } from './util.js';
 import { backlinksHtml } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
@@ -9,8 +10,6 @@ import { registry, onRegistryChange } from './plugin-api.js';
 import { askText, pickFolder } from './dialogs.js';
 
 const $ = (id) => document.getElementById(id);
-const esc = (s) =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
 
 export const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'brown', 'gray'];
@@ -41,7 +40,6 @@ const state = {
   loaded: false,
 };
 
-const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 const fileName = (path) => path.split('/').pop().replace(/(\.excalidraw)?\.md$/i, '');
 export const folderHash = (folder) => (folder ? `#/notes/${folder.split('/').map(encodeURIComponent).join('/')}` : '#/notes');
 // Sink's own attachments folder isn't somewhere you file notes.

@@ -295,6 +295,18 @@ export const migrations: string[] = [
   `
   CREATE TABLE trash (path TEXT PRIMARY KEY, original TEXT NOT NULL, at INTEGER NOT NULL);
   `,
+  // Links between notes, for backlinks: one row per line that links somewhere, frontmatter included. `target` is the
+  // link as written, normalised (lower case, no .md or #heading). mtime 0 re-reads every note to fill it.
+  `
+  CREATE TABLE links (
+    src TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE,
+    target TEXT NOT NULL,
+    line TEXT NOT NULL
+  );
+  CREATE INDEX links_target ON links(target);
+  CREATE INDEX links_src ON links(src);
+  UPDATE notes SET mtime = 0;
+  `,
 ];
 
 export function openDb(path: string): Database {

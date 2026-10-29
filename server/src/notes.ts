@@ -177,6 +177,34 @@ export function parseNote(
 type Row = { path: string; title: string; tags: string; mtime: number; size: number; hash: string; pinned: number; color: string | null };
 
 /** Card preview: the body without the heading that became the title, trimmed to whole lines. */
+/**
+ * Every link to another note in a file, frontmatter included: `[[target]]` (with `#heading`, `|alias`, or `!` embed)
+ * and `[text](target.md)`. Targets come back as the backlinks lookup wants them: lower case, no `.md` or `#heading`,
+ * no leading `./`, `../` or `/`. One entry per target per line, with the line trimmed for display.
+ */
+export function parseLinks(content: string): { target: string; line: string }[] {
+  const out: { target: string; line: string }[] = [];
+  const norm = (ref: string) =>
+    ref.trim().replace(/#.*$/, "").replace(/^(\.{1,2}\/|\/)+/, "").replace(/\.md$/i, "").toLowerCase();
+  for (const raw of content.split("\n")) {
+    if (!raw.includes("[[") && !raw.includes("](")) continue;
+    const targets = new Set<string>();
+    for (const m of raw.matchAll(/!?\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) targets.add(norm(m[1]!));
+    for (const m of raw.matchAll(/\]\(<?([^)>\s]+\.md)(?:#[^)>]*)?>?\)/gi)) {
+      let href = m[1]!;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href)) continue;
+      try {
+        href = decodeURIComponent(href);
+      } catch {}
+      targets.add(norm(href));
+    }
+    targets.delete("");
+    const line = raw.trim().slice(0, 240);
+    for (const target of targets) out.push({ target, line });
+  }
+  return out;
+}
+
 export function cardText(body: string, title: string): string {
   const lines = body.replace(/^\s+/, "").split("\n");
   if (lines[0]?.replace(/^#+\s*/, "").trim() === title) lines.shift();
@@ -248,6 +276,9 @@ export class Vault {
       );
       for (const t of parseTodos(content, this.timeZone)) insert.run(path, t.line, t.raw, t.text, t.status, t.due, t.remind_at, t.done_on);
     }
+    this.db.query("DELETE FROM links WHERE src = ?").run(path);
+    const link = this.db.query("INSERT INTO links (src, target, line) VALUES (?, ?, ?)");
+    for (const l of parseLinks(content)) link.run(path, l.target, l.line);
     for (let d = dirname(path); d !== "."; d = dirname(d)) this.folders.add(d);
     return { path, title, tags, mtime, size, hash, pinned, color };
   }
@@ -355,42 +386,34 @@ export class Vault {
   }
 
   /**
-   * Notes that link here, Obsidian's "linked mentions": `[[Name]]`, `[[Folder/Name]]` (with `#heading` or `|alias`)
-   * and `[text](Folder/Name.md)`, matched by file name or full path, any case. Each comes with the lines that link.
+   * Notes that link here, Obsidian's "linked mentions": `[[Name]]`, `[[Folder/Name]]` or any end of the path, the
+   * note's title, with `#heading` or `|alias`, and `[text](Folder/Name.md)`, in any case. Each comes with up to three
+   * of the lines that link. Read from the links table, so it's an index lookup, not a scan.
    */
   backlinks(path: string): { path: string; title: string; lines: string[] }[] {
-    const target = cleanPath(path, "note").replace(/\.md$/i, "").toLowerCase();
-    const name = target.split("/").pop()!;
+    const clean = cleanPath(path, "note");
+    const target = clean.replace(/\.md$/i, "").toLowerCase();
+    const parts = target.split("/");
+    // The full path, every shorter end of it ("garden/soil", "soil"), and the title.
+    const refs = new Set(parts.map((_, i) => parts.slice(i).join("/")));
+    const title = this.row(clean)?.title;
+    if (title) refs.add(title.toLowerCase());
+    const list = [...refs];
     const rows = this.db
-      .query<{ path: string; title: string; body: string }, [string, string, string, string, string]>(
-        `SELECT path, title, body FROM notes
-         WHERE path != ? AND (instr(lower(body), '[[' || ?) > 0 OR instr(lower(body), '[[' || ?) > 0
-           OR instr(lower(body), ?) > 0 OR instr(lower(body), ?) > 0)
-         ORDER BY mtime DESC LIMIT 200`,
+      .query<{ src: string; title: string; line: string }, string[]>(
+        `SELECT l.src, n.title, l.line FROM links l JOIN notes n ON n.path = l.src
+         WHERE l.target IN (${list.map(() => "?").join(", ")}) AND l.src != ?
+         ORDER BY n.mtime DESC, l.rowid`,
       )
-      .all(path, name, target, `${name}.md)`, encodeURI(`${name}.md)`).toLowerCase());
-    const hits = (ref: string) => {
-      const t = ref.trim().replace(/\.md$/i, "").replace(/^\/+/, "").toLowerCase();
-      return t === target || t === name || (t.includes("/") && target.endsWith("/" + t));
-    };
-    const links = (line: string) => {
-      for (const m of line.matchAll(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g)) if (hits(m[1]!)) return true;
-      for (const m of line.matchAll(/\]\(([^)\s]+\.md)(?:#[^)]*)?\)/gi)) {
-        let href = m[1]!;
-        try {
-          href = decodeURI(href);
-        } catch {}
-        if (!/^[a-z]+:/i.test(href) && hits(href.replace(/^\.\//, ""))) return true;
-      }
-      return false;
-    };
-    const out: { path: string; title: string; lines: string[] }[] = [];
+      .all(...list, clean);
+    const out = new Map<string, { path: string; title: string; lines: string[] }>();
     for (const r of rows) {
-      const lines = r.body.split("\n").filter(links).map((l) => l.trim().slice(0, 240));
-      if (lines.length) out.push({ path: r.path, title: r.title, lines: lines.slice(0, 3) });
-      if (out.length === 50) break;
+      const hit = out.get(r.src) ?? (out.size < 50 ? { path: r.src, title: r.title, lines: [] } : null);
+      if (!hit) continue;
+      out.set(r.src, hit);
+      if (hit.lines.length < 3 && !hit.lines.includes(r.line)) hit.lines.push(r.line);
     }
-    return out;
+    return [...out.values()];
   }
 
   search(fts: string, limit: number) {

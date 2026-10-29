@@ -18,12 +18,11 @@ import { api, Unauthorized } from './api.js';
 import * as notes from './notes.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
+import { esc } from './util.js';
 
 // ---------- helpers ----------
 
 const $ = (id) => document.getElementById(id);
-const esc = (s) =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
 /** `action` + `onAction` add a button (Undo) to the snackbar. */
 const toast = (msg, { action, onAction, ...opts } = {}) =>

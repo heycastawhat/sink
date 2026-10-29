@@ -1,7 +1,7 @@
 // Small modal dialogs on the native <dialog> element: a text prompt and a folder picker.
 
-const esc = (s) =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+import { esc } from './util.js';
+
 const ic = (name) => `<m3e-icon name="${esc(name)}"></m3e-icon>`;
 
 function open(html, wire) {
