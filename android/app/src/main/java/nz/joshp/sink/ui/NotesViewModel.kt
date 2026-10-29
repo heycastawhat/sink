@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import nz.joshp.sink.SinkApp
+import nz.joshp.sink.data.pluginsJson
 import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.NoteMeta
