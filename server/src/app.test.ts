@@ -220,6 +220,23 @@ describe("auth", () => {
     expect((await as("DELETE", `/api/auth/tokens/${ownerId}`)).status).toBe(403);
   });
 
+  test("assistant tokens can't delete anything for good", async () => {
+    const owner = await login();
+    const res = await setup.app.request("/api/auth/tokens", {
+      method: "POST",
+      headers: { authorization: `Bearer ${owner}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Claude Code" }),
+    });
+    const mcp = ((await res.json()) as any).token;
+    const as = (method: string, path: string, body?: unknown) =>
+      setup.app.request(path, { method, headers: { authorization: `Bearer ${mcp}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+    await as("POST", "/api/notes", { title: "Keep", content: "# Keep" });
+    expect((await as("DELETE", "/api/notes/file?path=Keep.md")).status).toBe(200);
+    expect((await as("DELETE", "/api/notes/trash?path=Keep.md")).status).toBe(403);
+    expect((await as("DELETE", "/api/notes/trash?all=true")).status).toBe(403);
+    expect((await as("POST", "/api/notes/trash/restore", { path: "Keep.md" })).status).toBe(200);
+  });
+
   test("the public health check says nothing about the notes", async () => {
     expect(await (await setup.app.request("/api/health")).json()).toEqual({ ok: true });
   });

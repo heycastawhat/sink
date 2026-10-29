@@ -131,8 +131,10 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     }),
   );
 
+  // Gone for good, so not for AI assistants' tokens: they can trash and restore, but only you empty the trash.
   app.delete("/notes/trash", (c) =>
     run(c, async () => {
+      if (c.get("scope") !== "full") return c.json({ error: "not allowed with this token" }, 403);
       if (c.req.query("all") === "true") await vault.emptyTrash();
       else {
         const q = pathQuery.safeParse(c.req.query());
