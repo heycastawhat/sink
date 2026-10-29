@@ -19,7 +19,11 @@ import nz.joshp.sink.data.NoteMeta
 import nz.joshp.sink.data.NoteStore
 import nz.joshp.sink.data.Todo
 import nz.joshp.sink.data.addTodo
+import nz.joshp.sink.data.createFolder
 import nz.joshp.sink.data.createNote
+import nz.joshp.sink.data.moveNote
+import nz.joshp.sink.data.restoreFolder
+import nz.joshp.sink.data.trashNote
 import nz.joshp.sink.data.notes
 import nz.joshp.sink.data.restoreNote
 import nz.joshp.sink.data.searchNotes
@@ -40,8 +44,8 @@ data class NotesState(
     val error: String? = null,
 )
 
-/** A note just moved to the trash, for the list's Undo. */
-data class TrashedNote(val title: String, val trashPath: String)
+/** A note (or a whole folder) just moved to the trash, for the list's Undo. */
+data class TrashedNote(val title: String, val trashPath: String, val isFolder: Boolean = false)
 
 data class TodosState(
     val open: List<Todo> = emptyList(),
@@ -102,7 +106,76 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setFolder(folder: String) = _state.update { it.copy(folder = if (it.folder == folder) "" else folder) }
+    /** The folder being browsed: a full path like "Projects/Sink", or "" for all notes. */
+    fun setFolder(folder: String) = _state.update { it.copy(folder = folder) }
+
+    /** Up one level; false at the top (so Back can leave the app instead). */
+    fun folderUp(): Boolean {
+        val f = _state.value.folder
+        if (f.isEmpty()) return false
+        setFolder(f.substringBeforeLast('/', ""))
+        return true
+    }
+
+    /**
+     * Runs a folder change on the server, then reloads. Returns an error message for the snackbar, or null.
+     * Folder changes need the server; offline they fail with a friendly message rather than queueing.
+     */
+    private suspend fun folderChange(conflict: String, block: suspend (Api) -> Unit): String? {
+        val api = api() ?: return "Signed out"
+        val error = runCatching { block(api) }.exceptionOrNull()
+        refresh()
+        return when {
+            error == null -> null
+            error is ApiException && error.code == 409 -> conflict
+            error is ApiException && error.code == 400 -> error.message ?: "That doesn't work as a folder name"
+            error is ApiException -> error.message ?: "Couldn't change the folder"
+            else -> "You're offline. Folder changes need the server."
+        }
+    }
+
+    /** New folder named [name] inside [parent]; opens it. */
+    suspend fun newFolder(parent: String, name: String): String? {
+        val path = listOf(parent, name.trim().trim('/')).filter { it.isNotEmpty() }.joinToString("/")
+        return folderChange("That folder already exists") { api ->
+            val made = api.createFolder(path)
+            setFolder(made)
+        }
+    }
+
+    /** Creates [path] (from the top level) for the move picker: the created path, or null and an error message. */
+    suspend fun createFolderAt(path: String): Pair<String?, String?> {
+        var made: String? = null
+        val error = folderChange("That folder already exists") { api -> made = api.createFolder(path.trim().trim('/')) }
+        return made to error
+    }
+
+    /** Renames the folder being browsed, in place. */
+    suspend fun renameFolder(from: String, name: String): String? {
+        val to = listOf(from.substringBeforeLast('/', ""), name.trim().trim('/')).filter { it.isNotEmpty() }.joinToString("/")
+        if (to == from) return null
+        return folderChange("A folder with that name is already there") { api ->
+            api.moveNote(from, to)
+            setFolder(to)
+        }
+    }
+
+    /** Moves the folder [from] into [parent] ("" for the top level), keeping its name. */
+    suspend fun moveFolder(from: String, parent: String): String? {
+        val to = listOf(parent, from.substringAfterLast('/')).filter { it.isNotEmpty() }.joinToString("/")
+        if (to == from) return null
+        return folderChange("A folder with that name is already there") { api ->
+            api.moveNote(from, to)
+            setFolder(to)
+        }
+    }
+
+    /** Moves a folder and everything in it to the trash; the list offers Undo. */
+    suspend fun trashFolder(path: String): String? = folderChange("Couldn't delete that folder") { api ->
+        val trashPath = api.trashNote(path)
+        setFolder(path.substringBeforeLast('/', ""))
+        trashed.value = TrashedNote(path.substringAfterLast('/'), trashPath, isFolder = true)
+    }
 
     fun setQuery(q: String) {
         _state.update { it.copy(query = q, results = if (q.isBlank()) null else it.results) }
@@ -155,7 +228,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** Puts the note back; returns an error message, or null. */
     suspend fun undoTrash(note: TrashedNote): String? {
         val api = api() ?: return "Signed out"
-        val error = runCatching { api.restoreNote(note.trashPath) }.exceptionOrNull()
+        val error = runCatching {
+            if (note.isFolder) api.restoreFolder(note.trashPath) else api.restoreNote(note.trashPath)
+        }.exceptionOrNull()
         refresh()
         return error?.let { "Couldn't restore: ${it.message}" }
     }

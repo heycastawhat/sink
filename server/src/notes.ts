@@ -581,6 +581,48 @@ export class Vault {
     return out.sort((a, b) => b.deleted_at - a.deleted_at);
   }
 
+  /**
+   * Puts a whole trashed folder back where it was (numbered if that name is taken now), indexing every note in it.
+   * Returns the folder's path.
+   */
+  async restoreFolder(trashPath: string): Promise<{ path: string; notes: number }> {
+    const rel = cleanPath(trashPath.trim().replace(/^\/*\.trash\//, ""), "folder");
+    const from = trashOrigin(this.trashRows(), rel);
+    const original = cleanPath(from?.original ?? rel, "folder");
+    let dest = original;
+    const restored: string[] = [];
+    try {
+      const src = await this.abs(`${TRASH}/${rel}`);
+      if (!(await stat(src)).isDirectory()) throw new VaultError(400, "not a folder");
+      for (let n = 1; await exists(await this.abs(dest)); n++) dest = `${original} ${n}`;
+      await mkdir(dirname(await this.abs(dest)), { recursive: true });
+      await rename(src, await this.abs(dest));
+      await this.tidyTrash(dirname(rel), from?.row);
+      // Index what came back, the way a scan would, but as Sink's own change.
+      const walk = async (folder: string) => {
+        this.folders.add(folder);
+        for (const e of await readdir(await this.abs(folder), { withFileTypes: true })) {
+          if (e.name.startsWith(".")) continue;
+          const path = `${folder}/${e.name}`;
+          if (e.isDirectory()) await walk(path);
+          else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
+            const abs = await this.abs(path);
+            const st = await stat(abs);
+            if (st.size > MAX_NOTE_BYTES) continue;
+            this.index(path, await readFile(abs, "utf8"), st.size, Math.floor(st.mtimeMs));
+            restored.push(path);
+          }
+        }
+      };
+      await walk(dest);
+      for (let d = dirname(dest); d !== "."; d = dirname(d)) this.folders.add(d);
+    } catch (err) {
+      fsError(err, "folder");
+    }
+    for (const path of restored) this.emit({ type: "note.created", path, source: "sink" });
+    return { path: dest, notes: restored.length };
+  }
+
   /** Puts a trashed note back where it was (numbered if that name is taken now) and indexes it again. */
   async restore(trashPath: string): Promise<NoteMeta> {
     const rel = this.trashPath(trashPath);

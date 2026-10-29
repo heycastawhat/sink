@@ -5,6 +5,7 @@
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
+import { askText, pickFolder } from './dialogs.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) =>
@@ -41,6 +42,12 @@ const state = {
 
 const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 const fileName = (path) => path.split('/').pop().replace(/(\.excalidraw)?\.md$/i, '');
+export const folderHash = (folder) => (folder ? `#/notes/${folder.split('/').map(encodeURIComponent).join('/')}` : '#/notes');
+// Sink's own attachments folder isn't somewhere you file notes.
+const shownFolder = (f) => f !== 'attachments' && !f.startsWith('attachments/');
+const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+const childFolders = (parent) => state.folders.filter((f) => shownFolder(f) && folderOf(f) === parent).sort(byName);
+const notesIn = (folder) => state.notes.filter((n) => n.path.startsWith(folder + '/')).length;
 export const noteHash = (path, line) => `#/n/${path.split('/').map(encodeURIComponent).join('/')}${line != null ? `?line=${line}` : ''}`;
 
 function relative(ts) {
@@ -124,7 +131,7 @@ function cardHtml(n) {
   const firstLine = (n.excerpt ?? '').trimStart().split('\n')[0];
   const showTitle = board || n.snippet || n.title !== fileName(n.path) || !firstLine.startsWith(n.title);
   return `
-<article class="note-card${n.color ? ` c-${n.color}` : ''}" data-path="${esc(n.path)}" tabindex="0">
+<article class="note-card${n.color ? ` c-${n.color}` : ''}" data-path="${esc(n.path)}" tabindex="0" draggable="true">
   ${n.pinned ? `<span class="pin" title="Pinned">${ic('push_pin', '', ' filled')}</span>` : ''}
   ${showTitle ? `<h3 class="note-title">${board ? ic('draw') : ''}${esc(n.title)}</h3>` : ''}
   ${board ? '' : `<div class="note-body">${body}</div>`}
@@ -142,12 +149,8 @@ function renderGrid() {
   const inFolder = (n) => !state.folder || n.path.startsWith(state.folder + '/');
   const list = (state.results ?? state.notes).filter(inFolder);
 
-  const topFolders = [...new Set(state.folders.map((f) => f.split('/')[0]))].filter((f) => f !== 'attachments');
-  $('note-folders').innerHTML = topFolders.length
-    ? [`<button class="chip${state.folder ? '' : ' on'}" data-folder="">All</button>`]
-        .concat(topFolders.map((f) => `<button class="chip${state.folder === f ? ' on' : ''}" data-folder="${esc(f)}">${ic('folder')}${esc(f)}</button>`))
-        .join('')
-    : '';
+  renderFolderBar();
+  renderFolderTree();
 
   const pinned = state.results ? [] : list.filter((n) => n.pinned);
   const others = state.results ? list : list.filter((n) => !n.pinned);
@@ -159,9 +162,228 @@ function renderGrid() {
   const empty = state.loaded && !list.length;
   $('notes-empty').hidden = !empty;
   if (empty) {
-    $('notes-empty-title').textContent = state.q ? 'Nothing matches' : 'No notes yet';
-    $('notes-empty-body').textContent = state.q ? `No notes mention “${state.q}”.` : 'Take a note above. It saves as a markdown file on the NAS.';
+    $('notes-empty-title').textContent = state.q ? 'Nothing matches' : state.folder ? 'Nothing in here yet' : 'No notes yet';
+    $('notes-empty-body').textContent = state.q
+      ? `No notes mention “${state.q}”.`
+      : state.folder
+        ? 'Notes you take here, or drag onto this folder, land in it.'
+        : 'Take a note above. It saves as a markdown file in your notes folder.';
   }
+}
+
+// ---------- folders ----------
+
+/** Breadcrumb, this folder's actions, and tiles for the folders inside it. */
+function renderFolderBar() {
+  const parts = state.folder ? state.folder.split('/') : [];
+  const crumbs = [`<a href="#/notes" data-drop-folder="" class="${parts.length ? '' : 'crumb-here'}">${ic('home')}Notes</a>`];
+  parts.forEach((name, i) => {
+    const path = parts.slice(0, i + 1).join('/');
+    crumbs.push(
+      `${ic('chevron_right')}<a href="${folderHash(path)}" data-drop-folder="${esc(path)}" class="${i === parts.length - 1 ? 'crumb-here' : ''}">${esc(name)}</a>`,
+    );
+  });
+  $('folder-crumbs').innerHTML = crumbs.join('');
+  const btn = (act, icon, label) =>
+    `<m3e-icon-button data-folder-act="${act}" aria-label="${label}" title="${label}">${ic(icon)}</m3e-icon-button>`;
+  $('folder-actions').innerHTML = state.folder
+    ? btn('new', 'create_new_folder', 'New folder here') +
+      btn('rename', 'drive_file_rename_outline', 'Rename folder') +
+      btn('move', 'drive_file_move', 'Move folder') +
+      btn('delete', 'delete', 'Delete folder')
+    : btn('new', 'create_new_folder', 'New folder');
+
+  const children = state.results ? [] : childFolders(state.folder);
+  $('folder-tiles').innerHTML = children
+    .map((f) => {
+      const n = notesIn(f);
+      return `<a class="folder-tile" href="${folderHash(f)}" data-drop-folder="${esc(f)}">
+  ${ic('folder')}<span class="folder-name">${esc(f.split('/').pop())}</span><span class="folder-count">${n || ''}</span></a>`;
+    })
+    .join('');
+  $('folder-tiles').hidden = !children.length;
+}
+
+const openFolders = new Set(
+  (() => {
+    try {
+      return JSON.parse(localStorage.getItem('sink:open-folders') ?? '[]');
+    } catch {
+      return [];
+    }
+  })(),
+);
+const saveOpen = () => {
+  try {
+    localStorage.setItem('sink:open-folders', JSON.stringify([...openFolders]));
+  } catch {}
+};
+
+/** The sidebar's folder tree (desktop). Folders open to show their children; the current one's parents stay open. */
+export function renderFolderTree() {
+  const box = $('nav-folders');
+  if (!box) return;
+  if (state.folder) state.folder.split('/').slice(0, -1).forEach((_, i, a) => openFolders.add(a.slice(0, i + 1).join('/')));
+  const rows = [];
+  const walk = (parent, depth) => {
+    for (const f of childFolders(parent)) {
+      const kids = childFolders(f).length > 0;
+      const isOpen = openFolders.has(f);
+      const here = state.folder === f && location.hash.startsWith('#/notes');
+      rows.push(`<div class="tree-row" style="--depth:${depth}">
+  <button class="tree-twisty${kids ? '' : ' leaf'}" data-toggle="${esc(f)}" aria-label="${isOpen ? 'Collapse' : 'Expand'}" ${kids ? '' : 'tabindex="-1"'}>${ic(isOpen ? 'expand_more' : 'chevron_right')}</button>
+  <a class="nav-item tree-item${here ? ' active' : ''}" href="${folderHash(f)}" data-drop-folder="${esc(f)}">${ic(here ? 'folder_open' : 'folder')}<span>${esc(f.split('/').pop())}</span><b class="count">${notesIn(f) || ''}</b></a>
+</div>`);
+      if (kids && isOpen) walk(f, depth + 1);
+    }
+  };
+  walk('', 0);
+  box.innerHTML = rows.join('') || '<p class="nav-empty">Folders you make show up here.</p>';
+}
+
+async function newFolder(parent) {
+  const name = await askText({ title: parent ? `New folder in ${parent.split('/').pop()}` : 'New folder', action: 'Create' });
+  if (!name) return;
+  const path = parent ? `${parent}/${name}` : name;
+  try {
+    await api.createFolder(path);
+    await loadNotes();
+    navigate(folderHash(path));
+  } catch (err) {
+    toast(err.status === 400 ? 'Folder names can’t start with a dot or contain \\ : * ? " < > |' : err.message);
+  }
+}
+
+async function moveFolderTo(folder, to) {
+  if (to === folder) return;
+  try {
+    const { path } = await api.moveNote(folder, to);
+    await loadNotes();
+    if (state.folder === folder || state.folder.startsWith(folder + '/')) navigate(folderHash(path + state.folder.slice(folder.length)));
+    return path;
+  } catch (err) {
+    toast(err.status === 409 ? `There's already a folder called “${to.split('/').pop()}” there` : err.message);
+  }
+}
+
+async function renameFolder(folder) {
+  const name = await askText({ title: 'Rename folder', value: folder.split('/').pop(), action: 'Rename' });
+  if (!name) return;
+  const parent = folderOf(folder);
+  await moveFolderTo(folder, parent ? `${parent}/${name}` : name);
+}
+
+async function moveFolder(folder) {
+  const dest = await pickFolder({
+    title: `Move “${folder.split('/').pop()}” to…`,
+    folders: state.folders.filter(shownFolder),
+    current: folderOf(folder),
+    exclude: folder,
+    createFolder: (path) => api.createFolder(path),
+  });
+  if (dest === null) return;
+  const name = folder.split('/').pop();
+  await moveFolderTo(folder, dest ? `${dest}/${name}` : name);
+}
+
+/** Folders go to the trash whole; Undo brings the whole folder back. */
+async function deleteFolder(folder) {
+  const n = notesIn(folder);
+  try {
+    const { trashed_to } = await api.trashNote(folder);
+    navigate(folderHash(folderOf(folder)));
+    await loadNotes();
+    toast(`Moved “${folder.split('/').pop()}”${n ? ` and ${n === 1 ? 'its note' : `its ${n} notes`}` : ''} to trash`, {
+      action: 'Undo',
+      duration: 8000,
+      onAction: async () => {
+        try {
+          const back = await api.restoreNote(trashed_to);
+          await loadNotes();
+          navigate(folderHash(back.path));
+        } catch (err) {
+          toast(`Couldn't restore: ${err.message}`);
+        }
+      },
+    });
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+/** Moves a note into `folder` keeping its file name. Returns the new path. */
+async function moveNoteTo(path, folder) {
+  if (folderOf(path) === folder) return path;
+  const to = (folder ? folder + '/' : '') + path.split('/').pop();
+  try {
+    const moved = await api.moveNote(path, to);
+    clearUnsaved(path);
+    return moved.path;
+  } catch (err) {
+    toast(err.status === 409 ? `A note called “${fileName(path)}” is already in ${folder || 'Notes'}` : err.message);
+    return null;
+  }
+}
+
+function wireFolders() {
+  $('folder-actions').addEventListener('click', (e) => {
+    const act = e.target.closest('[data-folder-act]')?.dataset.folderAct;
+    const f = state.folder;
+    if (act === 'new') newFolder(f);
+    if (act === 'rename') renameFolder(f);
+    if (act === 'move') moveFolder(f);
+    if (act === 'delete') deleteFolder(f);
+  });
+  $('nav-folder-new')?.addEventListener('click', () => newFolder(''));
+  $('nav-folders')?.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-toggle]');
+    if (!t) return;
+    e.preventDefault();
+    const f = t.dataset.toggle;
+    openFolders.has(f) ? openFolders.delete(f) : openFolders.add(f);
+    saveOpen();
+    renderFolderTree();
+  });
+
+  // Drag a card onto a folder (a tile, the sidebar, or the breadcrumb) to file it there.
+  document.addEventListener('dragstart', (e) => {
+    const card = e.target.closest?.('.note-card');
+    if (!card) return;
+    e.dataTransfer.setData('text/x-sink-note', card.dataset.path);
+    e.dataTransfer.effectAllowed = 'move';
+    document.body.classList.add('dragging-note');
+  });
+  document.addEventListener('dragend', () => {
+    document.body.classList.remove('dragging-note');
+    document.querySelectorAll('.drop-over').forEach((el) => el.classList.remove('drop-over'));
+  });
+  const target = (e) => (e.dataTransfer?.types.includes('text/x-sink-note') ? e.target.closest?.('[data-drop-folder]') : null);
+  document.addEventListener('dragover', (e) => {
+    const t = target(e);
+    if (!t) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    document.querySelectorAll('.drop-over').forEach((el) => el !== t && el.classList.remove('drop-over'));
+    t.classList.add('drop-over');
+  });
+  document.addEventListener('drop', async (e) => {
+    const t = target(e);
+    if (!t) return;
+    e.preventDefault();
+    t.classList.remove('drop-over');
+    const path = e.dataTransfer.getData('text/x-sink-note');
+    const folder = t.dataset.dropFolder;
+    const moved = await moveNoteTo(path, folder);
+    if (moved && moved !== path) {
+      await loadNotes();
+      toast(`Moved to ${folder ? folder.split('/').pop() : 'Notes'}`, {
+        action: 'Undo',
+        onAction: async () => {
+          if (await moveNoteTo(moved, folderOf(path))) loadNotes();
+        },
+      });
+    }
+  });
 }
 
 function wireGrid() {
@@ -175,10 +397,7 @@ function wireGrid() {
       if (e.key === 'Enter') open(e);
     });
   }
-  $('note-folders').addEventListener('click', (e) => {
-    const chip = e.target.closest('[data-folder]');
-    if (chip) navigate(chip.dataset.folder ? `#/notes/${encodeURIComponent(chip.dataset.folder)}` : '#/notes');
-  });
+  wireFolders();
 
   // Keep's "Take a note…": collapsed until focused, saved when it loses focus or on Ctrl/Cmd+Enter.
   const box = $('take-note');
@@ -616,20 +835,41 @@ function wireScreen() {
     setMeta({ color: b.dataset.color || null });
   });
 
+  const relocate = (path) => {
+    Object.assign(screen, { path, folder: folderOf(path) });
+    history.replaceState(history.state, '', noteHash(path));
+    applyLook();
+  };
   $('note-move').addEventListener('click', async () => {
     await flush();
     if (!screen.path) return toast('Write something first');
-    const to = prompt('Move or rename (folder/name)', screen.path.replace(/\.md$/i, ''))?.trim().replace(/^\/+|\/+$/g, '');
-    if (!to || `${to}.md` === screen.path) return;
+    const dest = await pickFolder({
+      title: `Move “${fileName(screen.path)}” to…`,
+      folders: state.folders.filter(shownFolder),
+      current: screen.folder,
+      createFolder: (path) => api.createFolder(path),
+    });
+    if (dest === null || dest === screen.folder) return;
+    const moved = await moveNoteTo(screen.path, dest);
+    if (moved) {
+      relocate(moved);
+      toast(`Moved to ${dest ? dest.split('/').pop() : 'Notes'}`);
+    }
+  });
+  $('note-rename').addEventListener('click', async () => {
+    await flush();
+    if (!screen.path) return toast('Write something first');
+    const ext = isBoardPath(screen.path) ? '.excalidraw.md' : '.md';
+    const name = await askText({ title: 'Rename', value: screen.path.split('/').pop().slice(0, -ext.length), action: 'Rename' });
+    if (!name) return;
+    const to = (screen.folder ? screen.folder + '/' : '') + name.replace(/(\.excalidraw)?\.md$/i, '') + ext;
+    if (to === screen.path) return;
     try {
-      const { path } = await api.moveNote(screen.path, /\.md$/i.test(to) ? to : `${to}.md`);
+      const { path } = await api.moveNote(screen.path, to);
       clearUnsaved(screen.path);
-      Object.assign(screen, { path, folder: folderOf(path) });
-      history.replaceState(history.state, '', noteHash(path));
-      applyLook();
-      toast('Moved');
+      relocate(path);
     } catch (err) {
-      toast(err.status === 409 ? 'A note with that name already exists' : err.message);
+      toast(err.status === 409 ? `There's already a note called “${name}” here` : err.status === 400 ? 'Names can’t start with a dot or contain \\ : * ? " < > |' : err.message);
     }
   });
 

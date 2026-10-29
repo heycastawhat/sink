@@ -784,17 +784,6 @@ m3e-theme {
   display: none;
 }
 
-.note-folders {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.note-folders:empty {
-  display: none;
-}
-
 .chip {
   display: inline-flex;
   flex: none;
@@ -1223,4 +1212,264 @@ body.note-open {
 .note-screen.board #note-palette,
 .note-screen.board #note-colors {
   display: none;
+}
+
+/* ---------- folders ---------- */
+.folder-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+}
+
+.folder-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 14px;
+}
+
+.folder-crumbs a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: inherit;
+  text-decoration: none;
+  --m3e-icon-size: 18px;
+}
+
+.folder-crumbs a:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 7%, transparent);
+}
+
+.folder-crumbs a.crumb-here {
+  color: var(--md-sys-color-on-surface);
+  font-weight: 650;
+}
+
+.folder-crumbs > m3e-icon {
+  --m3e-icon-size: 16px;
+  opacity: 0.6;
+}
+
+.folder-actions {
+  display: flex;
+  flex: none;
+}
+
+.folder-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.folder-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--md-sys-color-surface-container-low);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent);
+  color: var(--md-sys-color-on-surface);
+  text-decoration: none;
+  font-weight: 600;
+  transition: box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.folder-tile:hover {
+  background: var(--md-sys-color-surface-container);
+}
+
+.folder-tile m3e-icon {
+  flex: none;
+  color: var(--md-sys-color-primary);
+}
+
+.folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.folder-count {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Sidebar tree */
+.nav-tree {
+  gap: 0;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  padding-left: calc(var(--depth, 0) * 14px);
+}
+
+.tree-twisty {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  --m3e-icon-size: 18px;
+}
+
+.tree-twisty:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+}
+
+.tree-twisty.leaf {
+  visibility: hidden;
+}
+
+.tree-item {
+  flex: 1;
+  min-width: 0;
+  padding-left: 8px;
+}
+
+/* Dragging a note: folders light up as places to drop it. */
+body.dragging-note [data-drop-folder] {
+  outline: 1px dashed color-mix(in srgb, var(--md-sys-color-primary) 50%, transparent);
+  outline-offset: -1px;
+}
+
+[data-drop-folder].drop-over {
+  outline: 2px solid var(--md-sys-color-primary) !important;
+  background: color-mix(in srgb, var(--md-sys-color-primary) 14%, transparent) !important;
+}
+
+.note-card[draggable='true']:active {
+  cursor: grabbing;
+}
+
+/* ---------- dialogs ---------- */
+.sink-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(640px, calc(100dvh - 48px));
+  padding: 0;
+  border: 0;
+  border-radius: 28px;
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  box-shadow: 0 12px 40px color-mix(in srgb, var(--md-sys-color-shadow) 30%, transparent);
+}
+
+.sink-dialog::backdrop {
+  background: color-mix(in srgb, var(--md-sys-color-scrim, #000) 40%, transparent);
+}
+
+.sink-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: inherit;
+  padding: 24px;
+}
+
+.sink-dialog h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+}
+
+.dialog-field input {
+  padding: 12px 14px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 10px;
+  outline: 0;
+  background: none;
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 16px;
+}
+
+.dialog-field input:focus {
+  border-color: var(--md-sys-color-primary);
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-primary);
+}
+
+.dialog-error {
+  margin: 0;
+  color: var(--md-sys-color-error);
+  font-size: 14px;
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  max-height: 360px;
+  overflow-y: auto;
+  margin: 0 -8px;
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px calc(12px + var(--depth, 0) * 18px);
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-row:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 7%, transparent);
+}
+
+.picker-row.on {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-weight: 600;
+}
+
+.picker-row m3e-icon {
+  flex: none;
+  --m3e-icon-size: 20px;
+}
+
+@media (max-width: 839px) {
+  .folder-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

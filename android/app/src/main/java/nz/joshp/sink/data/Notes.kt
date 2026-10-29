@@ -100,6 +100,9 @@ data class Todo(
 }
 
 @Serializable
+private data class FolderPath(val path: String)
+
+@Serializable
 data class TodoList(val todos: List<Todo> = emptyList(), val today: String = "")
 
 @Serializable
@@ -169,6 +172,18 @@ suspend fun Api.trashNote(path: String): String =
 suspend fun Api.restoreNote(trashPath: String): NoteMeta {
     val body = buildJsonObject { put("path", trashPath) }
     return call(request("/api/notes/trash/restore").post(jsonBody(body)).build()) { json.decodeFromString(it) }
+}
+
+/** Creates a folder (and any missing parents); returns its path. */
+suspend fun Api.createFolder(path: String): String {
+    val body = buildJsonObject { put("path", path) }
+    return call(request("/api/notes/folders").post(jsonBody(body)).build()) { json.decodeFromString<FolderPath>(it).path }
+}
+
+/** Puts a whole trashed folder back (numbered if its name is taken now); returns where it went. */
+suspend fun Api.restoreFolder(trashPath: String): String {
+    val body = buildJsonObject { put("path", trashPath) }
+    return call(request("/api/notes/trash/restore").post(jsonBody(body)).build()) { json.decodeFromString<FolderPath>(it).path }
 }
 
 suspend fun Api.attach(name: String, mime: String, bytes: ByteArray): Attached {

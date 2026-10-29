@@ -44,6 +44,7 @@ export const api = {
   createNote: (body) => request('/notes', json('POST', body)),
   noteMeta: (path, body) => request(`/notes/meta?${p(path)}`, json('PATCH', body)),
   moveNote: (from, to) => request('/notes/move', json('POST', { from, to })),
+  createFolder: (path) => request('/notes/folders', json('POST', { path })),
   trashNote: (path) => request(`/notes/file?${p(path)}`, { method: 'DELETE' }),
   trash: () => request('/notes/trash'),
   restoreNote: (path) => request('/notes/trash/restore', json('POST', { path })),

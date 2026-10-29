@@ -197,7 +197,7 @@ function renderChrome() {
   const tab = state.view === 'trash' ? 'settings' : state.view;
   for (const a of document.querySelectorAll('.tabbar [data-tab]')) a.classList.toggle('active', a.dataset.tab === tab);
 
-  const titles = { notes: state.folder || 'Notes', todos: 'Todos', trash: 'Trash', settings: 'Settings' };
+  const titles = { notes: state.folder.split('/').pop() || 'Notes', todos: 'Todos', trash: 'Trash', settings: 'Settings' };
   $('view-title').textContent = titles[state.view];
 
   $('app').dataset.view = state.view;
@@ -208,6 +208,7 @@ function renderChrome() {
   $('settings').hidden = state.view !== 'settings';
   $('fab-icon').setAttribute('name', state.view === 'todos' ? 'add_task' : 'edit');
   $('new-fab').setAttribute('aria-label', state.view === 'todos' ? 'Add todo' : 'New note');
+  notes.renderFolderTree();
   if (state.view === 'notes') notes.notesRendered();
   if (state.view === 'todos') notes.todosRendered();
 }

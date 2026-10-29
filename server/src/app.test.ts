@@ -671,6 +671,27 @@ describe("notes", () => {
     expect(existsSync(file(".trash/From Obsidian.md"))).toBe(false);
   });
 
+  test("folders: create, rename, delete and restore a whole folder", async () => {
+    const token = await login();
+    expect((await send(token, "POST", "/api/notes/folders", { path: "Projects/Empty" })).status).toBe(201);
+    expect(((await (await get(token, "/api/notes")).json()) as any).folders).toEqual(["Projects", "Projects/Empty"]);
+    await send(token, "POST", "/api/notes", { folder: "Projects/Sink", title: "Plan", content: "# Plan\n- [ ] ship" });
+    await send(token, "POST", "/api/notes", { folder: "Projects/Sink/Ideas", title: "Later", content: "# Later" });
+    expect((await send(token, "POST", "/api/notes/move", { from: "Projects/Sink", to: "Work/Sink" })).status).toBe(200);
+    const trashed = (await (await send(token, "DELETE", q("Work"))).json()) as any;
+    expect(trashed.trashed_to).toBe(".trash/Work");
+    expect(((await (await get(token, "/api/notes")).json()) as any).notes).toEqual([]);
+    // Something else took the name meanwhile: the folder comes back numbered, not merged into it.
+    await send(token, "POST", "/api/notes/folders", { path: "Work" });
+    const back = (await (await send(token, "POST", "/api/notes/trash/restore", { path: "Work" })).json()) as any;
+    expect(back).toEqual({ path: "Work 1", notes: 2 });
+    const list = (await (await get(token, "/api/notes")).json()) as any;
+    expect(list.notes.map((n: any) => n.path).sort()).toEqual(["Work 1/Sink/Ideas/Later.md", "Work 1/Sink/Plan.md"]);
+    expect(list.folders).toEqual(expect.arrayContaining(["Work", "Work 1", "Work 1/Sink", "Work 1/Sink/Ideas"]));
+    expect(((await (await get(token, "/api/todos")).json()) as any).todos.map((t: any) => t.path)).toEqual(["Work 1/Sink/Plan.md"]);
+    expect(((await (await get(token, "/api/notes/trash")).json()) as any).items).toEqual([]);
+  });
+
   test("attachments: upload, embed by name, served without script", async () => {
     const token = await login();
     const upload = async (name: string, bytes: Uint8Array | string) => {

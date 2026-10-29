@@ -40,6 +40,11 @@
             <m3e-icon slot="icon" name="edit_square"></m3e-icon>New note
           </m3e-button>
           <nav id="nav-views" class="nav-list"></nav>
+          <div class="nav-heading">
+            <span>Folders</span>
+            <m3e-icon-button id="nav-folder-new" aria-label="New folder" title="New folder"><m3e-icon name="create_new_folder"></m3e-icon></m3e-icon-button>
+          </div>
+          <nav id="nav-folders" class="nav-list nav-tree" aria-label="Folders"></nav>
           <div class="nav-foot">
             <a class="nav-item" href="#/trash" data-route="trash"><m3e-icon name="delete"></m3e-icon><span>Trash</span></a>
             <a class="nav-item" href="#/settings" data-route="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
@@ -75,7 +80,12 @@
                 <m3e-button id="take-close" variant="text" size="small">Close</m3e-button>
               </div>
             </div>
-            <div id="note-folders" class="note-folders" role="toolbar" aria-label="Folders"></div>
+            <div id="folder-bar" class="folder-bar">
+              <nav id="folder-crumbs" class="folder-crumbs" aria-label="Folder"></nav>
+              <span class="spacer"></span>
+              <div id="folder-actions" class="folder-actions"></div>
+            </div>
+            <div id="folder-tiles" class="folder-tiles" aria-label="Folders"></div>
             <h2 id="notes-pinned-head" class="notes-head" hidden>Pinned</h2>
             <div id="notes-pinned" class="note-grid"></div>
             <h2 id="notes-others-head" class="notes-head" hidden>Others</h2>
@@ -137,7 +147,8 @@
             <span id="note-status" class="note-status" aria-live="polite"></span>
             <m3e-icon-button id="note-pin" aria-label="Pin" title="Pin"><m3e-icon name="push_pin"></m3e-icon></m3e-icon-button>
             <m3e-icon-button id="note-palette" aria-label="Colour" title="Colour"><m3e-icon name="palette"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="note-move" aria-label="Move or rename" title="Move or rename"><m3e-icon name="drive_file_move"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-rename" aria-label="Rename" title="Rename"><m3e-icon name="drive_file_rename_outline"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-move" aria-label="Move to folder" title="Move to folder"><m3e-icon name="drive_file_move"></m3e-icon></m3e-icon-button>
             <m3e-icon-button id="note-download" aria-label="Download .md" title="Download .md"><m3e-icon name="download"></m3e-icon></m3e-icon-button>
             <m3e-icon-button id="note-delete" aria-label="Delete" title="Delete"><m3e-icon name="delete"></m3e-icon></m3e-icon-button>
           </header>

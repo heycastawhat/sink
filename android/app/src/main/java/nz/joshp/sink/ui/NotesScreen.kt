@@ -1,5 +1,6 @@
 package nz.joshp.sink.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,15 +31,19 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DriveFileRenameOutline
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Draw
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,7 +60,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -71,6 +79,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import nz.joshp.sink.data.NoteMeta
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
@@ -99,6 +108,15 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.refresh() }
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var menu by remember { mutableStateOf(false) }
+    var naming by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf(false) }
+    // Runs a folder action and shows its error, if any.
+    fun act(block: suspend () -> String?) {
+        scope.launch { block()?.let { snackbar.showSnackbar(it) } }
+    }
     // A note just deleted from its screen: offer Undo here, once.
     LaunchedEffect(Unit) {
         vm.trashed.collect { t ->
@@ -114,16 +132,50 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
     val searching = state.results != null
     val pinned = if (searching) emptyList() else list.filter { it.pinned }
     val others = if (searching) list else list.filterNot { it.pinned }
-    val folders = remember(state.folders) { state.folders.map { it.substringBefore('/') }.distinct().filter { it != "attachments" } }
+    val inside = state.folder.isNotEmpty()
+    // Subfolders right here, unless searching (results span every folder).
+    val subfolders = remember(state.folders, state.folder) { childFolders(state.folders, state.folder) }
+    // Back climbs out of a folder before it leaves the tab.
+    BackHandler(enabled = inside) { vm.folderUp() }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             ScreenTitle(
-                state.folder.ifEmpty { "Notes" },
+                state.folder.substringAfterLast('/').ifEmpty { "Notes" },
+                onBack = if (inside) ({ vm.folderUp(); Unit }) else null,
                 trailing = {
                     if (state.offline) Icon(Icons.Outlined.CloudOff, "Offline", Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Box {
+                        IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Folder actions") }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(if (inside) "New folder here" else "New folder") },
+                                leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, null) },
+                                onClick = { menu = false; naming = true },
+                            )
+                            if (inside) {
+                                DropdownMenuItem(
+                                    text = { Text("Rename folder") },
+                                    leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null) },
+                                    onClick = { menu = false; renaming = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Move folder to…") },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) },
+                                    onClick = { menu = false; moving = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete folder") },
+                                    leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                    // No "are you sure?": the snackbar's Undo puts the whole folder back.
+                                    onClick = { menu = false; act { vm.trashFolder(state.folder) } },
+                                )
+                            }
+                        }
+                    }
                 },
             )
+            if (inside) FolderCrumbs(state.folder, onOpen = vm::setFolder, modifier = Modifier.padding(start = 14.dp, end = 16.dp, bottom = 8.dp))
             TextField(
                 value = state.query,
                 onValueChange = vm::setQuery,
@@ -140,18 +192,13 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                 ),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             )
-            if (folders.isNotEmpty()) {
+            if (subfolders.isNotEmpty() && !searching) {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(folders, key = { it }) { f ->
-                        FilterChip(
-                            selected = state.folder == f,
-                            onClick = { vm.setFolder(f) },
-                            label = { Text(f) },
-                            leadingIcon = { Icon(Icons.Outlined.Folder, null, Modifier.size(FilterChipDefaults.IconSize)) },
-                        )
+                    items(subfolders, key = { it }) { f ->
+                        FolderTile(f.substringAfterLast('/'), countIn(state.notes, f)) { vm.setFolder(f) }
                     }
                 }
             } else {
@@ -163,8 +210,16 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                     !state.loaded -> Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
                     list.isEmpty() && state.error != null && state.notes.isEmpty() -> EmptyState("Can't reach your notes", state.error ?: "")
                     list.isEmpty() -> EmptyState(
-                        if (state.query.isNotBlank()) "Nothing matches" else "No notes yet",
-                        if (state.query.isNotBlank()) "No notes mention “${state.query}”." else "Tap the pencil to write one. It's saved as a markdown file on the NAS.",
+                        when {
+                            state.query.isNotBlank() -> "Nothing matches"
+                            inside -> "Nothing in here yet"
+                            else -> "No notes yet"
+                        },
+                        when {
+                            state.query.isNotBlank() -> "No notes mention “${state.query}”."
+                            inside -> "Tap the pencil to write a note in this folder."
+                            else -> "Tap the pencil to write one. It's saved as a markdown file on your server."
+                        },
                     )
                     else -> LazyVerticalStaggeredGrid(
                         columns = StaggeredGridCells.Adaptive(160.dp),
@@ -192,6 +247,41 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
         ) { Icon(Icons.Outlined.Edit, "New note") }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
+    }
+
+    if (naming) {
+        NameDialog(
+            title = if (inside) "New folder in ${state.folder.substringAfterLast('/')}" else "New folder",
+            initial = "",
+            confirm = "Create",
+            onConfirm = { name -> naming = false; act { vm.newFolder(state.folder, name) } },
+            onDismiss = { naming = false },
+        )
+    }
+    if (renaming) {
+        NameDialog(
+            title = "Rename folder",
+            initial = state.folder.substringAfterLast('/'),
+            confirm = "Rename",
+            onConfirm = { name -> renaming = false; act { vm.renameFolder(state.folder, name) } },
+            onDismiss = { renaming = false },
+        )
+    }
+    if (moving) {
+        val from = state.folder
+        FolderPickerSheet(
+            title = "Move “${from.substringAfterLast('/')}” to",
+            folders = state.folders,
+            current = from.substringBeforeLast('/', ""),
+            exclude = from,
+            onPick = { parent -> moving = false; act { vm.moveFolder(from, parent) } },
+            onNewFolder = { path ->
+                val (made, error) = vm.createFolderAt(path)
+                error?.let { snackbar.showSnackbar(it) }
+                made
+            },
+            onDismiss = { moving = false },
+        )
     }
 }
 

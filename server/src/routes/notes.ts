@@ -127,7 +127,10 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     run(c, async () => {
       const body = pathQuery.safeParse(await c.req.json().catch(() => null));
       if (!body.success) return c.json({ error: "invalid body" }, 400);
-      return c.json(await vault.restore(body.data.path));
+      // A folder comes back whole; a note on its own.
+      const path = body.data.path;
+      if (!path.toLowerCase().endsWith(".md")) return c.json(await vault.restoreFolder(path));
+      return c.json(await vault.restore(path));
     }),
   );
 

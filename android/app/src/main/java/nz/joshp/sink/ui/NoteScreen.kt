@@ -40,13 +40,13 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.FormatColorReset
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PushPin
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -54,11 +54,9 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -191,7 +189,8 @@ fun NoteScreen(
     val snackbar = remember { SnackbarHostState() }
     val store = remember { NoteStore(context) }
     val draftKey = rememberSaveable { NoteSaver.newDraftKey() }
-    val ed = remember(path) { Editing(path, draftKey, folder) }
+    // A new note goes in the folder being browsed, unless it was opened for a specific one.
+    val ed = remember(path) { Editing(path, draftKey, if (path == null && folder.isEmpty()) vm.state.value.folder else folder) }
     val colors = MaterialTheme.colorScheme
     val dark = colors.surface.luminance() < 0.5f
 
@@ -202,6 +201,7 @@ fun NoteScreen(
     var menu by remember { mutableStateOf(false) }
     var palette by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
     var web by remember { mutableStateOf<WebView?>(null) }
     var pageReady by remember { mutableStateOf(false) }
     var loadedNote by remember { mutableStateOf<String?>(null) }
@@ -557,11 +557,19 @@ fun NoteScreen(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Move or rename") },
+                            text = { Text("Move to folder") },
                             leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) },
                             onClick = {
                                 menu = false
                                 moving = true
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Rename") },
+                            leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null) },
+                            onClick = {
+                                menu = false
+                                renaming = true
                             },
                         )
                         DropdownMenuItem(
@@ -612,39 +620,71 @@ fun NoteScreen(
 
     DisposableEffect(Unit) { onDispose { web?.destroy() } }
 
+    /**
+     * Saves, then moves the note to [dest] (a full path ending in .md). The editor keeps going on the moved file.
+     * Mirrors web/src/notes.js; the server refuses to overwrite, so a taken name is a 409.
+     */
+    fun relocate(dest: String, taken: String, done: String) {
+        scope.launch {
+            saveJob?.cancel()
+            save()
+            val from = ed.path ?: return@launch snackbar.showSnackbar("Write something first").let { }
+            if (dest == from) return@launch
+            runCatching { api()!!.moveNote(from, dest) }
+                .onSuccess {
+                    store.forget(from)
+                    ed.path = dest
+                    ed.folder = dest.substringBeforeLast('/', "")
+                    crumb = ed.folder.ifEmpty { "Notes" }
+                    vm.refresh()
+                    snackbar.showSnackbar(done)
+                }
+                .onFailure {
+                    snackbar.showSnackbar(
+                        when {
+                            it is ApiException && it.code == 409 -> taken
+                            it is ApiException -> it.message ?: "Couldn't move"
+                            else -> "You're offline. Moving needs the server."
+                        },
+                    )
+                }
+        }
+    }
+
     if (moving) {
-        val current = ed.path?.removeSuffix(".md") ?: ""
-        var to by remember { mutableStateOf(current) }
-        AlertDialog(
-            onDismissRequest = { moving = false },
-            title = { Text("Move or rename") },
-            text = {
-                OutlinedTextField(to, { to = it }, label = { Text("folder/name") }, singleLine = true)
+        val current = ed.path ?: ed.folder
+        val here = ed.path?.substringBeforeLast('/', "") ?: ed.folder
+        FolderPickerSheet(
+            title = "Move to folder",
+            folders = vm.state.value.folders,
+            current = here,
+            onPick = { parent ->
+                moving = false
+                val name = current.substringAfterLast('/')
+                relocate(listOf(parent, name).filter { it.isNotEmpty() }.joinToString("/"), "A note with that name is already there", "Moved")
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    moving = false
-                    scope.launch {
-                        saveJob?.cancel()
-                        save()
-                        val from = ed.path ?: return@launch snackbar.showSnackbar("Write something first").let { }
-                        val dest = to.trim().trim('/').let { if (it.endsWith(".md", true)) it else "$it.md" }
-                        if (dest == from || dest == ".md") return@launch
-                        runCatching { api()!!.moveNote(from, dest) }
-                            .onSuccess {
-                                store.forget(from)
-                                ed.path = dest
-                                crumb = dest.substringBeforeLast('/', "").ifEmpty { "Notes" }
-                                vm.refresh()
-                                snackbar.showSnackbar("Moved")
-                            }
-                            .onFailure {
-                                snackbar.showSnackbar(if (it is ApiException && it.code == 409) "A note with that name already exists" else it.message ?: "Couldn't move")
-                            }
-                    }
-                }) { Text("Move") }
+            onNewFolder = { p ->
+                val (made, error) = vm.createFolderAt(p)
+                error?.let { snackbar.showSnackbar(it) }
+                made
             },
-            dismissButton = { TextButton(onClick = { moving = false }) { Text("Cancel") } },
+            onDismiss = { moving = false },
+        )
+    }
+
+    if (renaming) {
+        val p = ed.path
+        NameDialog(
+            title = "Rename note",
+            initial = p?.substringAfterLast('/')?.removeSuffix(".md").orEmpty(),
+            confirm = "Rename",
+            onConfirm = { name ->
+                renaming = false
+                if (p == null) return@NameDialog
+                val parent = p.substringBeforeLast('/', "")
+                relocate(listOf(parent, "$name.md").filter { it.isNotEmpty() }.joinToString("/"), "A note with that name already exists", "Renamed")
+            },
+            onDismiss = { renaming = false },
         )
     }
 }
