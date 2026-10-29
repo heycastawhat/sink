@@ -89,6 +89,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
@@ -403,6 +404,7 @@ fun NoteScreen(
                 vm.linkTargets().forEach { (label, detail) -> add(buildJsonObject { put("label", label); put("detail", detail) }) }
             })
             if (line != null) put("line", line)
+            put("plugins", Json.parseToJsonElement(vm.pluginsJson()))
         }
         js("window.sink.load($payload)")
     }
@@ -689,7 +691,18 @@ private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge):
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 val url = request.url
                 if (url.host == "sink.attachment") return attachment(url.path.orEmpty().trimStart('/'))
+                if (url.host == "sink.server") return pluginFile(url.encodedPath.orEmpty() + (url.encodedQuery?.let { "?$it" } ?: ""))
                 return assets.shouldInterceptRequest(url)
+            }
+
+            /** A plugin's script or styles (or one of its GET routes), from the server with our token. */
+            private fun pluginFile(pathAndQuery: String): WebResourceResponse {
+                val res = runCatching { kotlinx.coroutines.runBlocking { vm.api() }?.pluginFile(pathAndQuery) }.getOrNull()
+                // Module scripts from this "other origin" need CORS, or the page won't run them.
+                val headers = mapOf("Access-Control-Allow-Origin" to "*", "Cache-Control" to "no-cache")
+                if (res == null) return WebResourceResponse("text/plain", "utf-8", 404, "Not Found", headers, ByteArrayInputStream(ByteArray(0)))
+                val (code, type, bytes) = res
+                return WebResourceResponse(type.substringBefore(';'), "utf-8", code, if (code in 200..299) "OK" else "Error", headers, ByteArrayInputStream(bytes))
             }
 
             private fun attachment(ref: String): WebResourceResponse {

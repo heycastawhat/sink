@@ -1,0 +1,9 @@
+{
+  "id": "word-count",
+  "name": "Word count",
+  "version": "1.0.0",
+  "description": "A /words command in the editor, a stats route, and a tool assistants can use.",
+  "server": "server.ts",
+  "client": "client.js",
+  "styles": "styles.css"
+}

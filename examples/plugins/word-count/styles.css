@@ -1,0 +1,5 @@
+.word-cloud {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--md-sys-color-primary);
+}

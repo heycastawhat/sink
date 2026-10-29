@@ -19,6 +19,9 @@ export const config = {
   dataDir,
   // The markdown vault. Can be a NAS share; never put the database there (SQLite over SMB corrupts).
   notesDir: resolve(env("SINK_NOTES_DIR", join(dataDir, "notes"))!),
+  // Plugin folders (each with a plugin.json), and built-in plugins to turn off (comma-separated ids).
+  pluginsDir: resolve(env("SINK_PLUGINS_DIR", "./plugins")!),
+  pluginsDisabled: list(env("SINK_PLUGINS_DISABLED")),
   // CIFS has no inotify, so edits made outside Sink (Obsidian, Finder) are found by rescanning.
   notesScanSeconds: Number(env("SINK_NOTES_SCAN_SECONDS", "30")),
   dbPath: join(dataDir, "sink.db"),

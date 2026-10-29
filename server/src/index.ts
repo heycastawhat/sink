@@ -6,6 +6,8 @@ import { createApp } from "./app";
 import { Backups } from "./backup";
 import { Vault } from "./notes";
 import { EmailIngest } from "./email";
+import { PluginHost } from "./plugins";
+import { builtinPlugins } from "./builtin";
 
 const db = openDb(config.dbPath);
 const vault = new Vault(db, config.notesDir, config.timeZone);
@@ -22,7 +24,9 @@ if (!config.publicUrls.length) throw new Error("Set SINK_PUBLIC_URLS (comma-sepa
 const auth = new Auth(db);
 const oidc = new Oidc(config.oidc);
 
-const app = createApp({ db, vault, auth, oidc, config });
+const plugins = new PluginHost(vault, { timeZone: config.timeZone, dir: config.pluginsDir, disabled: config.pluginsDisabled });
+await plugins.load(builtinPlugins());
+const app = createApp({ db, vault, plugins, auth, oidc, config });
 vault.start(config.notesScanSeconds * 1000);
 let email: EmailIngest | null = null;
 if (config.imap.host) {
@@ -56,6 +60,7 @@ console.log(
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     vault.stop();
+    plugins.stop();
     void email?.stop();
     backups.stop();
     server.stop();

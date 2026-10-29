@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+import type { McpToolDef, McpToolHandler } from "./plugins";
 
 /** Calls Sink's own REST API as the MCP caller, so tools share its auth, filters and validation. */
 export type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>;
@@ -9,8 +10,8 @@ export type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>;
  * MCP over Streamable HTTP, stateless: a fresh server per request (no sessions to keep),
  * JSON responses instead of SSE since no tool streams.
  */
-export async function handleMcp(req: Request, api: ApiFetch, timeZone: string): Promise<Response> {
-  const server = buildServer(api, timeZone);
+export async function handleMcp(req: Request, api: ApiFetch, timeZone: string, extra: PluginTool[] = []): Promise<Response> {
+  const server = buildServer(api, timeZone, extra);
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   await server.connect(transport);
   try {
@@ -31,7 +32,9 @@ async function json<T>(res: Response): Promise<T> {
 
 const text = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
 
-function buildServer(api: ApiFetch, timeZone: string) {
+type PluginTool = { name: string; def: McpToolDef; handler: McpToolHandler };
+
+function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[]) {
   const server = new McpServer(
     { name: "sink", version: "2.0.0" },
     {
@@ -207,6 +210,27 @@ function buildServer(api: ApiFetch, timeZone: string) {
       return text({ added: added.raw, path: added.path });
     }),
   );
+
+  // Tools added by plugins. Their errors go back to the model as text, like ours.
+  for (const tool of extra) {
+    server.registerTool(
+      tool.name,
+      {
+        title: tool.def.title ?? tool.name,
+        description: tool.def.description,
+        inputSchema: tool.def.inputSchema,
+        annotations: { readOnlyHint: tool.def.readOnly ?? false },
+      },
+      async (args: unknown) => {
+        try {
+          const out = await tool.handler(args);
+          return { content: [{ type: "text" as const, text: typeof out === "string" ? out : JSON.stringify(out, null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: (err as Error).message }], isError: true };
+        }
+      },
+    );
+  }
 
   return server;
 }

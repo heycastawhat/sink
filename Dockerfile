@@ -20,7 +20,7 @@ COPY server/package.json ./
 COPY server/src ./src
 COPY --from=web /app/web/dist /app/web
 COPY docker-entrypoint.sh /usr/local/bin/
-ENV SINK_DATA_DIR=/data SINK_NOTES_DIR=/notes SINK_PORT=8787 SINK_WEB_DIR=/app/web NODE_ENV=production
+ENV SINK_DATA_DIR=/data SINK_NOTES_DIR=/notes SINK_PLUGINS_DIR=/plugins SINK_PORT=8787 SINK_WEB_DIR=/app/web NODE_ENV=production
 VOLUME ["/data", "/notes"]
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s CMD bun -e "fetch('http://localhost:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

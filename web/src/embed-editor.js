@@ -5,11 +5,15 @@
 //   SinkBridge.openLink(target)             [[wikilink]] or url tapped
 //   SinkBridge.pickImage()                  user wants to attach an image; reply with sink.insert(text)
 // The app drives it with:
-//   sink.load({ text, dark, colors, links, line })   colors: { '--md-sys-color-primary': '#...', ... }
+//   sink.load({ text, dark, colors, links, line, plugins })   colors: { '--md-sys-color-primary': '#...', ... }
+//     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
+//     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
 //   sink.setText(text)  sink.insert(text)  sink.getText()  sink.focus()
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
 
 import { createEditor } from './editor.js';
+import { loadPlugins } from './plugin-api.js';
+import { bundledPlugins } from './plugins/index.js';
 
 const bridge = window.SinkBridge ?? {
   ready() {},
@@ -25,7 +29,16 @@ let timer = null;
 const attachment = (ref) => `https://sink.attachment/${ref.split('/').map(encodeURIComponent).join('/')}`;
 
 window.sink = {
-  load({ text = '', dark = false, colors = {}, links: targets = [], line = null } = {}) {
+  async load({ text = '', dark = false, colors = {}, links: targets = [], line = null, plugins = [] } = {}) {
+    await loadPlugins(
+      {
+        list: async () => plugins,
+        url: (path) => `https://sink.server${path}`,
+        fetch: (path, init) => fetch(`https://sink.server${path}`, init),
+        dark: () => dark,
+      },
+      bundledPlugins,
+    );
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
     for (const [k, v] of Object.entries(colors)) document.documentElement.style.setProperty(k, v);
     links = targets;

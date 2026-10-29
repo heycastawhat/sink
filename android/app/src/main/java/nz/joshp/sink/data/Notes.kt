@@ -20,6 +20,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonObject
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -179,6 +180,22 @@ fun Api.attachmentBytes(ref: String): Pair<String, ByteArray>? {
     }
 }
 
+/** The server's enabled plugins, as the JSON array the editor page takes (GET /api/plugins -> "plugins"). */
+suspend fun Api.pluginsJson(): String = call(request("/api/plugins").build()) {
+    json.parseToJsonElement(it).jsonObject["plugins"]?.toString() ?: "[]"
+}
+
+/**
+ * Blocking: a file the editor page asks for at https://sink.server/<path> (a plugin's client script, styles or its
+ * GET routes), fetched from the server with our token. Only plugin paths; nothing else of the API is reachable.
+ */
+fun Api.pluginFile(pathAndQuery: String): Triple<Int, String, ByteArray>? {
+    if (!pathAndQuery.startsWith("/plugins/") && !pathAndQuery.startsWith("/api/plugins/")) return null
+    Http.client.newCall(authed((base + pathAndQuery).toHttpUrl()).build()).execute().use { res ->
+        return Triple(res.code, res.header("content-type") ?: "application/octet-stream", res.body.bytes())
+    }
+}
+
 suspend fun Api.todos(view: String = "open"): TodoList = call(request("/api/todos?view=$view").build()) { json.decodeFromString(it) }
 
 suspend fun Api.toggleTodo(t: Todo, done: Boolean) {
@@ -217,6 +234,10 @@ data class PendingEdit(
  * Notes as last seen, so the grid and notes open offline, plus edits waiting for the network.
  * Plain JSON files under the app's files dir.
  */
+/** Until the server has been asked once: Sink's built-in editor plugins, which ship inside the app anyway. */
+private const val DEFAULT_PLUGINS =
+    """[{"id":"diagrams","bundled_client":true},{"id":"math","bundled_client":true},{"id":"daily","bundled_client":true}]"""
+
 class NoteStore(context: Context) {
     private val dir = File(context.filesDir, "notes").apply { mkdirs() }
     private val notesDir = File(dir, "content").apply { mkdirs() }
@@ -224,6 +245,11 @@ class NoteStore(context: Context) {
     private val listFile = File(dir, "list.json")
 
     private fun id(s: String) = MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+
+    private val pluginsFile = File(dir, "plugins.json")
+    /** Last plugin list from the server, so built-in plugins (diagrams, math) still work offline. */
+    fun plugins(): String = runCatching { pluginsFile.readText() }.getOrDefault(DEFAULT_PLUGINS)
+    fun savePlugins(list: String) = atomic(pluginsFile, list)
 
     fun list(): NoteList? = runCatching { json.decodeFromString<NoteList>(listFile.readText()) }.getOrNull()
     fun saveList(list: NoteList) = atomic(listFile, json.encodeToString(NoteList.serializer(), list))

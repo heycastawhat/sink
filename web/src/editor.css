@@ -345,3 +345,31 @@
   color: var(--md-sys-color-primary);
   font-size: 13px;
 }
+
+/* Code blocks rendered by plugins (diagrams, math…). */
+.cm-plugin-block {
+  display: flex;
+  justify-content: center;
+  margin: 6px 0;
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: 10px;
+  cursor: text;
+}
+
+.cm-plugin-block:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-sys-color-on-surface) 14%, transparent);
+}
+
+.cm-plugin-block svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.cm-plugin-block.cm-plugin-error {
+  justify-content: flex-start;
+  color: var(--md-sys-color-error);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+}

@@ -30,6 +30,7 @@ const json = (method, body) => ({
 export const api = {
   me: () => request('/auth/me'),
   health: () => request('/health'),
+  plugins: () => request('/plugins'),
   logout: () => request('/auth/logout', { method: 'POST' }),
   tokens: () => request('/auth/tokens'),
   createToken: (name) => request('/auth/tokens', json('POST', { name })),

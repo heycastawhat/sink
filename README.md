@@ -14,6 +14,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
 - **AI assistants:** connect Claude, ChatGPT or Poke as a custom connector (MCP) to search, read and write notes.
 - **Email in (optional):** forward an email and it becomes a note, or `you+todo@` makes it a todo.
+- **Plugins:** diagrams (Mermaid), math (KaTeX), daily notes and webhooks built in; add your own code blocks, slash
+  commands, routes, assistant tools and automations.
 
 Single user per install: everyone runs their own.
 
@@ -95,6 +97,21 @@ custom connector in Claude, ChatGPT or Poke; you sign in to Sink and approve it.
 on the same page and run the command it shows.
 
 Tools: `search_notes`, `read_note`, `save_note`, `list_todos`, `add_todo`.
+
+## Plugins
+
+Built in, on unless you turn them off with `SINK_PLUGINS_DISABLED`:
+
+- **Diagrams:** ` ```mermaid ` code blocks render as diagrams (`/mermaid` in a note inserts one).
+- **Math:** ` ```math ` blocks render with KaTeX (`/math`).
+- **Daily notes:** a "Today's note" button, made from `Templates/Daily.md` if you have one; `/today`, `/date`,
+  `/time`; and an assistant tool that adds to today's note.
+- **Webhooks:** set `SINK_PLUGIN_WEBHOOKS_URLS` and Sink POSTs signed events (`note.created`, `todo.done`, …) to
+  n8n, Home Assistant, Zapier or your own script.
+
+Your own plugins go in `./plugins`, one folder each. A plugin can render its own code blocks, add slash commands
+and buttons, add API routes and assistant tools, react to every note and todo change, and run on a schedule. See
+[docs/plugins.md](docs/plugins.md) and the [word count example](examples/plugins/word-count).
 
 ## Email in (optional)
 

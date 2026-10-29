@@ -7,6 +7,7 @@ import type { MiddlewareHandler } from "hono";
 import { noteRoutes } from "./routes/notes";
 import { todoRoutes } from "./todos";
 import type { Vault } from "./notes";
+import { pluginFileType, type PluginHost } from "./plugins";
 import { handleMcp, type ApiFetch } from "./mcp";
 import { oauthRoutes } from "./oauth";
 import { cors } from "hono/cors";
@@ -40,11 +41,12 @@ const appShellCsp: MiddlewareHandler = async (c, next) => {
 export function createApp(deps: {
   db: Database;
   vault: Vault;
+  plugins?: PluginHost;
   auth: Auth;
   oidc: Oidc;
   config: Pick<Config, "secureCookies" | "maxUploadBytes" | "webDir" | "publicUrls"> & Partial<Pick<Config, "timeZone">>;
 }) {
-  const { db, vault, auth, oidc, config } = deps;
+  const { db, vault, plugins, auth, oidc, config } = deps;
   const app = new Hono<AuthEnv>();
 
   app.use("*", secureHeaders({ crossOriginResourcePolicy: "same-origin" }));
@@ -61,7 +63,20 @@ export function createApp(deps: {
   api.use("*", requireAuth(auth, config.publicUrls));
   api.route("/", noteRoutes(vault, config.maxUploadBytes));
   api.route("/", todoRoutes(db, vault, config.timeZone ?? "UTC"));
+  // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/.
+  api.get("/plugins", (c) => c.json({ plugins: plugins?.list() ?? [] }));
+  if (plugins) api.route("/plugins", plugins.routes);
   app.route("/api", api);
+
+  // A plugin's client script, styles and assets. Signed in like the API: they're the owner's code, not public.
+  app.get("/plugins/:id/*", requireAuth(auth, config.publicUrls), async (c) => {
+    const rel = decodeURIComponent(c.req.path.split("/").slice(3).join("/"));
+    const file = plugins?.file(c.req.param("id"), rel);
+    const type = file && pluginFileType(file);
+    if (!file || !type) return c.json({ error: "not found" }, 404);
+    // The Android editor loads these from its own origin, through the app (which adds the token).
+    return new Response(Bun.file(file), { headers: { "content-type": type, "cache-control": "no-cache" } });
+  });
 
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
@@ -86,7 +101,7 @@ export function createApp(deps: {
     }
     const api: ApiFetch = (path, init) =>
       Promise.resolve(app.request(path, { ...init, headers: { ...(init?.headers as Record<string, string>), authorization: header } }));
-    return handleMcp(c.req.raw, api, config.timeZone ?? "UTC");
+    return handleMcp(c.req.raw, api, config.timeZone ?? "UTC", plugins?.tools ?? []);
   });
 
   if (config.webDir) {

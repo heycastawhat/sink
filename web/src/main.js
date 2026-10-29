@@ -13,6 +13,8 @@ import '@m3e/web/expansion-panel';
 import { M3eSnackbar } from '@m3e/web/snackbar';
 import { api, Unauthorized } from './api.js';
 import * as notes from './notes.js';
+import { loadPlugins } from './plugin-api.js';
+import { bundledPlugins } from './plugins/index.js';
 
 // ---------- helpers ----------
 
@@ -96,10 +98,21 @@ function showLogin() {
     .catch(() => {});
 }
 
-function showApp() {
+async function showApp() {
   $('login').hidden = true;
   $('app').hidden = false;
   notes.loadNotes().catch(() => {});
+  // Before the first note opens, so its diagrams and commands are there.
+  await loadPlugins(
+    {
+      list: async () => (await api.plugins()).plugins,
+      url: (path) => path,
+      fetch: (path, init) => fetch(path, { credentials: 'same-origin', ...init }),
+      dark: () =>
+        theme.getAttribute('scheme') === 'dark' || (theme.getAttribute('scheme') !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches),
+    },
+    bundledPlugins,
+  );
   applyRoute();
 }
 

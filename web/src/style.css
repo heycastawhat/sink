@@ -707,6 +707,14 @@ m3e-theme {
   display: none;
 }
 
+.take-plugins {
+  display: flex;
+}
+
+.take-plugins:empty {
+  display: none;
+}
+
 .note-folders {
   display: flex;
   gap: 8px;

@@ -11,3 +11,5 @@ services:
       - ./data:/data
       # Your notes as plain markdown files. Point it at a NAS share or an Obsidian vault if you like.
       - ./notes:/notes
+      # Plugins you add: one folder each (see docs/plugins.md).
+      - ./plugins:/plugins

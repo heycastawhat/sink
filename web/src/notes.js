@@ -4,6 +4,7 @@
 
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
+import { registry, onRegistryChange } from './plugin-api.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) =>
@@ -775,8 +776,31 @@ function wireTodos() {
   });
 }
 
+/** Buttons plugins add next to "Take a note" (e.g. Today's note). */
+function renderGridActions() {
+  const box = $('take-plugins');
+  box.innerHTML = registry.gridActions
+    .map((a, i) => `<m3e-icon-button data-plugin-action="${i}" aria-label="${esc(a.label)}" title="${esc(a.label)}">${ic(a.icon || 'extension')}</m3e-icon-button>`)
+    .join('');
+}
+
+function wireGridActions() {
+  renderGridActions();
+  onRegistryChange(renderGridActions);
+  $('take-plugins').addEventListener('click', async (e) => {
+    const action = registry.gridActions[e.target.closest('[data-plugin-action]')?.dataset.pluginAction];
+    if (!action) return;
+    try {
+      await action.run({ openNote: (path) => openFromApp(noteHash(path)), toast });
+    } catch (err) {
+      toast(`${action.label}: ${err.message}`);
+    }
+  });
+}
+
 export function wireNotes() {
   wireGrid();
+  wireGridActions();
   wireScreen();
   wireTodos();
 }

@@ -143,6 +143,8 @@ export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
         lines[at] = setDone(raw, done, today()) + cr;
         try {
           await vault.write(path, lines.join("\n"), note.hash);
+          const text = parseTodos(lines[at]!, timeZone)[0]?.text ?? "";
+          vault.emit({ type: done ? "todo.done" : "todo.undone", path, text, source: "sink" });
           return c.json({ ok: true, line: at, raw: strip(lines[at]!) });
         } catch (err) {
           // Someone saved the note between our read and write: try once more on the new text.

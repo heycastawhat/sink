@@ -15,9 +15,10 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput } from '@codemirror/language';
 import { markdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-import { autocompletion, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
 import './editor.css';
+import { registry } from './plugin-api.js';
 
 const highlight = HighlightStyle.define([
   { tag: t.heading1, class: 'cm-h1' },
@@ -191,6 +192,91 @@ function propertiesDeco(state) {
   if (state.selection.ranges.some((r) => r.from <= end)) return Decoration.none;
   const yaml = state.sliceDoc(state.doc.line(1).to + 1, state.doc.lineAt(end).from - 1);
   return Decoration.set([Decoration.replace({ widget: new PropertiesWidget(yaml), block: true }).range(0, end)]);
+}
+
+/** A code block a plugin renders (```mermaid, ```math…), shown in place of the fenced text while the cursor is away. */
+class PluginBlockWidget extends WidgetType {
+  constructor(lang, source) {
+    super();
+    this.lang = lang;
+    this.source = source;
+  }
+  eq(other) {
+    return other.lang === this.lang && other.source === this.source;
+  }
+  toDOM() {
+    const el = document.createElement('div');
+    el.className = `cm-plugin-block cm-plugin-${this.lang}`;
+    el.title = 'Click to edit';
+    const entry = registry.codeBlocks.get(this.lang);
+    const dark = document.documentElement.dataset.theme === 'dark' || !!document.querySelector('m3e-theme[scheme="dark"]') ||
+      (!document.querySelector('m3e-theme[scheme="light"]') && matchMedia('(prefers-color-scheme: dark)').matches);
+    const fail = (err) => {
+      el.classList.add('cm-plugin-error');
+      el.textContent = `${this.lang}: ${err?.message ?? err}`;
+    };
+    try {
+      Promise.resolve(entry?.render(this.source, el, { dark })).catch(fail);
+    } catch (err) {
+      fail(err);
+    }
+    return el;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
+function pluginBlocksDeco(state) {
+  if (!registry.codeBlocks.size) return Decoration.none;
+  const ranges = [];
+  const sel = state.selection.ranges;
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== 'FencedCode') return;
+      let lang = '';
+      let body = null;
+      const c = node.node.cursor();
+      if (c.firstChild()) {
+        do {
+          if (c.name === 'CodeInfo') lang = state.sliceDoc(c.from, c.to).trim().toLowerCase();
+          if (c.name === 'CodeText') body = [c.from, c.to];
+        } while (c.nextSibling());
+      }
+      if (!registry.codeBlocks.has(lang)) return false;
+      const from = state.doc.lineAt(node.from).from;
+      const to = state.doc.lineAt(node.to).to;
+      // Editing inside it (or right at its edges): show the source.
+      if (sel.some((r) => r.to >= from && r.from <= to)) return false;
+      const source = body ? state.sliceDoc(body[0], body[1]) : '';
+      ranges.push(Decoration.replace({ widget: new PluginBlockWidget(lang, source), block: true }).range(from, to));
+      return false;
+    },
+  });
+  return Decoration.set(ranges);
+}
+
+// Block widgets have to come from a state field; the parse tree growing in the background also refreshes it.
+const pluginBlocks = StateField.define({
+  create: (state) => pluginBlocksDeco(state),
+  update: (deco, tr) =>
+    tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? pluginBlocksDeco(tr.state) : deco,
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+/** What a slash command gets to work with. */
+function commandContext(view, opts) {
+  return {
+    view,
+    note: opts.note?.() ?? null,
+    /** Inserts text at the cursor (on its own line if it starts with a block like ``` or - [ ]). */
+    insert(text) {
+      const at = view.state.selection.main.head;
+      view.dispatch({ changes: { from: at, insert: text }, selection: { anchor: at + text.length }, scrollIntoView: true });
+      view.focus();
+    },
+    text: () => view.state.doc.toString(),
+  };
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg|heic)$/i;
@@ -445,6 +531,25 @@ export function createEditor(opts) {
     };
   };
 
+  // Typing "/" at the start of a line or after a space offers plugin commands: /mermaid, /today, …
+  const completeCommands = (ctx) => {
+    const m = ctx.matchBefore(/(?:^|\s)\/[\w-]*$/);
+    if (!m || !registry.commands.length) return null;
+    const slash = m.from + m.text.indexOf('/');
+    return {
+      from: slash,
+      options: registry.commands.map((c) => ({
+        label: `/${c.id}`,
+        detail: c.name,
+        apply: (view, _completion, from, to) => {
+          view.dispatch({ changes: { from, to, insert: '' } });
+          Promise.resolve(c.run(commandContext(view, opts))).catch((err) => opts.onError?.(err));
+        },
+      })),
+      validFor: /^\/[\w-]*$/,
+    };
+  };
+
   const insertFiles = async (view, files, pos) => {
     if (!opts.uploadFile || !files.length) return false;
     for (const file of files) {
@@ -478,8 +583,11 @@ export function createEditor(opts) {
         syntaxHighlighting(highlight),
         livePreview(opts),
         properties,
-        autocompletion({ override: [completeLinks], icons: false }),
+        pluginBlocks,
+        autocompletion({ override: [completeLinks, completeCommands], icons: false }),
         placeholderExt(opts.placeholder ?? 'Note'),
+        // Tab takes the highlighted suggestion ([[link]] or /command); with no menu open it indents as usual.
+        keymap.of([{ key: 'Tab', run: acceptCompletion }]),
         keymap.of([...closeBracketsKeymap, ...markdownKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
         // writingsuggestions: no macOS/Chrome predicted words greyed in after the cursor (they look like note text).
         EditorView.contentAttributes.of({ spellcheck: 'true', autocapitalize: 'sentences', writingsuggestions: 'false', 'aria-label': 'Note text' }),
@@ -489,6 +597,16 @@ export function createEditor(opts) {
         EditorView.domEventHandlers({
           mousedown(e, view) {
             const el = e.target;
+            const block = el.closest?.('.cm-plugin-block');
+            if (block) {
+              // Into the block's source, on its first line of code.
+              e.preventDefault();
+              const line = view.state.doc.lineAt(view.posAtDOM(block));
+              const target = view.state.doc.line(Math.min(line.number + 1, view.state.doc.lines));
+              view.dispatch({ selection: { anchor: target.to } });
+              view.focus();
+              return true;
+            }
             if (el.closest?.('.cm-properties')) {
               e.preventDefault();
               view.dispatch({ selection: { anchor: view.state.doc.line(Math.min(2, view.state.doc.lines)).to } });

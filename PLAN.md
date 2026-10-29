@@ -100,6 +100,22 @@ handled Message-IDs are remembered in SQLite.
   the APK at build, so `bun run build` in `web/` first). Offline edits queue in WorkManager. "New note" Quick Settings
   tile; text shared from other apps opens a new note.
 
+## Plugins
+
+`server/src/plugins.ts` (host), `server/src/builtin/` (diagrams, math, daily, webhooks), `web/src/plugin-api.js`
+(client registry), `web/src/plugins/` (bundled client parts), guide in `docs/plugins.md`.
+
+- A plugin is a folder with `plugin.json` in `SINK_PLUGINS_DIR` (`/plugins`); built-ins use the same API and can be
+  turned off with `SINK_PLUGINS_DISABLED`. A plugin that fails to load is logged and skipped.
+- Server: `sink.vault`, `sink.on` (vault events: note created/updated/deleted/moved, todo done/undone, from Sink or
+  an external edit found by a scan), `sink.routes` (Hono at `/api/plugins/<id>/`, signed in), `sink.mcpTool`,
+  `sink.every`, `sink.env` (`SINK_PLUGIN_<ID>_<KEY>`).
+- Client: `codeBlock` (rendered as a block widget while the cursor is outside it), `command` (slash menu),
+  `gridAction` (web grid button), `api`. Built-in client parts are bundled, so they work offline on Android; other
+  plugins' files are served at `/plugins/<id>/<file>` (signed in), and the Android app proxies
+  `https://sink.server/…` to them with its token (GET only).
+- Plugins are trusted code the owner installs, like Obsidian's.
+
 ## Release
 
 - Push to `main`: CI runs the tests, and `ghcr.io/heycastawhat/sink:main` / `:latest` is built for amd64 and arm64.

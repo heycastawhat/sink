@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { now } from "./db";
 import { parseTodos } from "./todos";
@@ -179,6 +180,12 @@ export class Vault {
   private folders = new Set<string>();
   /** Non-note files by lowercase name, for resolving `![[image.png]]` embeds. */
   private files = new Map<string, string[]>();
+  /** Emits "event" with a VaultEvent. */
+  readonly events = new EventEmitter();
+
+  emit(event: VaultEvent) {
+    this.events.emit("event", event);
+  }
 
   constructor(
     private db: Database,
@@ -283,8 +290,11 @@ export class Vault {
         if (prev && prev.size === st.size && prev.mtime === mtime) continue;
         if (st.size > MAX_NOTE_BYTES) continue;
         const content = await readFile(join(this.dir, path), "utf8");
-        this.index(path, content, st.size, mtime);
+        const before = prev ? this.row(path)?.hash : undefined;
+        const m = this.index(path, content, st.size, mtime);
         prev ? result.updated++ : result.added++;
+        // A touched file with the same text isn't a change worth telling anyone about.
+        if (before !== m.hash) this.emit({ type: prev ? "note.updated" : "note.created", path, source: "external" });
       }
     };
 
@@ -300,6 +310,7 @@ export class Vault {
         if (!seen.has(path)) {
           this.unindex(path);
           result.removed++;
+          this.emit({ type: "note.deleted", path, source: "external" });
         }
       }
     })();
@@ -421,7 +432,9 @@ export class Vault {
       await mkdir(dirname(abs), { recursive: true });
       await atomicWrite(abs, content);
       const st = await stat(abs);
-      return this.index(path, content, st.size, Math.floor(st.mtimeMs));
+      const m = this.index(path, content, st.size, Math.floor(st.mtimeMs));
+      this.emit({ type: current === null ? "note.created" : "note.updated", path, source: "sink" });
+      return m;
     } catch (err) {
       fsError(err, "note");
     }
@@ -458,6 +471,12 @@ export class Vault {
     } catch (err) {
       fsError(err, isNote ? "note" : "folder");
     }
+    const moved = isNote
+      ? [from]
+      : this.db
+          .query<{ path: string }, [number, string]>("SELECT path FROM notes WHERE substr(path, 1, ?) = ?")
+          .all(from.length + 1, from + "/")
+          .map((r) => r.path);
     this.db.transaction(() => {
       if (isNote) this.db.query("UPDATE notes SET path = ? WHERE path = ?").run(to, from);
       else
@@ -469,6 +488,7 @@ export class Vault {
       this.folders = new Set([...this.folders].map((f) => (f === from ? to : f.startsWith(from + "/") ? to + f.slice(from.length) : f)));
     }
     for (let d = dirname(to); d !== "."; d = dirname(d)) this.folders.add(d);
+    for (const old of moved) this.emit({ type: "note.moved", path: isNote ? to : to + old.slice(from.length), from: old, source: "sink" });
   }
 
   /** Moves a note or folder into `.trash/`, keeping its path there (Obsidian's "move to .trash" behaviour). */
@@ -489,6 +509,13 @@ export class Vault {
     } catch (err) {
       fsError(err, isNote ? "note" : "folder");
     }
+    const gone = isNote
+      ? [path]
+      : this.db
+          .query<{ path: string }, [number, string]>("SELECT path FROM notes WHERE substr(path, 1, ?) = ?")
+          .all(path.length + 1, path + "/")
+          .map((r) => r.path);
+    for (const p of gone) this.emit({ type: "note.deleted", path: p, source: "sink" });
     if (isNote) this.unindex(path);
     else {
       this.db.query("DELETE FROM notes WHERE substr(path, 1, ?) = ?").run(path.length + 1, path + "/");
@@ -542,6 +569,15 @@ export class Vault {
     }
   }
 }
+
+/**
+ * What changed in the vault, for plugins. `source` says whether Sink made the change or a scan found it
+ * (Obsidian, Syncthing, a file manager).
+ */
+export type VaultEvent =
+  | { type: "note.created" | "note.updated" | "note.deleted"; path: string; source: "sink" | "external" }
+  | { type: "note.moved"; path: string; from: string; source: "sink" }
+  | { type: "todo.done" | "todo.undone"; path: string; text: string; source: "sink" };
 
 export type ScanResult = { added: number; updated: number; removed: number; notes: number };
 

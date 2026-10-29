@@ -66,6 +66,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun api(): Api? = sinkApp.settings.session.first()?.let(::Api)
 
+    /** Enabled plugins for the editor page; the cached list until the server answers. */
+    fun pluginsJson(): String = store.plugins()
+
     suspend fun logout() {
         runCatching { api()?.logout() }
         sinkApp.settings.clearToken()
@@ -78,6 +81,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val list = api.notes()
                 store.saveList(list)
+                runCatching { store.savePlugins(api.pluginsJson()) }
                 _state.update { it.copy(notes = list.notes, folders = list.folders, loaded = true, offline = false, error = null) }
                 if (_state.value.query.isNotBlank()) search()
             } catch (e: ApiException) {
