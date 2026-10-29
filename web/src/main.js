@@ -204,6 +204,8 @@ function renderChrome() {
   $('app').dataset.view = state.view;
   $('search-row').hidden = state.view !== 'notes';
   $('notes').hidden = state.view !== 'notes';
+  $('folder-actions').hidden = state.view !== 'notes';
+  if (state.view !== 'notes') $('folder-crumbs').hidden = true;
   $('todos').hidden = state.view !== 'todos';
   $('trash').hidden = state.view !== 'trash';
   $('settings').hidden = state.view !== 'settings';

@@ -53,8 +53,12 @@
 
         <main id="main" class="main">
           <header class="main-head">
+            <!-- Inside a folder: its parents, above the title (which is the folder's name). -->
+            <nav id="folder-crumbs" class="folder-crumbs" aria-label="Folder" hidden></nav>
             <div class="title-row">
               <h1 id="view-title" class="view-title">Sink</h1>
+              <span class="spacer"></span>
+              <div id="folder-actions" class="folder-actions" hidden></div>
             </div>
             <div id="search-row" class="search-row">
               <m3e-search-bar class="search" clearable>
@@ -79,11 +83,6 @@
                 <span class="spacer"></span>
                 <m3e-button id="take-close" variant="text" size="small">Close</m3e-button>
               </div>
-            </div>
-            <div id="folder-bar" class="folder-bar">
-              <nav id="folder-crumbs" class="folder-crumbs" aria-label="Folder"></nav>
-              <span class="spacer"></span>
-              <div id="folder-actions" class="folder-actions"></div>
             </div>
             <div id="folder-tiles" class="folder-tiles" aria-label="Folders"></div>
             <h2 id="notes-pinned-head" class="notes-head" hidden>Pinned</h2>

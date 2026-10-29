@@ -3,10 +3,10 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
     <group android:rotation="-16" android:pivotX="54" android:pivotY="56">
-        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FFF6C945" />
+        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FF9A82DB" />
     </group>
     <group android:rotation="10" android:pivotX="54" android:pivotY="56">
-        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FF4FB6A8" />
+        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FFCDB8FF" />
     </group>
     <group android:rotation="-2" android:pivotX="54" android:pivotY="56">
         <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FFFFFBFE" />

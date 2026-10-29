@@ -17,6 +17,8 @@ body {
 }
 
 m3e-theme {
+  /* The page's main sheet: the lowest surface with a touch of the accent, so dark mode is deep purple rather than black. */
+  --sheet: color-mix(in srgb, var(--md-sys-color-primary) 10%, var(--md-sys-color-surface-container-lowest));
   display: block;
   min-height: 100vh;
   background: var(--md-sys-color-surface-container);
@@ -109,7 +111,7 @@ a {
   gap: 12px;
   padding: 40px 28px 28px;
   border-radius: 36px;
-  background: var(--md-sys-color-surface-container-lowest);
+  background: var(--sheet);
   box-shadow: 0 8px 32px color-mix(in srgb, var(--md-sys-color-shadow) 12%, transparent);
   text-align: center;
 }
@@ -259,7 +261,7 @@ a {
   margin: 8px 8px 8px 0;
   padding: 0 28px 48px;
   border-radius: var(--radius-sheet);
-  background: var(--md-sys-color-surface-container-lowest);
+  background: var(--sheet);
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -273,7 +275,7 @@ a {
   gap: 12px;
   margin: 0 -28px;
   padding: 22px 28px 12px;
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 90%, transparent);
+  background: color-mix(in srgb, var(--sheet) 90%, transparent);
   backdrop-filter: blur(16px);
 }
 
@@ -590,7 +592,7 @@ a {
 /* ---------- phone ---------- */
 @media (max-width: 839px) {
   m3e-theme {
-    background: var(--md-sys-color-surface-container-lowest);
+    background: var(--sheet);
   }
 
   .shell {
@@ -748,9 +750,9 @@ m3e-theme {
 }
 
 /* Keep's "Take a note…" */
+/* Same column as the search bar above it. */
 .take-note {
-  align-self: center;
-  width: min(600px, 100%);
+  width: min(720px, 100%);
   padding: 4px 6px 4px 18px;
   border-radius: 14px;
   background: var(--md-sys-color-surface-container-low);
@@ -988,7 +990,7 @@ m3e-theme {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--note, var(--md-sys-color-surface-container-lowest)) 16%, var(--md-sys-color-surface-container-lowest));
+  background: color-mix(in srgb, var(--note, var(--sheet)) 16%, var(--sheet));
   animation: note-in 180ms var(--ease-spring);
 }
 
@@ -1244,28 +1246,22 @@ body.note-open {
 }
 
 /* ---------- folders ---------- */
-.folder-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-}
-
 .folder-crumbs {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
+  gap: 0;
   min-width: 0;
+  margin: 0 0 -10px -10px;
   color: var(--md-sys-color-on-surface-variant);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .folder-crumbs a {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 4px 10px;
   border-radius: 999px;
   color: inherit;
   text-decoration: none;
@@ -1276,11 +1272,6 @@ body.note-open {
   background: color-mix(in srgb, var(--md-sys-color-on-surface) 7%, transparent);
 }
 
-.folder-crumbs a.crumb-here {
-  color: var(--md-sys-color-on-surface);
-  font-weight: 650;
-}
-
 .folder-crumbs > m3e-icon {
   --m3e-icon-size: 16px;
   opacity: 0.6;
@@ -1289,6 +1280,7 @@ body.note-open {
 .folder-actions {
   display: flex;
   flex: none;
+  align-self: center;
 }
 
 .folder-tiles {

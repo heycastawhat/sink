@@ -185,15 +185,15 @@ function renderGrid() {
 
 /** Breadcrumb, this folder's actions, and tiles for the folders inside it. */
 function renderFolderBar() {
+  // The title already names this folder; the crumbs are the way back up (and places to drop a note).
   const parts = state.folder ? state.folder.split('/') : [];
-  const crumbs = [`<a href="#/notes" data-drop-folder="" class="${parts.length ? '' : 'crumb-here'}">${ic('home')}Notes</a>`];
-  parts.forEach((name, i) => {
+  const crumbs = [`<a href="#/notes" data-drop-folder="">${ic('home')}Notes</a>`];
+  parts.slice(0, -1).forEach((name, i) => {
     const path = parts.slice(0, i + 1).join('/');
-    crumbs.push(
-      `${ic('chevron_right')}<a href="${folderHash(path)}" data-drop-folder="${esc(path)}" class="${i === parts.length - 1 ? 'crumb-here' : ''}">${esc(name)}</a>`,
-    );
+    crumbs.push(`${ic('chevron_right')}<a href="${folderHash(path)}" data-drop-folder="${esc(path)}">${esc(name)}</a>`);
   });
-  $('folder-crumbs').innerHTML = crumbs.join('');
+  $('folder-crumbs').innerHTML = crumbs.join('') + ic('chevron_right');
+  $('folder-crumbs').hidden = !parts.length;
   const btn = (act, icon, label) =>
     `<m3e-icon-button data-folder-act="${act}" aria-label="${label}" title="${label}">${ic(icon)}</m3e-icon-button>`;
   $('folder-actions').innerHTML = state.folder
