@@ -86,7 +86,7 @@ handled Message-IDs are remembered in SQLite.
   recorded in SQLite (`trash`) and purged after `SINK_TRASH_DAYS` (30); anything else in `.trash/` is listed but never purged
 - `POST /api/notes/folders` · `POST /api/notes/scan` · `GET /api/notes/attachment?name=|path=` · `POST /api/notes/attachments`
 - `GET /api/todos?view=open|done|all` · `POST /api/todos` · `POST /api/todos/toggle`
-- `/mcp`: MCP for AI assistants (search_notes, read_note, save_note, list_todos, add_todo). Connectors sign in
+- `/mcp`: MCP for AI assistants (search, read, save, pin/colour, folders, move/rename, todos, trash and restore). Connectors sign in
   with OAuth 2.1 served by Sink (OIDC login, then consent); Claude Code can use a token from Settings. Assistant
   tokens have the `mcp` scope: notes and todos only, never `/api/auth/tokens`.
 - Auth: any OIDC provider; typed allowlist (`email:`, `user:`, `sub:`); Sink refuses to start with nobody allowed.

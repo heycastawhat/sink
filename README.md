@@ -99,7 +99,13 @@ In Sink, open **Settings → AI assistants** for the connector URL (`https://<yo
 custom connector in Claude, ChatGPT or Poke; you sign in to Sink and approve it. For Claude Code, create a token
 on the same page and run the command it shows.
 
-Tools: `search_notes`, `read_note`, `save_note`, `list_todos`, `add_todo`.
+Tools:
+
+- **Notes:** `search_notes` (by words, or list a folder), `read_note`, `save_note`, `style_note` (pin, colour)
+- **Folders:** `create_folder`, `move_note` (move or rename a note or a whole folder)
+- **Todos:** `list_todos`, `add_todo`, `complete_todo`
+- **Trash:** `trash_note`, `list_trash`, `restore_from_trash`. Assistants can't delete anything for good; only you can
+  empty the trash.
 
 ## Plugins
 

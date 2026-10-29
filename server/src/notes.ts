@@ -28,7 +28,16 @@ export type NoteMeta = {
 };
 export type Note = NoteMeta & { content: string };
 /** A note in `.trash/`: `path` is inside the trash, `original` is where a restore puts it back. */
-export type TrashedNote = { path: string; original: string; title: string; excerpt: string; deleted_at: number; size: number };
+export type TrashedNote = {
+  path: string;
+  original: string;
+  title: string;
+  excerpt: string;
+  deleted_at: number;
+  size: number;
+  /** Set when the note went to the trash inside a folder: that folder's path in the trash (restore it whole). */
+  folder?: string;
+};
 
 /** 404 / 409 / 400 / 503 for the routes, so file system detail never reaches clients. */
 export class VaultError extends Error {
@@ -569,6 +578,7 @@ export class Vault {
           excerpt: isBoard(path) ? "" : cardText(body, title).slice(0, 200),
           deleted_at: from?.at ?? Math.floor(st.ctimeMs),
           size: st.size,
+          ...(from && from.row !== path && { folder: from.row }),
         });
       }
     };

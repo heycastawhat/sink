@@ -327,7 +327,20 @@ describe("mcp", () => {
   test("notes and todos: save, search, read, edit with hash, add and list todos", async () => {
     const token = await login();
     const tools = (await rpc(token, "tools/list")).body.result.tools.map((t: any) => t.name);
-    expect(tools.sort()).toEqual(["add_todo", "list_todos", "read_note", "save_note", "search_notes"]);
+    expect(tools.sort()).toEqual([
+      "add_todo",
+      "complete_todo",
+      "create_folder",
+      "list_todos",
+      "list_trash",
+      "move_note",
+      "read_note",
+      "restore_from_trash",
+      "save_note",
+      "search_notes",
+      "style_note",
+      "trash_note",
+    ]);
 
     const created = await call(token, "save_note", { title: "Packing list", folder: "Trips", content: "# Packing list\n\n- [ ] passport\n" });
     expect(created.data.created.path).toBe("Trips/Packing list.md");
@@ -352,6 +365,38 @@ describe("mcp", () => {
     expect(added.data).toEqual({ added: "- [ ] call the bank 📅 2026-11-02 (@2026-11-02 09:30)", path: "Todo.md" });
     const todos = await call(token, "list_todos");
     expect(todos.data.todos.map((t: any) => t.text)).toEqual(["call the bank", "passport", "charger"]);
+
+    const bank = todos.data.todos[0];
+    const ticked = await call(token, "complete_todo", { path: bank.path, line: bank.line, raw: bank.raw });
+    expect(ticked.data.done).toMatch(/^- \[x\] call the bank/);
+    expect((await call(token, "list_todos")).data.todos.map((t: any) => t.text)).toEqual(["passport", "charger"]);
+  });
+
+  test("folders, moving, trash and pin/colour", async () => {
+    const token = await login();
+    await call(token, "save_note", { title: "Idea", content: "# Idea\n\nmake soup\n" });
+    expect((await call(token, "create_folder", { path: "Projects/Soup" })).data.folder).toBe("Projects/Soup");
+
+    // Into a folder, keeping the name; then a rename by full path, without .md.
+    expect((await call(token, "move_note", { from: "Idea", folder: "Projects/Soup" })).data.to).toBe("Projects/Soup/Idea.md");
+    expect((await call(token, "move_note", { from: "Projects/Soup/Idea.md", to: "Projects/Soup/Plan" })).data.to).toBe("Projects/Soup/Plan.md");
+    expect((await call(token, "move_note", { from: "Projects/Soup", to: "Kitchen" })).data.to).toBe("Kitchen");
+
+    const listed = await call(token, "search_notes", { folder: "Kitchen" });
+    expect(listed.data.notes.map((n: any) => n.path)).toEqual(["Kitchen/Plan.md"]);
+    expect((await call(token, "search_notes", { query: "soup", folder: "Trips" })).data.results).toEqual([]);
+    expect((await call(token, "search_notes", { folder: "Nope" })).result.isError).toBe(true);
+
+    const styled = await call(token, "style_note", { path: "Plan", pinned: true, color: "teal" });
+    expect(styled.data).toEqual({ path: "Kitchen/Plan.md", pinned: true, color: "teal" });
+
+    await call(token, "trash_note", { path: "Kitchen" });
+    expect((await call(token, "search_notes", { query: "soup" })).data.results).toEqual([]);
+    const trash = await call(token, "list_trash");
+    const item = trash.data.items.find((t: any) => t.original === "Kitchen");
+    expect(item).toBeTruthy();
+    expect((await call(token, "restore_from_trash", { trash_path: item.trash_path })).data.restored).toBe("Kitchen");
+    expect((await call(token, "read_note", { path: "Kitchen/Plan.md" })).data.path).toBe("Kitchen/Plan.md");
   });
 });
 
