@@ -104,10 +104,13 @@ function excerptHtml(text) {
             .replace(/^#+\s+/, '')
             .replace(/^\s*[-*+]\s+/, '• ')
             .replace(/^>\s?/, '')
+            // Callout header `[!tip] Title` reads as just the title (or the type when there isn't one).
+            .replace(/^\[!(\w+)\][+-]?\s*(.*)$/, (_, type, title) => title || type[0].toUpperCase() + type.slice(1))
             .replace(/[*_~`]/g, ''),
         );
-      if (task) return `<span class="ln task${task[1] === ' ' ? '' : ' done'}">${ic(task[1] === ' ' ? 'check_box_outline_blank' : 'check_box')}<span>${clean(task[2])}</span></span>`;
-      return `<span class="ln">${clean(l)}</span>`;
+      const mark = (html) => html.replace(/==([^=]+)==/g, '<mark>$1</mark>');
+      if (task) return `<span class="ln task${task[1] === ' ' ? '' : ' done'}">${ic(task[1] === ' ' ? 'check_box_outline_blank' : 'check_box')}<span>${mark(clean(task[2]))}</span></span>`;
+      return `<span class="ln">${mark(clean(l))}</span>`;
     })
     .join('');
 }
