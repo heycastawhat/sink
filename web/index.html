@@ -19,7 +19,7 @@
       <!-- Login -->
       <section id="login" class="login" hidden>
         <div class="login-card">
-          <m3e-shape name="7-sided-cookie" class="login-logo"></m3e-shape>
+          <img src="/favicon.svg" alt="" class="login-logo" width="88" height="88" />
           <h1 class="wordmark">Sink</h1>
           <p class="muted">Everything but the kitchen sink. Well, including it.</p>
           <p id="login-error" class="error" hidden></p>
@@ -33,7 +33,7 @@
       <div id="app" class="shell" hidden>
         <aside id="nav" class="nav" aria-label="Sections">
           <a class="brand" href="#/notes">
-            <m3e-shape id="logo" name="7-sided-cookie"></m3e-shape>
+            <img id="logo" src="/favicon.svg" alt="" width="34" height="34" />
             <span class="wordmark">Sink</span>
           </a>
           <m3e-button id="add-btn" class="add-btn" variant="tonal">
@@ -96,6 +96,9 @@
             </div>
           </section>
 
+          <!-- Recents: what you opened or edited lately, newest first, like Drive. -->
+          <section id="recents" class="recents" hidden></section>
+
           <!-- Todos: every checkbox in every note. -->
           <section id="todos" class="todos" hidden>
             <form id="todo-form" class="todo-form">
@@ -129,6 +132,7 @@
 
         <nav class="tabbar" aria-label="Sections">
           <a href="#/notes" data-tab="notes"><m3e-icon name="sticky_note_2"></m3e-icon><span>Notes</span></a>
+          <a href="#/recents" data-tab="recents"><m3e-icon name="schedule"></m3e-icon><span>Recents</span></a>
           <a href="#/todos" data-tab="todos"><m3e-icon name="checklist"></m3e-icon><span>Todos</span></a>
           <a href="#/settings" data-tab="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
         </nav>

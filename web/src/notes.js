@@ -231,6 +231,96 @@ export const prefs = {
   },
 };
 
+// ---------- recents ----------
+
+/** When this browser last opened each note (path -> ms). Drive's "opened by me", kept per device. */
+const opened = {
+  read() {
+    try {
+      return JSON.parse(localStorage.getItem('sink:opened') ?? '{}');
+    } catch {
+      return {};
+    }
+  },
+  write(map) {
+    try {
+      // The 300 most recent are plenty for a Recents list.
+      const top = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 300);
+      localStorage.setItem('sink:opened', JSON.stringify(Object.fromEntries(top)));
+    } catch {}
+  },
+  touch(path) {
+    const map = this.read();
+    map[path] = Date.now();
+    this.write(map);
+  },
+  rename(from, to) {
+    const map = this.read();
+    if (!(from in map)) return;
+    map[to] = map[from];
+    delete map[from];
+    this.write(map);
+  },
+};
+
+function bucket(ts) {
+  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const now = new Date();
+  const today = day(now);
+  const days = Math.round((today - day(new Date(ts))) / 86_400_000);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return 'Earlier this week';
+  if (new Date(ts).getMonth() === now.getMonth() && new Date(ts).getFullYear() === now.getFullYear()) return 'Earlier this month';
+  return 'Older';
+}
+
+function when(ts) {
+  const d = new Date(ts);
+  return bucket(ts) === 'Today' || bucket(ts) === 'Yesterday'
+    ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
+
+/** Notes by when you last touched them (opened here, or edited anywhere), grouped like Drive's Recents. */
+export function renderRecents() {
+  const root = $('recents');
+  if (!root || root.hidden) return;
+  const opens = opened.read();
+  const items = state.notes
+    .map((n) => {
+      const o = opens[n.path] ?? 0;
+      return { n, at: Math.max(o, n.mtime), how: o > n.mtime ? 'Opened' : 'Edited' };
+    })
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 200);
+  if (!items.length) {
+    root.innerHTML = `<div class="empty"><m3e-shape name="soft-burst" class="empty-shape"></m3e-shape><h2 class="empty-title">Nothing yet</h2>
+      <p class="muted">Notes you open or edit show up here, newest first.</p></div>`;
+    return;
+  }
+  const groups = new Map();
+  for (const it of items) {
+    const b = bucket(it.at);
+    if (!groups.has(b)) groups.set(b, []);
+    groups.get(b).push(it);
+  }
+  root.innerHTML = [...groups]
+    .map(
+      ([name, list]) => `<section class="recent-group"><h2 class="day">${name}<span>${list.length}</span></h2><ul>${list
+        .map(({ n, at, how }) => {
+          const board = /\.excalidraw\.md$/i.test(n.path);
+          return `<li><a class="recent${n.color ? ` c-${n.color}` : ''}" href="${noteHash(n.path)}">
+  <span class="recent-icon">${ic(board ? 'draw' : 'description')}</span>
+  <span class="recent-main"><span class="recent-title">${esc(n.title)}</span>
+  <span class="recent-meta">${ic('folder')}${esc(folderOf(n.path) || 'Notes')}</span></span>
+  <span class="recent-when">${how} ${esc(when(at))}</span></a></li>`;
+        })
+        .join('')}</ul></section>`,
+    )
+    .join('');
+}
+
 const openFolders = new Set(
   (() => {
     try {
@@ -345,6 +435,7 @@ async function moveNoteTo(path, folder) {
   try {
     const moved = await api.moveNote(path, to);
     clearUnsaved(path);
+    opened.rename(path, moved.path);
     return moved.path;
   } catch (err) {
     toast(err.status === 409 ? `A note called “${fileName(path)}” is already in ${folder || 'Notes'}` : err.message);
@@ -636,6 +727,7 @@ export async function openNote(path, { line } = {}) {
   try {
     const note = await api.note(path);
     Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
+    opened.touch(note.path);
     let text = note.content;
     // Unsaved edits from last time, made on this exact version: bring them back.
     const stash = readUnsaved(note.path);
@@ -863,6 +955,7 @@ function wireScreen() {
   });
 
   const relocate = (path) => {
+    opened.rename(screen.path, path);
     Object.assign(screen, { path, folder: folderOf(path) });
     history.replaceState(history.state, '', noteHash(path));
     applyLook();
@@ -1155,4 +1248,5 @@ export function wireNotes() {
 }
 
 export const notesRendered = () => renderGrid();
+export const recentsRendered = () => renderRecents();
 export const todosRendered = () => renderTodos();

@@ -129,15 +129,9 @@ a {
 }
 
 .login-logo {
-  --m3e-shape-size: 88px;
-  --m3e-shape-container-color: var(--md-sys-color-primary);
-  animation: spin 18s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    rotate: 360deg;
-  }
+  width: 88px;
+  height: 88px;
+  filter: drop-shadow(0 6px 16px color-mix(in srgb, var(--md-sys-color-shadow) 25%, transparent));
 }
 
 /* ---------- shell (desktop) ---------- */
@@ -167,13 +161,13 @@ a {
 }
 
 #logo {
-  --m3e-shape-size: 34px;
-  --m3e-shape-container-color: var(--md-sys-color-primary);
-  transition: rotate 700ms var(--ease-spring);
+  width: 34px;
+  height: 34px;
+  transition: rotate 500ms var(--ease-spring);
 }
 
 .brand:hover #logo {
-  rotate: 51deg;
+  rotate: -8deg;
 }
 
 .add-btn {
@@ -613,7 +607,7 @@ a {
     bottom: 0;
     z-index: 25;
     display: grid !important;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     padding: 10px 8px calc(10px + env(safe-area-inset-bottom));
     background: var(--md-sys-color-surface-container);
   }
@@ -1514,4 +1508,83 @@ body.dragging-note [data-drop-folder] {
 
 .token-group span {
   font-weight: 500;
+}
+
+/* ---------- recents ---------- */
+.recents {
+  max-width: 860px;
+}
+
+.recent-group ul {
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+
+.recent {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  color: var(--md-sys-color-on-surface);
+  text-decoration: none;
+}
+
+.recent:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
+}
+
+.recent-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--note, var(--md-sys-color-primary)) 22%, var(--sheet));
+  color: color-mix(in srgb, var(--note, var(--md-sys-color-primary)) 70%, var(--md-sys-color-on-surface));
+}
+
+.recent-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.recent-title {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  --m3e-icon-size: 15px;
+}
+
+.recent-when {
+  flex: none;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+}
+
+@media (max-width: 839px) {
+  .recent {
+    padding: 10px 4px;
+  }
+
+  .recent-when {
+    max-width: 38%;
+    text-align: right;
+  }
 }
