@@ -12,7 +12,7 @@ import {
   placeholder as placeholderExt,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput } from '@codemirror/language';
+import { syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput, indentUnit } from '@codemirror/language';
 import { markdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } from '@codemirror/autocomplete';
@@ -575,6 +575,9 @@ export function createEditor(opts) {
       doc: opts.doc ?? '',
       extensions: [
         history(),
+        // Tabs indent, as in Obsidian, so nested lists line up in both apps; editor.css makes each one wide enough to read.
+        indentUnit.of('\t'),
+        EditorState.tabSize.of(4),
         indentOnInput(),
         closeBrackets(),
         highlightSelectionMatches(),

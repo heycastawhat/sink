@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.BrightnessAuto
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.FolderOff
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Palette
@@ -70,6 +71,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val dynamicColor by settings.dynamicColor.collectAsState(initial = false)
+    val hideFoldered by settings.hideFoldered.collectAsState(initial = false)
     val themeMode by settings.themeMode.collectAsState(initial = "auto")
     var checking by remember { mutableStateOf(false) }
 
@@ -102,6 +104,17 @@ fun SettingsScreen(
                 }
                 ToggleRow(Icons.Outlined.Palette, "Use wallpaper colours", "Off keeps the Sink purple theme.", dynamicColor) {
                     scope.launch { settings.setDynamicColor(it) }
+                }
+            }
+
+            Card("Notes") {
+                ToggleRow(
+                    Icons.Outlined.FolderOff,
+                    "Hide notes in folders from home",
+                    "Home shows only notes that aren't in a folder. Search still finds everything.",
+                    hideFoldered,
+                ) {
+                    scope.launch { settings.setHideFoldered(it) }
                 }
             }
 

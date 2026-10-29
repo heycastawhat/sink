@@ -437,6 +437,35 @@ a {
   font-stretch: 110%;
 }
 
+/* Label / value rows (Settings → Server). */
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.fact {
+  display: grid;
+  grid-template-columns: 20px 76px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  --m3e-icon-size: 20px;
+}
+
+.fact m3e-icon {
+  color: var(--md-sys-color-primary);
+}
+
+.fact-label {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.fact-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .setting-card .facts {
   margin: 0;
   padding: 0;
@@ -1472,4 +1501,25 @@ body.dragging-note [data-drop-folder] {
   .folder-tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* Settings: sign-ins grouped into devices and assistants. */
+.token-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 18px 0 6px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.token-group:first-child {
+  margin-top: 4px;
+}
+
+.token-group span {
+  font-weight: 500;
 }

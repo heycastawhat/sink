@@ -8,7 +8,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import nz.joshp.sink.SinkApp
@@ -75,6 +77,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun api(): Api? = sinkApp.settings.session.first()?.let(::Api)
+
+    val hideFoldered: StateFlow<Boolean> = sinkApp.settings.hideFoldered.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** Enabled plugins for the editor page; the cached list until the server answers. */
     fun pluginsJson(): String = store.plugins()

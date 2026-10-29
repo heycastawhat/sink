@@ -146,7 +146,9 @@ function cardHtml(n) {
 function renderGrid() {
   const root = $('notes');
   if (!root || root.hidden) return;
-  const inFolder = (n) => !state.folder || n.path.startsWith(state.folder + '/');
+  // Search always covers everything; browsing home can leave filed notes to their folders.
+  const inFolder = (n) =>
+    state.folder ? n.path.startsWith(state.folder + '/') : state.results || !prefs.hideFoldered || !n.path.includes('/');
   const list = (state.results ?? state.notes).filter(inFolder);
 
   renderFolderBar();
@@ -162,12 +164,20 @@ function renderGrid() {
   const empty = state.loaded && !list.length;
   $('notes-empty').hidden = !empty;
   if (empty) {
-    $('notes-empty-title').textContent = state.q ? 'Nothing matches' : state.folder ? 'Nothing in here yet' : 'No notes yet';
+    $('notes-empty-title').textContent = state.q
+      ? 'Nothing matches'
+      : state.folder
+        ? 'Nothing in here yet'
+        : prefs.hideFoldered && state.notes.length
+          ? 'Everything’s filed away'
+          : 'No notes yet';
     $('notes-empty-body').textContent = state.q
       ? `No notes mention “${state.q}”.`
       : state.folder
         ? 'Notes you take here, or drag onto this folder, land in it.'
-        : 'Take a note above. It saves as a markdown file in your notes folder.';
+        : prefs.hideFoldered && state.notes.length
+          ? 'Your notes are in the folders above. New notes you take here stay on this page.'
+          : 'Take a note above. It saves as a markdown file in your notes folder.';
   }
 }
 
@@ -203,6 +213,23 @@ function renderFolderBar() {
     .join('');
   $('folder-tiles').hidden = !children.length;
 }
+
+/** "Hide notes in folders from the home grid": home then shows only loose notes; folders hold the rest. */
+export const prefs = {
+  get hideFoldered() {
+    try {
+      return localStorage.getItem('sink:hide-foldered') === '1';
+    } catch {
+      return false;
+    }
+  },
+  set hideFoldered(on) {
+    try {
+      localStorage.setItem('sink:hide-foldered', on ? '1' : '0');
+    } catch {}
+    renderGrid();
+  },
+};
 
 const openFolders = new Set(
   (() => {

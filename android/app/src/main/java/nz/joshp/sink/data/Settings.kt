@@ -20,6 +20,7 @@ class Settings(private val context: Context) {
         val token = stringPreferencesKey("token")
         val dynamicColor = booleanPreferencesKey("dynamic_color")
         val themeMode = stringPreferencesKey("theme_mode")
+        val hideFoldered = booleanPreferencesKey("hide_foldered")
         val pendingServer = stringPreferencesKey("pending_server")
         val pendingVerifier = stringPreferencesKey("pending_verifier")
         val updateCheckedAt = longPreferencesKey("update_checked_at")
@@ -75,6 +76,13 @@ class Settings(private val context: Context) {
 
     suspend fun clearToken() {
         context.dataStore.edit { it.remove(Keys.token) }
+    }
+
+    /** Home shows only notes that aren't in a folder; the rest are reached through their folders. */
+    val hideFoldered: Flow<Boolean> = context.dataStore.data.map { it[Keys.hideFoldered] ?: false }
+
+    suspend fun setHideFoldered(on: Boolean) {
+        context.dataStore.edit { it[Keys.hideFoldered] = on }
     }
 
     suspend fun setDynamicColor(on: Boolean) {

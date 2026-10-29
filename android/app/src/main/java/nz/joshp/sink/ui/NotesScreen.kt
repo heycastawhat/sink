@@ -127,7 +127,12 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
         }
     }
 
-    val inFolder = { n: NoteMeta -> state.folder.isEmpty() || n.path.startsWith(state.folder + "/") }
+    val hideFoldered by vm.hideFoldered.collectAsStateWithLifecycle()
+    // Search always covers everything; home can leave filed notes to their folders (Settings).
+    val inFolder = { n: NoteMeta ->
+        if (state.folder.isNotEmpty()) n.path.startsWith(state.folder + "/")
+        else state.results != null || !hideFoldered || '/' !in n.path
+    }
     val list = (state.results ?: state.notes).filter(inFolder)
     val searching = state.results != null
     val pinned = if (searching) emptyList() else list.filter { it.pinned }

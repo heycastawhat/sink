@@ -373,3 +373,9 @@
   font-size: 0.85em;
   white-space: pre-wrap;
 }
+
+/* A tab is one nesting level: wide enough to clear the bullet above (CodeMirror sets tab-size inline, in spaces). */
+.note-editor .cm-editor .cm-content {
+  tab-size: 2.2em !important;
+  -moz-tab-size: 2.2em !important;
+}

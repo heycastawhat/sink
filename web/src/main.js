@@ -10,6 +10,7 @@ import '@m3e/web/form-field';
 import '@m3e/web/search';
 import '@m3e/web/fab';
 import '@m3e/web/expansion-panel';
+import '@m3e/web/switch';
 import { M3eSnackbar } from '@m3e/web/snackbar';
 import { api, Unauthorized } from './api.js';
 import * as notes from './notes.js';
@@ -268,6 +269,17 @@ async function renderSettings() {
 </section>
 
 <section class="setting-card">
+  <h2>Notes</h2>
+  <div class="setting-row">
+    <div class="grow">
+      <label class="setting-title" for="hide-foldered">Hide notes in folders from the home page</label>
+      <div class="muted small">Home shows only notes that aren't in a folder. Search still finds everything. This browser only.</div>
+    </div>
+    <m3e-switch id="hide-foldered"${notes.prefs.hideFoldered ? ' checked' : ''}></m3e-switch>
+  </div>
+</section>
+
+<section class="setting-card">
   <h2>AI assistants</h2>
   <p class="muted">Let Claude, ChatGPT, Poke or another assistant search and read your notes, write new ones and add todos.</p>
   <div class="setting-title">Connector URL</div>
@@ -335,21 +347,29 @@ async function renderTokens() {
   try {
     const [{ tokens }, me] = await Promise.all([api.tokens(), api.me()]);
     const ago = (ts) => (ts ? `${relativeDay(ts).toLowerCase()} ${timeOf(ts)}` : 'never');
-    $('connect-tokens').innerHTML = tokens
-      .map((t) => {
-        const assistant = /\(MCP\)|claude|mcp|code|gpt|poke/i.test(t.name);
-        return `<div class="token-row">
-  <span class="token-icon">${ic(assistant ? 'hub' : 'devices')}</span>
+    // Assistant tokens carry the "mcp" scope (made by a connector or the Create token button); the rest are sign-ins.
+    const isAssistant = (t) => t.scope === 'mcp';
+    const recent = (a, b) => (b.id === me.tokenId) - (a.id === me.tokenId) || (b.last_used_at ?? 0) - (a.last_used_at ?? 0);
+    const row = (t) => `<div class="token-row">
+  <span class="token-icon">${ic(isAssistant(t) ? 'hub' : 'devices')}</span>
   <div class="grow"><div>${esc(t.name.replace(/ \(MCP\)$/, ''))}${t.id === me.tokenId ? ' <span class="here">This browser</span>' : ''}</div>
-  <div class="muted small">${assistant ? 'Assistant' : 'Device'} · last used ${esc(ago(t.last_used_at))}</div></div>
+  <div class="muted small">Last used ${esc(ago(t.last_used_at))}</div></div>
   ${t.id === me.tokenId ? '' : `<m3e-icon-button data-revoke="${esc(t.id)}" aria-label="Revoke ${esc(t.name)}" title="Revoke">${ic('close')}</m3e-icon-button>`}
 </div>`;
-      })
-      .join('');
+    const group = (title, items, empty) =>
+      `<h3 class="token-group">${title}<span>${items.length || ''}</span></h3>` +
+      (items.length ? items.sort(recent).map(row).join('') : `<p class="muted small">${empty}</p>`);
+    $('connect-tokens').innerHTML =
+      group('Devices', tokens.filter((t) => !isAssistant(t)), 'No devices signed in.') +
+      group('Assistants', tokens.filter(isAssistant), 'No assistants connected yet. Add one with the connector URL above.');
   } catch (err) {
     $('connect-tokens').textContent = err.message;
   }
 }
+
+$('settings').addEventListener('change', (e) => {
+  if (e.target.id === 'hide-foldered') notes.prefs.hideFoldered = e.target.checked;
+});
 
 $('settings').addEventListener('click', async (e) => {
   const scheme = e.target.closest('[data-scheme]');
