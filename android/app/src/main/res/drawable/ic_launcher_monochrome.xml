@@ -1,14 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Themed (monochrome) launcher icon: the card stack, tinted by the launcher. -->
+<!-- Themed (monochrome) launcher icon: the front checklist card, with its box and lines as holes, so it reads
+     as the same note when the launcher tints it one colour. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <group android:rotation="-16" android:pivotX="54" android:pivotY="56">
-        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="3" />
-    </group>
-    <group android:rotation="10" android:pivotX="54" android:pivotY="56">
-        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="3" />
-    </group>
     <group android:rotation="-2" android:pivotX="54" android:pivotY="56">
-        <path android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z" android:fillColor="#FFFFFFFF" />
+        <path android:fillType="evenOdd" android:fillColor="#FFFFFFFF" android:pathData="M40,28 H68 A7,7 0 0 1 75,35 V73 A7,7 0 0 1 68,80 H40 A7,7 0 0 1 33,73 V35 A7,7 0 0 1 40,28 Z M42,39.8 H45 A2,2 0 0 1 47,41.8 V44.8 A2,2 0 0 1 45,46.8 H42 A2,2 0 0 1 40,44.8 V41.8 A2,2 0 0 1 42,39.8 Z M51.0,41.4 H68.0 A1.9,1.9 0 0 1 69.9,43.3 V43.3 A1.9,1.9 0 0 1 68.0,45.199999999999996 H51.0 A1.9,1.9 0 0 1 49.1,43.3 V43.3 A1.9,1.9 0 0 1 51.0,41.4 Z M40.0,50.4 H68.0 A1.9,1.9 0 0 1 69.9,52.3 V52.3 A1.9,1.9 0 0 1 68.0,54.199999999999996 H40.0 A1.9,1.9 0 0 1 38.1,52.3 V52.3 A1.9,1.9 0 0 1 40.0,50.4 Z M40.0,59.4 H60.00000000000001 A1.9,1.9 0 0 1 61.900000000000006,61.3 V61.3 A1.9,1.9 0 0 1 60.00000000000001,63.199999999999996 H40.0 A1.9,1.9 0 0 1 38.1,61.3 V61.3 A1.9,1.9 0 0 1 40.0,59.4 Z" />
+        <path android:pathData="M41.6,43.3 l1.8,1.8 l3.2,-3.6" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.6"
+            android:strokeLineCap="round" android:strokeLineJoin="round" />
     </group>
 </vector>
