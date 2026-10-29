@@ -280,7 +280,27 @@ function when(ts) {
     : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 }
 
-/** Notes by when you last touched them (opened here, or edited anywhere), grouped like Drive's Recents. */
+/** Recents view: list (grouped by day) or grid (preview cards), remembered per device. */
+const recentsPrefs = {
+  get view() {
+    try {
+      return localStorage.getItem('sink:recents-view') === 'list' ? 'list' : 'grid';
+    } catch {
+      return 'grid';
+    }
+  },
+  set view(v) {
+    try {
+      localStorage.setItem('sink:recents-view', v);
+    } catch {}
+  },
+  collapsed: new Set(),
+};
+
+/**
+ * Notes by when you last touched them (opened here, or edited anywhere), laid out like Drive's home: the folders
+ * you've been working in, then the notes, as preview cards or a list grouped by day.
+ */
 export function renderRecents() {
   const root = $('recents');
   if (!root || root.hidden) return;
@@ -288,7 +308,7 @@ export function renderRecents() {
   const items = state.notes
     .map((n) => {
       const o = opens[n.path] ?? 0;
-      return { n, at: Math.max(o, n.mtime), how: o > n.mtime ? 'Opened' : 'Edited' };
+      return { n, at: Math.max(o, n.mtime), how: o > n.mtime ? 'opened' : 'edited' };
     })
     .sort((a, b) => b.at - a.at)
     .slice(0, 200);
@@ -297,27 +317,86 @@ export function renderRecents() {
       <p class="muted">Notes you open or edit show up here, newest first.</p></div>`;
     return;
   }
-  const groups = new Map();
-  for (const it of items) {
-    const b = bucket(it.at);
-    if (!groups.has(b)) groups.set(b, []);
-    groups.get(b).push(it);
+
+  // Folders, in the order you last touched something inside them.
+  const folders = [];
+  for (const { n } of items) {
+    const f = folderOf(n.path);
+    if (f && !folders.includes(f)) folders.push(f);
+    if (folders.length === 5) break;
   }
-  root.innerHTML = [...groups]
-    .map(
-      ([name, list]) => `<section class="recent-group"><h2 class="day">${name}<span>${list.length}</span></h2><ul>${list
-        .map(({ n, at, how }) => {
-          const board = /\.excalidraw\.md$/i.test(n.path);
-          return `<li><a class="recent${n.color ? ` c-${n.color}` : ''}" href="${noteHash(n.path)}">
-  <span class="recent-icon">${ic(board ? 'draw' : 'description')}</span>
+
+  const view = recentsPrefs.view;
+  const section = (id, title, body, extra = '') => {
+    const shut = recentsPrefs.collapsed.has(id);
+    return `<section class="recent-section${shut ? ' shut' : ''}">
+  <div class="recent-head"><button type="button" class="recent-toggle" data-recent-toggle="${id}" aria-expanded="${!shut}">${ic('expand_more')}<h2>${title}</h2></button>${extra}</div>
+  ${shut ? '' : body}</section>`;
+  };
+  const toggle = `<div class="view-toggle" role="group" aria-label="View">
+  <button type="button" data-recent-view="list" aria-pressed="${view === 'list'}" title="List">${ic('view_list')}</button>
+  <button type="button" data-recent-view="grid" aria-pressed="${view === 'grid'}" title="Grid">${ic('grid_view')}</button></div>`;
+
+  const folderTiles = folders.length
+    ? section(
+        'folders',
+        'Folders',
+        `<div class="folder-tiles">${folders
+          .map(
+            (f) => `<a class="folder-tile" href="${folderHash(f)}" data-drop-folder="${esc(f)}">${ic('folder')}<span class="folder-name">${esc(
+              f.split('/').pop(),
+            )}${f.includes('/') ? `<small>in ${esc(folderOf(f))}</small>` : ''}</span></a>`,
+          )
+          .join('')}</div>`,
+      )
+    : '';
+
+  const icon = (n) => ic(/\.excalidraw\.md$/i.test(n.path) ? 'draw' : 'description');
+  let notesBody;
+  if (view === 'grid') {
+    notesBody = `<div class="recent-grid">${items
+      .slice(0, 60)
+      .map(
+        ({ n, at, how }) => `<a class="recent-card${n.color ? ` c-${n.color}` : ''}" href="${noteHash(n.path)}">
+  <span class="recent-card-head">${icon(n)}<span class="recent-title">${esc(n.title)}</span></span>
+  <span class="recent-preview">${/\.excalidraw\.md$/i.test(n.path) ? `<span class="recent-board">${ic('draw')}</span>` : excerptHtml(n.excerpt)}</span>
+  <span class="recent-foot">You ${how} · ${esc(when(at))}</span></a>`,
+      )
+      .join('')}</div>`;
+  } else {
+    const groups = new Map();
+    for (const it of items) {
+      const b = bucket(it.at);
+      if (!groups.has(b)) groups.set(b, []);
+      groups.get(b).push(it);
+    }
+    notesBody = [...groups]
+      .map(
+        ([name, list]) => `<div class="recent-group"><h3 class="day">${name}<span>${list.length}</span></h3><ul>${list
+          .map(
+            ({ n, at, how }) => `<li><a class="recent${n.color ? ` c-${n.color}` : ''}" href="${noteHash(n.path)}">
+  <span class="recent-icon">${icon(n)}</span>
   <span class="recent-main"><span class="recent-title">${esc(n.title)}</span>
   <span class="recent-meta">${ic('folder')}${esc(folderOf(n.path) || 'Notes')}</span></span>
-  <span class="recent-when">${how} ${esc(when(at))}</span></a></li>`;
-        })
-        .join('')}</ul></section>`,
-    )
-    .join('');
+  <span class="recent-when">You ${how} · ${esc(when(at))}</span></a></li>`,
+          )
+          .join('')}</ul></div>`,
+      )
+      .join('');
+  }
+  root.innerHTML = folderTiles + section('notes', 'Notes', notesBody, toggle);
 }
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest?.('[data-recent-toggle], [data-recent-view]');
+  if (!t || !t.closest('#recents')) return;
+  if (t.dataset.recentView) recentsPrefs.view = t.dataset.recentView;
+  else {
+    const id = t.dataset.recentToggle;
+    recentsPrefs.collapsed.has(id) ? recentsPrefs.collapsed.delete(id) : recentsPrefs.collapsed.add(id);
+  }
+  renderRecents();
+});
 
 const openFolders = new Set(
   (() => {

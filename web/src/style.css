@@ -1490,13 +1490,181 @@ body.dragging-note [data-drop-folder] {
 
 /* ---------- recents ---------- */
 .recents {
-  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.recent-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.recent-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-toggle h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.recent-toggle m3e-icon {
+  transition: transform 160ms ease;
+}
+
+.recent-section.shut .recent-toggle m3e-icon {
+  transform: rotate(-90deg);
+}
+
+.recent-section.shut .recent-head {
+  margin-bottom: 0;
+}
+
+.recent-section .folder-tile {
+  min-height: 60px;
+}
+
+.recent-section .folder-name small {
+  display: block;
+  overflow: hidden;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.view-toggle {
+  display: flex;
+  flex: none;
+  overflow: hidden;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-outline);
+}
+
+.view-toggle button {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 34px;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  --m3e-icon-size: 20px;
+}
+
+.view-toggle button + button {
+  border-left: 1px solid var(--md-sys-color-outline);
+}
+
+.view-toggle button[aria-pressed='true'] {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.recent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.recent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 12px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--note, var(--md-sys-color-surface-container-low)) 22%, var(--md-sys-color-surface-container-low));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--note, var(--md-sys-color-outline-variant)) 40%, transparent);
+  color: var(--md-sys-color-on-surface);
+  text-decoration: none;
+  transition: background-color 160ms ease;
+}
+
+.recent-card:hover {
+  background: color-mix(in srgb, var(--note, var(--md-sys-color-surface-container)) 30%, var(--md-sys-color-surface-container));
+}
+
+.recent-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 4px;
+  --m3e-icon-size: 20px;
+}
+
+.recent-card-head m3e-icon {
+  flex: none;
+  color: color-mix(in srgb, var(--note, var(--md-sys-color-primary)) 70%, var(--md-sys-color-on-surface));
+}
+
+.recent-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  height: 128px;
+  padding: 10px 12px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-mask-image: linear-gradient(#000 70%, transparent);
+  mask-image: linear-gradient(#000 70%, transparent);
+}
+
+.recent-preview .ln {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-preview .task {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  --m3e-icon-size: 14px;
+}
+
+.recent-board {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  color: var(--md-sys-color-primary);
+  --m3e-icon-size: 40px;
+}
+
+.recent-foot {
+  padding: 0 4px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
 }
 
 .recent-group ul {
   margin: 0 0 18px;
   padding: 0;
   list-style: none;
+}
+
+.recent-group .day {
+  margin: 8px 0 4px;
 }
 
 .recent {
@@ -1557,6 +1725,19 @@ body.dragging-note [data-drop-folder] {
 }
 
 @media (max-width: 839px) {
+  .recent-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .recent-preview {
+    height: 96px;
+  }
+
+  .recent-section .folder-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .recent {
     padding: 10px 4px;
   }
