@@ -46,7 +46,8 @@ jobs:
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then export SINK_VERSION_NAME="${GITHUB_REF_NAME#v}"; else export SINK_VERSION_NAME="0.0.0-dev.$GITHUB_RUN_NUMBER"; fi
           ./gradlew --no-daemon :app:assembleRelease
-          mv app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/sink-${GITHUB_REF_NAME#v}.apk"
+          # Named by version: a branch name (claude/x) would put a slash in the file name.
+          mv app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/sink-$SINK_VERSION_NAME.apk"
       - uses: softprops/action-gh-release@v2
         if: github.ref_type == 'tag'
         with:
