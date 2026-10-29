@@ -1,11 +1,10 @@
 package nz.joshp.sink.ui
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import nz.joshp.sink.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,11 +24,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.platform.LocalContext
@@ -58,9 +54,6 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val spin by rememberInfiniteTransition(label = "logo").animateFloat(
-        0f, 360f, infiniteRepeatable(tween(18_000, easing = LinearEasing), RepeatMode.Restart), label = "spin",
-    )
 
     fun submit() {
         if (busy || server.isBlank()) return
@@ -83,13 +76,15 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Spacer(Modifier.height(48.dp))
+            // The app icon: the launcher foreground on its background colour (the adaptive mipmap can't be painted).
             Box(
                 Modifier
                     .size(104.dp)
-                    .rotate(spin)
-                    .clip(MaterialShapes.Cookie7Sided.toShape())
-                    .background(MaterialTheme.colorScheme.primary),
-            )
+                    .clip(RoundedCornerShape(28))
+                    .background(Color(0xFF4F378B)),
+            ) {
+                Image(painterResource(R.drawable.ic_launcher_foreground), null, Modifier.fillMaxSize())
+            }
             Spacer(Modifier.height(8.dp))
             // Not inside a Surface, so content colour has to be explicit (it would default to black).
             Text("Sink", style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.onSurface)

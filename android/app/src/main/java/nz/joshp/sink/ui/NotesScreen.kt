@@ -38,13 +38,11 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Draw
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
@@ -246,11 +244,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
             }
         }
 
-        FloatingActionButton(
-            onClick = onNew,
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-        ) { Icon(Icons.Outlined.Edit, "New note") }
+        NewMenuFab(vm, state.folder, snackbar, onNewNote = onNew, onOpen = onOpen, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp))
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
     }
 

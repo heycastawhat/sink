@@ -71,6 +71,20 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     private var searchJob: Job? = null
 
+    private val _opened = MutableStateFlow(store.opened())
+    /** When this phone last opened each note, for Recents. */
+    val opened: StateFlow<Map<String, Long>> = _opened.asStateFlow()
+
+    fun markOpened(path: String) {
+        store.markOpened(path, System.currentTimeMillis())
+        _opened.value = store.opened()
+    }
+
+    fun renameOpened(from: String, to: String) {
+        store.renameOpened(from, to)
+        _opened.value = store.opened()
+    }
+
     init {
         store.list()?.let { cached -> _state.update { it.copy(notes = cached.notes, folders = cached.folders, loaded = true) } }
         refresh()
@@ -290,4 +304,32 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         if (due != null) ReminderSync.now(getApplication())
         return error?.let { it.message ?: "Couldn't add" }
     }
+
+    /** A blank Excalidraw board in Boards/, named for now: its path, or null and an error message. */
+    suspend fun newBoard(): Pair<String?, String?> {
+        val api = api() ?: return null to "Signed out"
+        val title = "Drawing ${java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH.mm"))}.excalidraw"
+        val made = runCatching { api.createNote("Boards", title, EMPTY_BOARD) }
+        refresh()
+        return made.fold({ it.path to null }, { null to (if (it is ApiException) it.message ?: "Couldn't make a board" else "You're offline. Boards need the server.") })
+    }
 }
+
+/** What the web app writes for a new board (web/src/board.js): the Obsidian Excalidraw plugin's file, empty. */
+private val EMPTY_BOARD = listOf(
+    "---\n\nexcalidraw-plugin: parsed\ntags: [excalidraw]\n\n---",
+    "==⚠  Switch to EXCALIDRAW VIEW in the MORE OPTIONS menu of this document. ⚠== You can decompress Drawing data with the command palette: 'Decompress current Excalidraw file'. For more info check in plugin settings under 'Saving'",
+    "",
+    "",
+    "# Excalidraw Data",
+    "",
+    "## Text Elements",
+    "",
+    "%%",
+    "## Drawing",
+    "```json",
+    "{\n\t\"elements\": [],\n\t\"appState\": {},\n\t\"files\": {}\n}",
+    "```",
+    "%%",
+    "",
+).joinToString("\n")

@@ -17,6 +17,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -274,6 +276,24 @@ class NoteStore(context: Context) {
     /** Last plugin list from the server, so built-in plugins (diagrams, math) still work offline. */
     fun plugins(): String = runCatching { pluginsFile.readText() }.getOrDefault(DEFAULT_PLUGINS)
     fun savePlugins(list: String) = atomic(pluginsFile, list)
+
+    private val openedFile = File(dir, "opened.json")
+    private val openedSerializer = MapSerializer(String.serializer(), Long.serializer())
+
+    /** When this phone last opened each note (path -> epoch ms), for Recents. Newest 200 only. */
+    fun opened(): Map<String, Long> = runCatching { json.decodeFromString(openedSerializer, openedFile.readText()) }.getOrDefault(emptyMap())
+
+    fun markOpened(path: String, at: Long) = saveOpened(opened() + (path to at))
+
+    /** A note was moved or renamed: its open time follows it. */
+    fun renameOpened(from: String, to: String) {
+        val map = opened()
+        val at = map[from] ?: return
+        saveOpened(map - from + (to to at))
+    }
+
+    private fun saveOpened(map: Map<String, Long>) =
+        atomic(openedFile, json.encodeToString(openedSerializer, map.entries.sortedByDescending { it.value }.take(200).associate { it.key to it.value }))
 
     fun list(): NoteList? = runCatching { json.decodeFromString<NoteList>(listFile.readText()) }.getOrNull()
     fun saveList(list: NoteList) = atomic(listFile, json.encodeToString(NoteList.serializer(), list))

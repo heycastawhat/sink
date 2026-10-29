@@ -376,6 +376,7 @@ fun NoteScreen(
             if (start.isNotBlank()) scheduleSave()
             return@LaunchedEffect
         }
+        vm.markOpened(path)
         val pending = store.pending(path)
         store.note(path)?.let { cached ->
             ed.hash = cached.hash
@@ -633,6 +634,7 @@ fun NoteScreen(
             runCatching { api()!!.moveNote(from, dest) }
                 .onSuccess {
                     store.forget(from)
+                    vm.renameOpened(from, dest)
                     ed.path = dest
                     ed.folder = dest.substringBeforeLast('/', "")
                     crumb = ed.folder.ifEmpty { "Notes" }

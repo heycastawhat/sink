@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -74,6 +75,7 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
     val state by vm.todos.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    var adding by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { vm.loadTodos() }
 
     val today = state.today
@@ -115,7 +117,22 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                 }
             }
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        FloatingActionButton(
+            onClick = { adding = true },
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+        ) { Icon(Icons.Outlined.AddTask, "New todo") }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
+    }
+
+    if (adding) {
+        TodoDialog(
+            onAdd = { text, due ->
+                adding = false
+                scope.launch { snackbar.showSnackbar(vm.addTodo(text, due, null) ?: "Added to Todo.md") }
+            },
+            onDismiss = { adding = false },
+        )
     }
 }
 
