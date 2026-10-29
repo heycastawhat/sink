@@ -36,8 +36,8 @@
             <img id="logo" src="/favicon.svg" alt="" width="34" height="34" />
             <span class="wordmark">Sink</span>
           </a>
-          <m3e-button id="add-btn" class="add-btn" variant="tonal">
-            <m3e-icon slot="icon" name="edit_square"></m3e-icon>New note
+          <m3e-button id="add-btn" class="add-btn" variant="tonal" aria-haspopup="menu" aria-expanded="false">
+            <m3e-icon slot="icon" name="add"></m3e-icon>New
           </m3e-button>
           <nav id="nav-views" class="nav-list"></nav>
           <div class="nav-heading">
@@ -54,7 +54,7 @@
         <main id="main" class="main">
           <header class="main-head">
             <!-- Inside a folder: its parents, above the title (which is the folder's name). -->
-            <nav id="folder-crumbs" class="folder-crumbs" aria-label="Folder" hidden></nav>
+            <m3e-breadcrumb id="folder-crumbs" class="folder-crumbs" wrap aria-label="Folder" hidden></m3e-breadcrumb>
             <div class="title-row">
               <h1 id="view-title" class="view-title">Sink</h1>
               <span class="spacer"></span>
@@ -137,9 +137,14 @@
           <a href="#/settings" data-tab="settings"><m3e-icon name="settings"></m3e-icon><span>Settings</span></a>
         </nav>
 
-        <m3e-fab id="new-fab" class="phone-only" variant="primary-container" aria-label="New note">
-          <m3e-icon id="fab-icon" name="edit"></m3e-icon>
-        </m3e-fab>
+        <!-- New note / todo / folder / board: a FAB menu on phones (M3 Expressive style), a menu under "New" on desktop. -->
+        <div id="fab-menu" class="fab-menu phone-only">
+          <m3e-fab id="new-fab" variant="primary-container" aria-label="New">
+            <m3e-fab-menu-trigger for="new-fab-menu"><m3e-icon name="add"></m3e-icon></m3e-fab-menu-trigger>
+          </m3e-fab>
+          <m3e-fab-menu id="new-fab-menu" variant="primary"></m3e-fab-menu>
+        </div>
+        <div id="new-menu" class="new-menu" role="menu" aria-label="New" hidden></div>
 
         <!-- One note, fullscreen. -->
         <section id="note-screen" class="note-screen" hidden aria-label="Note">

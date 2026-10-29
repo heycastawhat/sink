@@ -187,12 +187,10 @@ function renderGrid() {
 function renderFolderBar() {
   // The title already names this folder; the crumbs are the way back up (and places to drop a note).
   const parts = state.folder ? state.folder.split('/') : [];
-  const crumbs = [`<a href="#/notes" data-drop-folder="">${ic('home')}Notes</a>`];
-  parts.slice(0, -1).forEach((name, i) => {
-    const path = parts.slice(0, i + 1).join('/');
-    crumbs.push(`${ic('chevron_right')}<a href="${folderHash(path)}" data-drop-folder="${esc(path)}">${esc(name)}</a>`);
-  });
-  $('folder-crumbs').innerHTML = crumbs.join('') + ic('chevron_right');
+  const item = (path, label, icon, current) =>
+    `<m3e-breadcrumb-item data-crumb="${esc(path)}" data-drop-folder="${esc(path)}"${current ? ' current="page"' : ''}>${ic(icon, 'icon')}${esc(label)}</m3e-breadcrumb-item>`;
+  $('folder-crumbs').innerHTML =
+    item('', 'Notes', 'home', false) + parts.map((name, i) => item(parts.slice(0, i + 1).join('/'), name, 'folder', i === parts.length - 1)).join('');
   $('folder-crumbs').hidden = !parts.length;
   const btn = (act, icon, label) =>
     `<m3e-icon-button data-folder-act="${act}" aria-label="${label}" title="${label}">${ic(icon)}</m3e-icon-button>`;
@@ -358,6 +356,21 @@ export function renderFolderTree() {
   box.innerHTML = rows.join('') || '<p class="nav-empty">Folders you make show up here.</p>';
 }
 
+/** "New → Todo": asks for it and adds it to Todo.md, wherever you are. */
+export async function quickTodo() {
+  const text = await askText({ title: 'New todo', label: 'Todo', action: 'Add' });
+  if (!text) return;
+  try {
+    await api.addTodo({ text });
+    toast('Added to Todo.md');
+    if (!$('todos').hidden) loadTodos();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+export const newFolderHere = (parent) => newFolder(parent);
+
 async function newFolder(parent) {
   const name = await askText({ title: parent ? `New folder in ${parent.split('/').pop()}` : 'New folder', action: 'Create' });
   if (!name) return;
@@ -444,6 +457,10 @@ async function moveNoteTo(path, folder) {
 }
 
 function wireFolders() {
+  $('folder-crumbs').addEventListener('click', (e) => {
+    const item = e.target.closest('[data-crumb]');
+    if (item && !item.hasAttribute('current')) navigate(folderHash(item.dataset.crumb));
+  });
   $('folder-actions').addEventListener('click', (e) => {
     const act = e.target.closest('[data-folder-act]')?.dataset.folderAct;
     const f = state.folder;

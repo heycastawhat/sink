@@ -9,6 +9,8 @@ import '@m3e/web/loading-indicator';
 import '@m3e/web/form-field';
 import '@m3e/web/search';
 import '@m3e/web/fab';
+import '@m3e/web/fab-menu';
+import '@m3e/web/breadcrumb';
 import '@m3e/web/expansion-panel';
 import '@m3e/web/switch';
 import { M3eSnackbar } from '@m3e/web/snackbar';
@@ -212,8 +214,7 @@ function renderChrome() {
   $('recents').hidden = state.view !== 'recents';
   $('trash').hidden = state.view !== 'trash';
   $('settings').hidden = state.view !== 'settings';
-  $('fab-icon').setAttribute('name', state.view === 'todos' ? 'add_task' : 'edit');
-  $('new-fab').setAttribute('aria-label', state.view === 'todos' ? 'Add todo' : 'New note');
+  closeNewMenus();
   notes.renderFolderTree();
   if (state.view === 'notes') notes.notesRendered();
   if (state.view === 'recents') notes.recentsRendered();
@@ -429,12 +430,56 @@ $('settings').addEventListener('click', async (e) => {
 
 // ---------- new note / todo ----------
 
-for (const id of ['new-fab', 'add-btn']) {
-  $(id).addEventListener('click', () => {
-    if (state.view === 'todos') $('todo-text').focus();
-    else notes.newNote();
+// One list of things to make, shown as the phone's FAB menu and the desktop "New" menu.
+const NEW_ITEMS = [
+  { id: 'note', label: 'Note', icon: 'edit', run: () => notes.newNote() },
+  { id: 'todo', label: 'Todo', icon: 'add_task', run: () => notes.quickTodo() },
+  { id: 'folder', label: 'Folder', icon: 'create_new_folder', run: () => notes.newFolderHere(state.view === 'notes' ? state.folder : '') },
+  { id: 'board', label: 'Board', icon: 'draw', run: () => notes.newBoard() },
+];
+const itemHtml = (cls) =>
+  NEW_ITEMS.map((it) => `<button class="${cls}" role="menuitem" data-new="${it.id}">${ic(it.icon)}<span>${it.label}</span></button>`).join('');
+// Phone: Material's own FAB menu (the same component as the M3 playground); desktop: a menu under "New".
+$('new-fab-menu').innerHTML = NEW_ITEMS.map(
+  (it) => `<m3e-fab-menu-item data-new="${it.id}">${ic(it.icon, 'icon')}${it.label}</m3e-fab-menu-item>`,
+).join('');
+$('new-menu').innerHTML = itemHtml('new-item');
+
+function closeNewMenus() {
+  $('new-fab-menu').hidePopover?.();
+  $('new-menu').hidden = true;
+  $('add-btn').setAttribute('aria-expanded', 'false');
+}
+
+$('add-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const open = $('new-menu').hidden;
+  closeNewMenus();
+  if (!open) return;
+  // Under the button, in the sidebar.
+  const r = $('add-btn').getBoundingClientRect();
+  Object.assign($('new-menu').style, { left: `${r.left}px`, top: `${r.bottom + 6}px` });
+  $('new-menu').hidden = false;
+  $('add-btn').setAttribute('aria-expanded', 'true');
+  $('new-menu').querySelector('button')?.focus();
+});
+for (const box of ['new-fab-menu', 'new-menu']) {
+  $(box).addEventListener('click', (e) => {
+    const item = NEW_ITEMS.find((it) => it.id === e.target.closest('[data-new]')?.dataset.new);
+    if (!item) return;
+    closeNewMenus();
+    item.run();
   });
 }
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#fab-menu, #new-menu, #add-btn')) closeNewMenus();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('new-menu').hidden) {
+    closeNewMenus();
+    $('add-btn').focus();
+  }
+});
 
 notes.initNotes({ toast, navigate: (hash) => (location.hash = hash) });
 notes.wireNotes();

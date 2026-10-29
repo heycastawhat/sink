@@ -22,8 +22,9 @@ function open(html, wire) {
     });
     // A click on the backdrop (the dialog element itself, outside its content) cancels.
     dlg.addEventListener('mousedown', (e) => e.target === dlg && done(null));
-    wire(dlg, done);
+    const afterOpen = wire(dlg, done);
     dlg.showModal();
+    afterOpen?.();
   });
 }
 
@@ -52,11 +53,11 @@ export function askText({ title, label = 'Name', value = '', action = 'Save' }) 
       });
       dlg.querySelector('[data-ok]').addEventListener('click', submit);
       dlg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
-      requestAnimationFrame(() => {
+      return () => {
         input.focus();
         // Select the name without its extension, like a file manager.
-        input.setSelectionRange(0, value.replace(/(\.excalidraw)?\.md$/i, '').length);
-      });
+        if (value) input.setSelectionRange(0, value.replace(/(\.excalidraw)?\.md$/i, '').length);
+      };
     },
   );
 }

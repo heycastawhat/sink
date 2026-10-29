@@ -665,15 +665,19 @@ a {
     display: inline-flex !important;
   }
 
-  #new-fab {
+  .fab-menu {
     position: fixed;
     right: 16px;
     bottom: calc(88px + env(safe-area-inset-bottom));
     z-index: 24;
+    display: flex !important;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
   }
 
-  .shell[data-view='settings'] #new-fab,
-  .shell[data-view='trash'] #new-fab {
+  .shell[data-view='settings'] .fab-menu,
+  .shell[data-view='trash'] .fab-menu {
     display: none !important;
   }
 
@@ -1241,34 +1245,8 @@ body.note-open {
 
 /* ---------- folders ---------- */
 .folder-crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0;
-  min-width: 0;
-  margin: 0 0 -10px -10px;
-  color: var(--md-sys-color-on-surface-variant);
+  margin: 0 0 -8px -6px;
   font-size: 13px;
-}
-
-.folder-crumbs a {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  color: inherit;
-  text-decoration: none;
-  --m3e-icon-size: 18px;
-}
-
-.folder-crumbs a:hover {
-  background: color-mix(in srgb, var(--md-sys-color-on-surface) 7%, transparent);
-}
-
-.folder-crumbs > m3e-icon {
-  --m3e-icon-size: 16px;
-  opacity: 0.6;
 }
 
 .folder-actions {
@@ -1587,4 +1565,43 @@ body.dragging-note [data-drop-folder] {
     max-width: 38%;
     text-align: right;
   }
+}
+
+/* ---------- "New" menu (desktop); phones use m3e-fab-menu ---------- */
+.new-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--md-sys-color-surface-container-high);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--md-sys-color-shadow) 24%, transparent);
+}
+
+.new-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  --m3e-icon-size: 20px;
+}
+
+.new-item:hover,
+.new-item:focus-visible {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  outline: none;
+}
+
+.new-item m3e-icon {
+  color: var(--md-sys-color-primary);
 }
