@@ -98,30 +98,75 @@ export async function setQuery(q) {
 }
 
 /** Markdown excerpt as card text: checkboxes as boxes, markup stripped, a few lines. */
+/**
+ * Inline markdown as card HTML: links and embeds as their text, Tasks dates dropped, and bold, italic, strikethrough,
+ * `code` and ==highlight== kept as formatting. Escapes first, so the formatting is the only markup.
+ */
+function inlineHtml(s) {
+  const plain = s
+    .replace(/!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)/g, '🖼')
+    .replace(/\[\[([^\]|]+)\|?([^\]]*)\]\]/g, (_, a, b) => b || a)
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[📅⏳🛫✅]\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)/gu, '')
+    .trim();
+  // Code spans first, so nothing inside them is read as formatting.
+  const code = [];
+  const html = esc(plain)
+    .replace(/`([^`]+)`/g, (_, c) => `\u0000${code.push(c) - 1}\u0000`)
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, a, b) => `<b>${a ?? b}</b>`)
+    .replace(/(^|[^*\w])\*([^*\s][^*]*)\*(?!\w)|(^|\W)_([^_\s][^_]*)_(?!\w)/g, (_, p1, a, p2, b) => `${p1 ?? p2}<i>${a ?? b}</i>`)
+    .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+    .replace(/==([^=]+)==/g, '<mark>$1</mark>');
+  return html.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${code[i]}</code>`);
+}
+
+/**
+ * A note's first lines as card HTML, formatted like the note: headings, nested list indents, checkboxes, numbered
+ * lists, quotes and code blocks, plus inline formatting. Mirrors the Android card.
+ */
 function excerptHtml(text) {
-  const lines = (text ?? '').split('\n').filter((l) => l.trim() && !/^%%/.test(l)).slice(0, 10);
-  return lines
-    .map((l) => {
-      const task = /^\s*[-*+]\s+\[(.)\]\s+(.*)$/.exec(l);
-      const clean = (s) =>
-        esc(
-          s
-            .replace(/!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)/g, '🖼')
-            .replace(/\[\[([^\]|]+)\|?([^\]]*)\]\]/g, (_, a, b) => b || a)
-            .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-            .replace(/[📅⏳🛫✅]\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)/gu, '')
-            .replace(/^#+\s+/, '')
-            .replace(/^\s*[-*+]\s+/, '• ')
-            .replace(/^>\s?/, '')
-            // Callout header `[!tip] Title` reads as just the title (or the type when there isn't one).
-            .replace(/^\[!(\w+)\][+-]?\s*(.*)$/, (_, type, title) => title || type[0].toUpperCase() + type.slice(1))
-            .replace(/[*_~`]/g, ''),
-        );
-      const mark = (html) => html.replace(/==([^=]+)==/g, '<mark>$1</mark>');
-      if (task) return `<span class="ln task${task[1] === ' ' ? '' : ' done'}">${ic(task[1] === ' ' ? 'check_box_outline_blank' : 'check_box')}<span>${mark(clean(task[2]))}</span></span>`;
-      return `<span class="ln">${mark(clean(l))}</span>`;
-    })
-    .join('');
+  const out = [];
+  let fenced = false;
+  for (const raw of (text ?? '').split('\n')) {
+    if (out.length === 10) break;
+    if (/^\s*(```|~~~)/.test(raw)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) {
+      if (raw.trim()) out.push(`<span class="ln code">${esc(raw)}</span>`);
+      continue;
+    }
+    if (!raw.trim() || /^%%/.test(raw) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(raw)) continue;
+    // Tabs, or every two spaces, are one level of nesting.
+    const lead = /^[\t ]*/.exec(raw)[0];
+    const depth = Math.min(4, [...lead].reduce((d, c) => d + (c === '\t' ? 2 : 1), 0) >> 1);
+    const indent = depth ? ` style="--depth:${depth}"` : '';
+    const l = raw.slice(lead.length);
+    const task = /^[-*+]\s+\[(.)\]\s+(.*)$/.exec(l);
+    if (task) {
+      out.push(`<span class="ln task${task[1] === ' ' ? '' : ' done'}"${indent}>${ic(task[1] === ' ' ? 'check_box_outline_blank' : 'check_box')}<span>${inlineHtml(task[2])}</span></span>`);
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (heading) {
+      out.push(`<span class="ln h h${Math.min(heading[1].length, 3)}">${inlineHtml(heading[2])}</span>`);
+      continue;
+    }
+    const quote = /^>\s?(.*)$/.exec(l);
+    if (quote) {
+      // Callout header `[!tip] Title` reads as just the title (or the type when there isn't one).
+      const body = quote[1].replace(/^\[!(\w+)\][+-]?\s*(.*)$/, (_, type, title) => title || type[0].toUpperCase() + type.slice(1));
+      if (body.trim()) out.push(`<span class="ln quote"${indent}>${inlineHtml(body)}</span>`);
+      continue;
+    }
+    const bullet = /^[-*+]\s+(.*)$/.exec(l);
+    const numbered = /^(\d+[.)])\s+(.*)$/.exec(l);
+    if (bullet) out.push(`<span class="ln li"${indent}><span class="mk">•</span><span>${inlineHtml(bullet[1])}</span></span>`);
+    else if (numbered) out.push(`<span class="ln li"${indent}><span class="mk">${esc(numbered[1])}</span><span>${inlineHtml(numbered[2])}</span></span>`);
+    else out.push(`<span class="ln"${indent}>${inlineHtml(l)}</span>`);
+  }
+  return out.join('');
 }
 
 function cardHtml(n) {

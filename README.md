@@ -74,6 +74,10 @@ Download the APK from the [latest release](https://github.com/heycastawhat/sink/
 from your browser, open it, and enter your Sink address. Newer releases install over older ones; the app checks for
 one once a day (or from Settings) and offers to download it.
 
+Or let [Obtainium](https://github.com/ImranR98/Obtainium) install and update it:
+[add Sink to Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/heycastawhat/sink)
+(or add `https://github.com/heycastawhat/sink` as an app by hand).
+
 - Notes and Todos tabs; notes open fullscreen in the same editor as the web.
 - Edits made offline are saved on the phone and sent when you're back online.
 - Todo reminders arrive as notifications, with a Done button.

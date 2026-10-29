@@ -948,6 +948,65 @@ m3e-theme {
   color: var(--md-sys-color-on-surface-variant);
 }
 
+.note-body .ln,
+.recent-preview .ln {
+  padding-left: calc(var(--depth, 0) * 16px);
+}
+
+.note-body .ln.li,
+.recent-preview .ln.li {
+  display: flex;
+  gap: 6px;
+}
+
+.ln.li .mk {
+  flex: none;
+  min-width: 0.7em;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.ln.h {
+  font-weight: 700;
+}
+
+.note-body .ln.h1 {
+  font-size: 16px;
+}
+
+.note-body .ln.h2 {
+  font-size: 15px;
+}
+
+.ln.quote {
+  margin-left: calc(var(--depth, 0) * 16px);
+  padding-left: 8px;
+  border-left: 3px solid color-mix(in srgb, var(--md-sys-color-primary) 45%, transparent);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.ln code,
+.ln.code {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.ln code {
+  padding: 0 3px;
+}
+
+.ln.code {
+  padding: 0 6px;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ln s {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
 .note-body mark {
   border-radius: 3px;
   background: color-mix(in srgb, var(--md-sys-color-primary) 22%, transparent);

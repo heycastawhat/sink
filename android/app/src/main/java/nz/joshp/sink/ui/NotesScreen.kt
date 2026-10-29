@@ -72,6 +72,11 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -360,49 +365,149 @@ private fun Pill(text: String) {
     )
 }
 
-private val TASK = Regex("""^\s*[-*+]\s+\[(.)]\s+(.*)$""")
+private val TASK = Regex("""^[-*+]\s+\[(.)]\s+(.*)$""")
+private val HEADING = Regex("""^(#{1,6})\s+(.*)$""")
+private val QUOTE = Regex("""^>\s?(.*)$""")
+private val BULLET = Regex("""^[-*+]\s+(.*)$""")
+private val NUMBERED = Regex("""^(\d+[.)])\s+(.*)$""")
+private val RULE = Regex("""^\s*([-*_])(\s*\1){2,}\s*$""")
+private val FENCE = Regex("""^\s*(```|~~~)""")
 
-/** Markdown excerpt as card text: checkboxes as boxes, markup stripped, a few lines. Mirrors the web card. */
+/** One line of a card: what kind it is, how deep it's nested, and its text (marker removed). */
+private sealed interface CardLine {
+    val depth: Int
+    data class Plain(val text: String, override val depth: Int) : CardLine
+    data class Item(val marker: String, val text: String, override val depth: Int) : CardLine
+    data class Task(val done: Boolean, val text: String, override val depth: Int) : CardLine
+    data class Heading(val level: Int, val text: String) : CardLine { override val depth = 0 }
+    data class Quote(val text: String, override val depth: Int) : CardLine
+    data class Code(val text: String) : CardLine { override val depth = 0 }
+}
+
+/** A note's first lines, read the way the web card reads them. */
+private fun cardLines(text: String): List<CardLine> {
+    val out = mutableListOf<CardLine>()
+    var fenced = false
+    for (raw in text.lines()) {
+        if (out.size == 10) break
+        if (FENCE.containsMatchIn(raw)) { fenced = !fenced; continue }
+        if (fenced) { if (raw.isNotBlank()) out += CardLine.Code(raw); continue }
+        if (raw.isBlank() || raw.startsWith("%%") || RULE.matches(raw)) continue
+        // Tabs, or every two spaces, are one level of nesting.
+        val lead = raw.takeWhile { it == ' ' || it == '\t' }
+        val depth = (lead.fold(0) { d, c -> d + if (c == '\t') 2 else 1 } / 2).coerceAtMost(4)
+        val l = raw.substring(lead.length)
+        TASK.find(l)?.let { out += CardLine.Task(it.groupValues[1] != " ", it.groupValues[2], depth); continue }
+        HEADING.find(l)?.let { out += CardLine.Heading(it.groupValues[1].length, it.groupValues[2]); continue }
+        QUOTE.find(l)?.let { m ->
+            // Callout header `[!tip] Title` reads as just the title (or the type when there isn't one).
+            val body = m.groupValues[1].replace(Regex("""^\[!(\w+)][+-]?\s*(.*)$""")) { c ->
+                c.groupValues[2].ifEmpty { c.groupValues[1].replaceFirstChar(Char::uppercase) }
+            }
+            if (body.isNotBlank()) out += CardLine.Quote(body, depth)
+            continue
+        }
+        BULLET.find(l)?.let { out += CardLine.Item("•", it.groupValues[1], depth); continue }
+        NUMBERED.find(l)?.let { out += CardLine.Item(it.groupValues[1], it.groupValues[2], depth); continue }
+        out += CardLine.Plain(l, depth)
+    }
+    return out
+}
+
+/** Markdown excerpt as card text, formatted like the note: headings, nesting, checkboxes, quotes, code, bold/italic. */
 @Composable
 fun Excerpt(text: String, small: Boolean = false) {
-    val style = if (small) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
-    val lines = remember(text) { text.lines().filter { it.isNotBlank() && !it.startsWith("%%") }.take(10) }
+    val lines = remember(text) { cardLines(text) }
     if (lines.isEmpty()) return
+    val style = if (small) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val codeBg = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val markBg = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+    val oneLine = if (small) 1 else Int.MAX_VALUE
+    fun inline(s: String) = inlineMarkdown(s, codeBg, markBg)
     Column(Modifier.heightIn(max = 220.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        for (l in lines) {
-            val task = TASK.find(l)
-            if (task != null) {
-                val done = task.groupValues[1] != " "
-                Row(verticalAlignment = Alignment.Top) {
+        for (line in lines) {
+            val indent = Modifier.padding(start = (line.depth * 14).dp)
+            when (line) {
+                is CardLine.Task -> Row(indent, verticalAlignment = Alignment.Top) {
                     Icon(
-                        if (done) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                        if (line.done) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
                         null,
                         Modifier.size(if (small) 14.dp else 17.dp).padding(top = 1.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = muted,
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        clean(task.groupValues[2]),
-                        style = style.copy(textDecoration = if (done) TextDecoration.LineThrough else null),
-                        color = if (done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                        inline(line.text),
+                        style = style.copy(textDecoration = if (line.done) TextDecoration.LineThrough else null),
+                        color = if (line.done) muted else MaterialTheme.colorScheme.onSurface,
+                        maxLines = oneLine,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-            } else {
-                Text(clean(l), style = style, maxLines = if (small) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis)
+                is CardLine.Item -> Row(indent) {
+                    Text(line.marker, style = style, color = muted)
+                    Spacer(Modifier.width(6.dp))
+                    Text(inline(line.text), style = style, maxLines = oneLine, overflow = TextOverflow.Ellipsis)
+                }
+                is CardLine.Heading -> Text(
+                    inline(line.text),
+                    style = style.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = if (small || line.level > 2) style.fontSize else style.fontSize * (if (line.level == 1) 1.15f else 1.07f),
+                    ),
+                    maxLines = oneLine,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                is CardLine.Quote -> Row(indent.height(IntrinsicSize.Min)) {
+                    Box(Modifier.width(3.dp).fillMaxHeight().background(MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(2.dp)))
+                    Spacer(Modifier.width(8.dp))
+                    Text(inline(line.text), style = style, color = muted, maxLines = oneLine, overflow = TextOverflow.Ellipsis)
+                }
+                is CardLine.Code -> Text(
+                    line.text,
+                    style = style.copy(fontFamily = FontFamily.Monospace, fontSize = style.fontSize * 0.9f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().background(codeBg, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp),
+                )
+                is CardLine.Plain -> Text(inline(line.text), style = style, maxLines = oneLine, overflow = TextOverflow.Ellipsis, modifier = indent)
             }
         }
     }
 }
 
+private val INLINE = Regex(
+    """`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|==([^=]+)==|(?<![*\w])\*([^*\s][^*]*)\*(?!\w)|(?<!\w)_([^_\s][^_]*)_(?!\w)""",
+)
+
+/** Inline markdown as styled text: links as their text, Tasks dates dropped, bold/italic/strike/code/highlight kept. */
+private fun inlineMarkdown(s: String, codeBg: Color, markBg: Color): AnnotatedString {
+    val plain = clean(s)
+    return buildAnnotatedString {
+        var at = 0
+        for (m in INLINE.findAll(plain)) {
+            append(plain.substring(at, m.range.first))
+            val g = m.groupValues
+            when {
+                g[1].isNotEmpty() -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg)) { append(g[1]) }
+                g[2].isNotEmpty() || g[3].isNotEmpty() -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(g[2].ifEmpty { g[3] }) }
+                g[4].isNotEmpty() -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { append(g[4]) }
+                g[5].isNotEmpty() -> withStyle(SpanStyle(background = markBg)) { append(g[5]) }
+                else -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(g[6].ifEmpty { g[7] }) }
+            }
+            at = m.range.last + 1
+        }
+        append(plain.substring(at))
+    }
+}
+
+/** Links and embeds as their text, Tasks dates and reminders dropped. Formatting marks stay for [inlineMarkdown]. */
 private fun clean(s: String) = s
     .replace(Regex("""!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\)"""), "🖼")
     .replace(Regex("""\[\[([^\]|]+)\|?([^\]]*)]]""")) { it.groupValues[2].ifEmpty { it.groupValues[1] } }
     .replace(Regex("""\[([^\]]+)]\([^)]*\)"""), "$1")
     .replace(Regex("""[📅⏳🛫✅]\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)"""), "")
-    .replace(Regex("""^#+\s+"""), "")
-    .replace(Regex("""^\s*[-*+]\s+"""), "• ")
-    .replace(Regex("""^>\s?"""), "")
-    .replace(Regex("""[*_~`]"""), "")
     .trim()
 
 @Composable
