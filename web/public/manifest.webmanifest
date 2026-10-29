@@ -1,0 +1,19 @@
+{
+  "name": "Sink",
+  "short_name": "Sink",
+  "description": "Self-hosted notes: markdown, todos and whiteboards.",
+  "start_url": "/#/notes",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FEF7FF",
+  "theme_color": "#4F378B",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "New note", "url": "/#/new", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Todos", "url": "/#/todos", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

@@ -2,6 +2,7 @@
 // Notes are files in the vault on the NAS; saves carry the hash we last saw, so edits made elsewhere
 // (Obsidian, the phone) are never silently overwritten.
 
+import { backlinksHtml } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
@@ -766,6 +767,7 @@ export async function openNote(path, { line } = {}) {
     if (isBoardPath(note.path)) await mountBoard(text);
     else mountEditor(text);
     applyLook();
+    renderBacklinks(note.path);
     if (text !== note.content) save();
     else setStatus(`Edited ${relative(note.mtime)}`);
     if (line != null) screen.editor.goToLine(line);
@@ -906,6 +908,24 @@ function startPolling() {
   }, POLL_MS);
 }
 
+/** "Linked mentions" under the note: the notes that link here, each with the lines that do. */
+async function renderBacklinks(path) {
+  const box = $('note-links');
+  box.hidden = true;
+  box.innerHTML = '';
+  if (isBoardPath(path)) return;
+  let items;
+  try {
+    ({ items } = await api.backlinks(path));
+  } catch {
+    return;
+  }
+  // Still on this note, and there's something to show.
+  if (screen.path !== path || !items.length) return;
+  box.innerHTML = backlinksHtml(items, { href: noteHash, icon: ic('description') });
+  box.hidden = false;
+}
+
 async function closeEditor() {
   if (!screen.editor) return;
   clearInterval(screen.poll);
@@ -914,6 +934,7 @@ async function closeEditor() {
   screen.editor.destroy();
   screen.editor = null;
   screen.path = null;
+  $('note-links').hidden = true;
 }
 
 export async function closeNote() {

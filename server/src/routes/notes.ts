@@ -71,6 +71,15 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     }),
   );
 
+  // Notes that link to this one.
+  app.get("/notes/backlinks", (c) =>
+    run(c, async () => {
+      const q = pathQuery.safeParse(c.req.query());
+      if (!q.success) return c.json({ error: "invalid query" }, 400);
+      return c.json({ items: vault.backlinks(q.data.path) });
+    }),
+  );
+
   app.put("/notes/file", (c) =>
     run(c, async () => {
       const q = pathQuery.safeParse(c.req.query());

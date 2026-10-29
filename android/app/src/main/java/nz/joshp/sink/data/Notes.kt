@@ -222,6 +222,12 @@ fun Api.pluginFile(pathAndQuery: String): Triple<Int, String, ByteArray>? {
     }
 }
 
+/** The notes that link to [path], as the JSON array the editor page's `sink.backlinks()` takes. */
+suspend fun Api.backlinksJson(path: String): String =
+    call(request("/api/notes/backlinks?path=${java.net.URLEncoder.encode(path, "UTF-8").replace("+", "%20")}").build()) {
+        json.parseToJsonElement(it).jsonObject["items"]?.toString() ?: "[]"
+    }
+
 suspend fun Api.todos(view: String = "open"): TodoList = call(request("/api/todos?view=$view").build()) { json.decodeFromString(it) }
 
 suspend fun Api.toggleTodo(t: Todo, done: Boolean) {

@@ -109,17 +109,22 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[]) {
     {
       title: "Read note",
       description:
-        "Full markdown of one note, plus the hash save_note needs to edit it. Give the path from search_notes " +
+        "Full markdown of one note, plus the hash save_note needs to edit it and the notes that link to it (linked_from). " +
+        "Give the path from search_notes " +
         '(e.g. "Inbox/Door code.md"); a title or a name without ".md" also works.',
       inputSchema: { path: z.string().max(1024).describe("Vault path, file name or title") },
       annotations: { readOnlyHint: true },
     },
     safe(async ({ path }) => {
       const n = await findNote(path);
+      const links = await api(`/api/notes/backlinks?${pathQs(n.path)}`)
+        .then((r) => json<{ items: { path: string }[] }>(r))
+        .catch(() => ({ items: [] }));
+      const linked_from = links.items.map((i) => i.path);
       // The markdown goes back as its own text block, not escaped inside JSON, so it reads as the note.
       return {
         content: [
-          { type: "text" as const, text: JSON.stringify({ ...noteBrief(n), hash: n.hash }, null, 2) },
+          { type: "text" as const, text: JSON.stringify({ ...noteBrief(n), hash: n.hash, ...(linked_from.length && { linked_from }) }, null, 2) },
           { type: "text" as const, text: n.content },
         ],
       };

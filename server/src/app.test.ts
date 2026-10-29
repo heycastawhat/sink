@@ -397,6 +397,8 @@ describe("mcp", () => {
     expect(item).toBeTruthy();
     expect((await call(token, "restore_from_trash", { trash_path: item.trash_path })).data.restored).toBe("Kitchen");
     expect((await call(token, "read_note", { path: "Kitchen/Plan.md" })).data.path).toBe("Kitchen/Plan.md");
+    await call(token, "save_note", { title: "Menu", content: "# Menu\n\nFrom [[Plan]].\n" });
+    expect((await call(token, "read_note", { path: "Kitchen/Plan.md" })).data.linked_from).toEqual(["Menu.md"]);
   });
 });
 
@@ -534,6 +536,20 @@ describe("notes", () => {
     });
   const file = (rel: string) => join(setup.vaultDir, rel);
   const q = (path: string) => `/api/notes/file?path=${encodeURIComponent(path)}`;
+
+  test("backlinks: wikilinks by name or path, aliases, headings, markdown links", async () => {
+    const token = await login();
+    const make = (folder: string, title: string, content: string) => send(token, "POST", "/api/notes", { folder, title, content });
+    await make("Garden", "Soil", "# Soil\n\nLoam.\n");
+    await make("", "Plan", "# Plan\n\nSee [[Soil]] first.\nUnrelated line.\nAlso [[soil#pH|the dirt]].\n");
+    await make("Log", "Monday", "# Monday\n\nDug beds, per [[Garden/Soil]].\n");
+    await make("", "Links", "# Links\n\n[soil notes](Garden/Soil.md)\n");
+    await make("", "Other", "# Other\n\n[[Soil mix]] and [[Soils]] are different notes. https://x.y/Soil.md)\n");
+    const res = await get(token, `/api/notes/backlinks?path=${encodeURIComponent("Garden/Soil.md")}`);
+    const items = ((await res.json()) as any).items as { path: string; lines: string[] }[];
+    expect(items.map((i) => i.path).sort()).toEqual(["Links.md", "Log/Monday.md", "Plan.md"]);
+    expect(items.find((i) => i.path === "Plan.md")!.lines).toEqual(["See [[Soil]] first.", "Also [[soil#pH|the dirt]]."]);
+  });
 
   test("create, read, save with hash, conflicts, list, search", async () => {
     const token = await login();

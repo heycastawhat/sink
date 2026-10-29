@@ -91,6 +91,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import nz.joshp.sink.data.backlinksJson
 import nz.joshp.sink.data.pluginFile
 import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.ApiException
@@ -144,6 +145,7 @@ private fun ColorScheme.css() = mapOf(
     "--md-sys-color-on-secondary-container" to onSecondaryContainer,
     "--md-sys-color-error" to error,
     "--md-sys-color-shadow" to scrim,
+    "--md-sys-color-outline-variant" to outlineVariant,
 ).mapValues { (_, c) -> "#%06X".format(c.toArgb() and 0xFFFFFF) }
 
 /** What the note screen tracks between saves. Not Compose state: the WebView owns the text. */
@@ -430,6 +432,10 @@ fun NoteScreen(
             put("plugins", Json.parseToJsonElement(vm.pluginsJson()))
         }
         js("window.sink.load($payload)")
+        // Linked mentions after the text, so a slow or offline server never holds the note up.
+        val p = ed.path ?: return@LaunchedEffect
+        val items = runCatching { api()?.backlinksJson(p) }.getOrNull() ?: return@LaunchedEffect
+        js("window.sink.backlinks($items)")
     }
 
     // Edits made elsewhere show up while the note sits open and untouched.

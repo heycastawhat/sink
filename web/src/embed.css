@@ -9,6 +9,7 @@
   --md-sys-color-on-secondary-container: #1d192b;
   --md-sys-color-error: #b3261e;
   --md-sys-color-shadow: #000;
+  --md-sys-color-outline-variant: #cac4d0;
 }
 
 :root[data-theme='dark'] {
@@ -20,6 +21,7 @@
   --md-sys-color-secondary-container: #4a4458;
   --md-sys-color-on-secondary-container: #e8def8;
   --md-sys-color-error: #f2b8b5;
+  --md-sys-color-outline-variant: #49454f;
 }
 
 html,
@@ -41,4 +43,75 @@ body {
 
 .note-editor .cm-editor {
   font-size: 17px;
+}
+
+/* Linked mentions under the note (the web app's look). The editor drops its tall bottom padding when they show. */
+.note-editor:has(+ .note-links:not([hidden])) {
+  padding-bottom: 40px;
+}
+
+.note-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 20px 40vh;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.notes-head {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.notes-head span {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.backlink {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  text-decoration: none;
+}
+
+.backlink-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.backlink-title small,
+.backlink-line {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.backlink-title small {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.backlink-line {
+  overflow: hidden;
+  font-size: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.backlink-line mark {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--md-sys-color-primary) 18%, transparent);
+  color: var(--md-sys-color-primary);
+  font-weight: 500;
 }

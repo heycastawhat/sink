@@ -354,6 +354,45 @@ export class Vault {
     return { notes, folders: [...this.folders].sort((a, b) => a.localeCompare(b)) };
   }
 
+  /**
+   * Notes that link here, Obsidian's "linked mentions": `[[Name]]`, `[[Folder/Name]]` (with `#heading` or `|alias`)
+   * and `[text](Folder/Name.md)`, matched by file name or full path, any case. Each comes with the lines that link.
+   */
+  backlinks(path: string): { path: string; title: string; lines: string[] }[] {
+    const target = cleanPath(path, "note").replace(/\.md$/i, "").toLowerCase();
+    const name = target.split("/").pop()!;
+    const rows = this.db
+      .query<{ path: string; title: string; body: string }, [string, string, string, string, string]>(
+        `SELECT path, title, body FROM notes
+         WHERE path != ? AND (instr(lower(body), '[[' || ?) > 0 OR instr(lower(body), '[[' || ?) > 0
+           OR instr(lower(body), ?) > 0 OR instr(lower(body), ?) > 0)
+         ORDER BY mtime DESC LIMIT 200`,
+      )
+      .all(path, name, target, `${name}.md)`, encodeURI(`${name}.md)`).toLowerCase());
+    const hits = (ref: string) => {
+      const t = ref.trim().replace(/\.md$/i, "").replace(/^\/+/, "").toLowerCase();
+      return t === target || t === name || (t.includes("/") && target.endsWith("/" + t));
+    };
+    const links = (line: string) => {
+      for (const m of line.matchAll(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g)) if (hits(m[1]!)) return true;
+      for (const m of line.matchAll(/\]\(([^)\s]+\.md)(?:#[^)]*)?\)/gi)) {
+        let href = m[1]!;
+        try {
+          href = decodeURI(href);
+        } catch {}
+        if (!/^[a-z]+:/i.test(href) && hits(href.replace(/^\.\//, ""))) return true;
+      }
+      return false;
+    };
+    const out: { path: string; title: string; lines: string[] }[] = [];
+    for (const r of rows) {
+      const lines = r.body.split("\n").filter(links).map((l) => l.trim().slice(0, 240));
+      if (lines.length) out.push({ path: r.path, title: r.title, lines: lines.slice(0, 3) });
+      if (out.length === 50) break;
+    }
+    return out;
+  }
+
   search(fts: string, limit: number) {
     return this.db
       .query<Row & { snippet: string }, [string, number]>(

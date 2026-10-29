@@ -9,8 +9,10 @@
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
 //   sink.setText(text)  sink.insert(text)  sink.getText()  sink.focus()
+//   sink.backlinks(items)   GET /api/notes/backlinks' items, shown under the note; tapping one calls openLink(path)
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
 
+import { backlinksHtml } from './backlinks.js';
 import { createEditor } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
@@ -82,6 +84,18 @@ window.sink = {
   pickImage() {
     bridge.pickImage();
   },
+  backlinks(items = []) {
+    const box = document.getElementById('links');
+    box.hidden = !items.length;
+    box.innerHTML = items.length ? backlinksHtml(items, { href: () => '#' }) : '';
+  },
 };
+
+document.getElementById('links').addEventListener('click', (e) => {
+  const a = e.target.closest('[data-path]');
+  if (!a) return;
+  e.preventDefault();
+  bridge.openLink(a.dataset.path);
+});
 
 bridge.ready();
