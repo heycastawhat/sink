@@ -626,8 +626,8 @@ export class Vault {
           .all(from.length + 1, from + "/")
           .map((r) => r.path);
     this.db.transaction(() => {
-      // Version history isn't tied to the notes table (it outlives a note's row), so it moves here too.
-      for (const table of ["notes", "versions"]) {
+      // Version history and share links aren't tied to the notes table (they outlive a note's row), so they move here too.
+      for (const table of ["notes", "versions", "shares"]) {
         if (isNote) this.db.query(`UPDATE ${table} SET path = ? WHERE path = ?`).run(to, from);
         else
           this.db

@@ -43,6 +43,9 @@ export const api = {
   saveNote: (path, content, baseHash, init = {}, extra = {}) =>
     request(`/notes/file?${p(path)}`, { ...json('PUT', { content, base_hash: baseHash, ...extra }), ...init }),
   versions: (path) => request(`/notes/versions?${p(path)}`),
+  shareOf: (path) => request(`/notes/share?${p(path)}`),
+  share: (path) => request('/notes/share', json('POST', { path })),
+  unshare: (path) => request(`/notes/share?${p(path)}`, { method: 'DELETE' }),
   version: (path, id) => request(`/notes/versions/${id}?${p(path)}`),
   createNote: (body) => request('/notes', json('POST', body)),
   noteMeta: (path, body) => request(`/notes/meta?${p(path)}`, json('PATCH', body)),

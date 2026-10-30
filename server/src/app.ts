@@ -5,6 +5,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { Auth, authRoutes, requestOrigin, requireAuth, type AuthEnv } from "./auth";
 import type { MiddlewareHandler } from "hono";
 import { noteRoutes } from "./routes/notes";
+import { publicShareRoutes, shareRoutes } from "./routes/share";
 import { todoRoutes } from "./todos";
 import type { Vault } from "./notes";
 import { pluginFileType, type PluginHost } from "./plugins";
@@ -63,9 +64,12 @@ export function createApp(deps: {
   api.use("*", requireAuth(auth, config.publicUrls));
   api.route("/", noteRoutes(vault, config.maxUploadBytes, config.trashDays));
   api.route("/", todoRoutes(db, vault, config.timeZone ?? "UTC"));
+  api.route("/", shareRoutes(db, vault));
   // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/.
   api.get("/plugins", (c) => c.json({ plugins: plugins?.list() ?? [] }));
   if (plugins) api.route("/plugins", plugins.routes);
+  // Shared notes, readable without signing in. Before the signed-in API, which would answer 401.
+  app.route("/api/public", publicShareRoutes(db, vault));
   app.route("/api", api);
 
   // A plugin's client script, styles and assets. Signed in like the API: they're the owner's code, not public.
@@ -106,9 +110,18 @@ export function createApp(deps: {
 
   if (config.webDir) {
     app.use("/*", appShellCsp);
+    // A shared note's page; it loads the note from /api/public/share/<id>. Not for search engines, and it doesn't
+    // tell the sites its links go to where the reader came from.
+    app.get("/s/:id", async (c, next) => {
+      await next();
+      c.header("x-robots-tag", "noindex, nofollow");
+      c.header("referrer-policy", "no-referrer");
+    });
+    app.get("/s/:id", serveStatic({ root: config.webDir, path: "share.html" }));
     app.use("/*", serveStatic({ root: config.webDir }));
     // SPA fallback.
-    app.get("*", serveStatic({ path: `${config.webDir}/index.html` }));
+    // `path` is joined to `root`; on its own it's read relative to the working directory, not webDir.
+    app.get("*", serveStatic({ root: config.webDir, path: "index.html" }));
   }
 
   app.onError((err, c) => {

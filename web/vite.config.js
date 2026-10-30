@@ -8,7 +8,12 @@ export default defineConfig({
   build: {
     rollupOptions: {
       // editor.html is the bare editor the Android app shows in a WebView.
-      input: { main: resolve(import.meta.dirname, 'index.html'), editor: resolve(import.meta.dirname, 'editor.html') },
+      input: {
+        main: resolve(import.meta.dirname, 'index.html'),
+        editor: resolve(import.meta.dirname, 'editor.html'),
+        // share.html is a shared note's read-only page (/s/<id>).
+        share: resolve(import.meta.dirname, 'share.html'),
+      },
     },
   },
 });

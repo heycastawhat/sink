@@ -10,6 +10,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Your files:** one `.md` per note in a normal folder. Point Sink at an Obsidian vault, a NAS share or a
   Syncthing folder and both apps edit the same files. Deleted notes go to `.trash/`, like Obsidian;
   Undo or the Trash page puts them back.
+- **Share a note:** a read-only link anyone can open, no account needed. Stop sharing any time.
+- **Version history:** earlier versions of every note, to read or restore.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Todos:** every `- [ ]` in every note, in one list, with due dates and reminders (Obsidian Tasks syntax).
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.

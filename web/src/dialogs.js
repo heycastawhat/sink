@@ -63,6 +63,62 @@ export function askText({ title, label = 'Name', value = '', action = 'Save' }) 
 }
 
 /**
+ * Sharing one note: a link anyone can read (not edit). `shared` is the current link or null; `share()` makes one
+ * and resolves to its URL, `unshare()` stops it. Resolves when closed.
+ */
+export function shareNote({ title, shared, share, unshare }) {
+  return open(
+    `<div class="sink-dialog-body share-dialog">
+  <h2>Share “${esc(title)}”</h2>
+  <p class="muted small" data-off>Make a link anyone can open to read this note, without signing in. They can't edit it, see your other notes, or find it in search engines.</p>
+  <p class="muted small" data-on>Anyone with this link can read this note (not edit it). It shows the latest text.</p>
+  <div class="copy-row" data-on><code class="share-url"></code><m3e-icon-button data-copy aria-label="Copy link" title="Copy">${ic('content_copy')}</m3e-icon-button></div>
+  <p class="dialog-error" hidden></p>
+  <div class="dialog-actions">
+    <m3e-button data-stop variant="text" data-on>${ic('link_off', 'icon')}Stop sharing</m3e-button>
+    <span class="spacer"></span>
+    <m3e-button data-cancel variant="text">Done</m3e-button>
+    <m3e-button data-make variant="filled" data-off>${ic('link', 'icon')}Create link</m3e-button>
+  </div>
+</div>`,
+    (dlg, done) => {
+      const error = dlg.querySelector('.dialog-error');
+      const show = (url) => {
+        for (const el of dlg.querySelectorAll('[data-on]')) el.hidden = !url;
+        for (const el of dlg.querySelectorAll('[data-off]')) el.hidden = !!url;
+        dlg.querySelector('.share-url').textContent = url ?? '';
+      };
+      const fail = (err) => {
+        error.textContent = err.message;
+        error.hidden = false;
+      };
+      show(shared);
+      dlg.querySelector('[data-make]').addEventListener('click', async () => {
+        try {
+          const url = await share();
+          show(url);
+          await navigator.clipboard?.writeText(url).catch(() => {});
+        } catch (err) {
+          fail(err);
+        }
+      });
+      dlg.querySelector('[data-copy]').addEventListener('click', () =>
+        navigator.clipboard?.writeText(dlg.querySelector('.share-url').textContent).catch(fail),
+      );
+      dlg.querySelector('[data-stop]').addEventListener('click', async () => {
+        try {
+          await unshare();
+          show(null);
+        } catch (err) {
+          fail(err);
+        }
+      });
+      dlg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
+    },
+  );
+}
+
+/**
  * Version history: `versions` (newest first, from GET /api/notes/versions) as a list; picking one loads its text
  * with `load(id)` to read before restoring. `when(at)` formats a time. Resolves to the text to restore, or null.
  */

@@ -1,0 +1,56 @@
+/* A shared note (/s/<id>): the editor's look, read-only, centred, light or dark with the reader's system. */
+:root {
+  --md-sys-color-surface-container-lowest: #fff;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --md-sys-color-primary: #d0bcff;
+    --md-sys-color-on-surface: #e6e0e9;
+    --md-sys-color-on-surface-variant: #cac4d0;
+    --md-sys-color-surface-container-high: #2b2930;
+    --md-sys-color-surface-container: #211f26;
+    --md-sys-color-secondary-container: #4a4458;
+    --md-sys-color-on-secondary-container: #e8def8;
+    --md-sys-color-outline-variant: #49454f;
+    --md-sys-color-surface-container-lowest: #0f0d13;
+  }
+}
+
+html,
+body {
+  min-height: 100%;
+  background: var(--md-sys-color-surface-container-lowest);
+}
+
+.share {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 0 24px;
+}
+
+.share .note-editor {
+  padding-bottom: 32px;
+}
+
+.share-missing {
+  margin: 20vh 24px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 18px;
+  text-align: center;
+}
+
+.share-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px 40px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+}
+
+.share-foot a {
+  color: inherit;
+}

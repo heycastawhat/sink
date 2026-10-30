@@ -190,6 +190,24 @@ suspend fun Api.moveNote(from: String, to: String) {
 suspend fun Api.trashNote(path: String): String =
     call(authed(pathUrl("/api/notes/file", path)).delete().build()) { json.decodeFromString<Trashed>(it).trashedTo }
 
+@Serializable
+private data class ShareId(val id: String? = null)
+
+/** The note's share link (anyone can read it at /s/<id>), or null if it isn't shared. */
+suspend fun Api.shareLink(path: String): String? =
+    call(authed(pathUrl("/api/notes/share", path)).build()) { json.decodeFromString<ShareId>(it).id?.let { id -> absolute("/s/$id") } }
+
+/** Shares the note (or returns its existing link). */
+suspend fun Api.share(path: String): String =
+    call(request("/api/notes/share").post(jsonBody(buildJsonObject { put("path", path) })).build()) {
+        absolute("/s/" + json.decodeFromString<ShareId>(it).id!!)
+    }
+
+/** Stops sharing the note: its link stops working. */
+suspend fun Api.unshare(path: String) {
+    call(authed(pathUrl("/api/notes/share", path)).delete().build()) { }
+}
+
 /** Puts a trashed note back (numbered if its name is taken now). */
 suspend fun Api.restoreNote(trashPath: String): NoteMeta {
     val body = buildJsonObject { put("path", trashPath) }

@@ -637,6 +637,35 @@ describe("notes", () => {
     expect((await get(token, `/api/notes/versions/${moved[1].id}?path=Other.md`)).status).toBe(404);
   });
 
+  test("share links: public read-only, only embedded images, follow moves, can be stopped", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "Trips", title: "Lisbon", content: "---\nsecret: yes\n---\n# Lisbon\n\n![[map.png]]\n" });
+    writeFileSync(file("map.png"), "png");
+    writeFileSync(file("private.png"), "png");
+    await send(token, "POST", "/api/notes/scan");
+    const share = (await (await send(token, "POST", "/api/notes/share", { path: "Trips/Lisbon.md" })).json()) as any;
+    expect(share.id).toHaveLength(22);
+    // Sharing again gives the same link.
+    expect(((await (await send(token, "POST", "/api/notes/share", { path: "Trips/Lisbon.md" })).json()) as any).id).toBe(share.id);
+
+    const pub = await setup.app.request(`/api/public/share/${share.id}`);
+    expect(pub.status).toBe(200);
+    expect(pub.headers.get("x-robots-tag")).toContain("noindex");
+    const body = (await pub.json()) as any;
+    expect(body.title).toBe("Lisbon");
+    expect(body.content).not.toContain("secret");
+    expect((await setup.app.request(`/api/public/share/${share.id}/attachment?name=map.png`)).status).toBe(200);
+    expect((await setup.app.request(`/api/public/share/${share.id}/attachment?name=private.png`)).status).toBe(404);
+    expect((await setup.app.request("/api/public/share/nope")).status).toBe(404);
+
+    await send(token, "POST", "/api/notes/move", { from: "Trips/Lisbon.md", to: "Lisbon.md" });
+    expect((await setup.app.request(`/api/public/share/${share.id}`)).status).toBe(200);
+    expect(((await (await get(token, "/api/notes/share?path=Lisbon.md")).json()) as any).id).toBe(share.id);
+
+    await send(token, "DELETE", "/api/notes/share?path=Lisbon.md");
+    expect((await setup.app.request(`/api/public/share/${share.id}`)).status).toBe(404);
+  });
+
   test("renaming only the case of a note works", async () => {
     const token = await login();
     await send(token, "POST", "/api/notes", { title: "shopping", content: "# shopping\n" });

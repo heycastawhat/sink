@@ -331,6 +331,11 @@ export const migrations: string[] = [
   `
   ALTER TABLE tokens ADD COLUMN expires_at INTEGER;
   `,
+  // Share links (routes/share.ts): one per shared note, by a random id. Not tied to the notes row, so a share
+  // survives the note going to the trash and back; moves update the path.
+  `
+  CREATE TABLE shares (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
+  `,
 ];
 
 export function openDb(path: string): Database {

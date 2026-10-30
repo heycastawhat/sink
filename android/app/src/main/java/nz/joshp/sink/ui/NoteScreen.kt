@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.FormatColorReset
@@ -207,6 +208,7 @@ fun NoteScreen(
     var moving by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
+    var sharing by remember { mutableStateOf(false) }
     var web by remember { mutableStateOf<WebView?>(null) }
     var pageReady by remember { mutableStateOf(false) }
     var loadedNote by remember { mutableStateOf<String?>(null) }
@@ -631,6 +633,15 @@ fun NoteScreen(
                                 moving = true
                             },
                         )
+                        if (ed.path != null && ed.path?.endsWith(".excalidraw.md", ignoreCase = true) != true) DropdownMenuItem(
+                            text = { Text("Share link") },
+                            leadingIcon = { Icon(Icons.Outlined.Share, null) },
+                            onClick = {
+                                menu = false
+                                // Saved first, so the link shows what's on screen.
+                                flush { sharing = true }
+                            },
+                        )
                         if (ed.path != null) DropdownMenuItem(
                             text = { Text("Version history") },
                             leadingIcon = { Icon(Icons.Outlined.History, null) },
@@ -746,6 +757,12 @@ fun NoteScreen(
             },
             onDismiss = { moving = false },
         )
+    }
+
+    if (sharing) {
+        val p = ed.path
+        if (p == null) sharing = false
+        else ShareDialog(api = ::api, path = p, title = p.substringAfterLast('/').removeSuffix(".md"), onDismiss = { sharing = false })
     }
 
     if (history) {

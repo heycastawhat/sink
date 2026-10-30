@@ -1978,3 +1978,12 @@ body.dragging-note [data-drop-folder] {
     display: none;
   }
 }
+
+/* Share dialog: the link in a copy row, like the connector URL in Settings. */
+.share-url {
+  overflow-wrap: anywhere;
+}
+
+.note-screen.board #note-share {
+  display: none;
+}

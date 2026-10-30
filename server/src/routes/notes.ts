@@ -40,6 +40,21 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(40),
 });
 
+/** A vault file as a response that can't run anything, whatever it is (an .svg or .html could, on this origin). */
+export async function attachmentResponse(vault: Vault, path: string): Promise<Response> {
+  const bytes = await vault.readFile(path);
+  const type = TYPES[extname(path).toLowerCase()];
+  return new Response(bytes, {
+    headers: {
+      "content-type": type ?? "application/octet-stream",
+      "content-security-policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+      "x-content-type-options": "nosniff",
+      "cache-control": "private, max-age=300",
+      ...(!type && { "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(path.split("/").pop()!)}` }),
+    },
+  });
+}
+
 export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) {
   const app = new Hono<AuthEnv>();
 
@@ -190,18 +205,7 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const ref = c.req.query("path") ?? c.req.query("name");
       const path = ref ? vault.resolveFile(ref) : null;
       if (!path) return c.json({ error: "not found" }, 404);
-      const bytes = await vault.readFile(path);
-      const type = TYPES[extname(path).toLowerCase()];
-      return new Response(bytes, {
-        headers: {
-          "content-type": type ?? "application/octet-stream",
-          // Same origin as the app, so nothing in the vault may run script here (an .svg or .html could).
-          "content-security-policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
-          "x-content-type-options": "nosniff",
-          "cache-control": "private, max-age=300",
-          ...(!type && { "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(path.split("/").pop()!)}` }),
-        },
-      });
+      return attachmentResponse(vault, path);
     }),
   );
 

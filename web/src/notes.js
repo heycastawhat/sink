@@ -7,7 +7,7 @@ import { backlinksHtml } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
-import { askText, pickFolder, pickVersion } from './dialogs.js';
+import { askText, pickFolder, pickVersion, shareNote } from './dialogs.js';
 
 const $ = (id) => document.getElementById(id);
 const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
@@ -1177,6 +1177,26 @@ function wireScreen() {
     } catch (err) {
       toast(err.status === 409 ? `There's already a note called “${name}” here` : err.status === 400 ? 'Names can’t start with a dot or contain \\ : * ? " < > |' : err.message);
     }
+  });
+
+  $('note-share').addEventListener('click', async () => {
+    if (!screen.path || !screen.editor) return;
+    await flush();
+    const path = screen.path;
+    const link = (id) => `${location.origin}/s/${id}`;
+    let shared = null;
+    try {
+      const { id } = await api.shareOf(path);
+      shared = id ? link(id) : null;
+    } catch (err) {
+      return toast(err.message);
+    }
+    await shareNote({
+      title: screen.path.split('/').pop().replace(/\.md$/i, ''),
+      shared,
+      share: async () => link((await api.share(path)).id),
+      unshare: () => api.unshare(path),
+    });
   });
 
   $('note-history').addEventListener('click', async () => {

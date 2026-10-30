@@ -231,7 +231,8 @@ class PluginBlockWidget extends WidgetType {
 function pluginBlocksDeco(state) {
   if (!registry.codeBlocks.size) return Decoration.none;
   const ranges = [];
-  const sel = state.selection.ranges;
+  // Read-only (a shared note): nothing is being edited, so everything renders.
+  const sel = state.readOnly ? [] : state.selection.ranges;
   syntaxTree(state).iterate({
     enter(node) {
       if (node.name !== 'FencedCode') return;
@@ -314,7 +315,8 @@ class TableWidget extends WidgetType {
 
 function tablesDeco(state) {
   const ranges = [];
-  const sel = state.selection.ranges;
+  // Read-only (a shared note): nothing is being edited, so everything renders.
+  const sel = state.readOnly ? [] : state.selection.ranges;
   syntaxTree(state).iterate({
     enter(node) {
       // A table in a quote or callout stays as text: its lines start with "> ", which isn't part of the table.
@@ -608,6 +610,7 @@ function toggleTask(view, pos) {
  *  doc            initial text
  *  onChange(text) every edit
  *  onOpenLink(target, {newTab})  [[wikilink]] or url clicked
+ *  readOnly                      a page to read (a shared note), not edit
  *  resolveEmbed(name) -> url     for ![[image.png]]
  *  resolveImage(src) -> url      for ![](relative/path.png)
  *  linkTargets() -> [{label, detail}]  for [[ completion
@@ -684,6 +687,7 @@ export function createEditor(opts) {
         tables,
         autocompletion({ override: [completeLinks, completeCommands], icons: false }),
         placeholderExt(opts.placeholder ?? 'Note'),
+        ...(opts.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
         // Tab takes the highlighted suggestion ([[link]] or /command); with no menu open it indents as usual.
         keymap.of([{ key: 'Tab', run: acceptCompletion }]),
         keymap.of([...closeBracketsKeymap, ...markdownKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
