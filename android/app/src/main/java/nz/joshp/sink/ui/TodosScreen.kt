@@ -72,6 +72,22 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.time.temporal.ChronoUnit
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material.icons.outlined.EditCalendar
+import androidx.compose.material.icons.outlined.Update
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import nz.joshp.sink.data.reminderTime
+import java.time.DayOfWeek
+import java.time.temporal.TemporalAdjusters
 
 /** Every `- [ ]` in every note, grouped by when it's due. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
@@ -91,10 +107,34 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
         "Someday" to state.open.filter { it.due == null },
     ).filter { it.second.isNotEmpty() }
 
+    var editing by remember { mutableStateOf<Todo?>(null) }
     val toggle = { t: Todo, done: Boolean ->
-        scope.launch { vm.toggle(t, done)?.let { snackbar.showSnackbar(it) } }
+        scope.launch {
+            vm.toggle(t, done).fold(
+                { ticked ->
+                    if (done) {
+                        // A recurring todo's next copy goes in above it; Undo takes that back out too.
+                        val next = ticked.next?.let { DUE.find(it)?.groupValues?.get(1) }
+                        val msg = next?.let { "Done. Next: " + LocalDate.parse(it).format(DateTimeFormatter.ofPattern("EEE d MMM")) } ?: "Done"
+                        if (snackbar.showSnackbar(msg, actionLabel = "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
+                            vm.undoToggle(t, ticked)?.let { snackbar.showSnackbar(it) }
+                        }
+                    }
+                },
+                { snackbar.showSnackbar(it.message ?: "Couldn't save") },
+            )
+        }
         Unit
     }
+    // A new date keeps the reminder's time of day.
+    val reschedule = { t: Todo, due: LocalDate?, msg: String? ->
+        scope.launch {
+            val error = vm.editTodo(t, setDate = true, due = due?.toString(), time = reminderTime(t.raw))
+            (error ?: msg)?.let { snackbar.showSnackbar(it) }
+        }
+        Unit
+    }
+    val actions = TodoActions(toggle, onEdit = { editing = it }, onReschedule = { t, d -> reschedule(t, d, null) }, onOpenNote)
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -108,8 +148,19 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                     else -> LazyColumn(Modifier.fillMaxSize(), reverseLayout = true, contentPadding = PaddingValues(top = 8.dp, bottom = toolbarClearance(extra = 76.dp))) {
                         if (groups.isEmpty()) item { EmptyHint() }
                         for ((name, items) in groups) {
-                            items(items, key = { "o:${it.path}:${it.line}" }) { t -> TodoRow(t, today, toggle, onOpenNote) }
-                            item(key = "h:$name") { GroupHead(name, items.size) }
+                            items(items, key = { "o:${it.path}:${it.line}" }) { t ->
+                                // Swipe left: tomorrow.
+                                SwipeToTomorrow(onSwiped = { reschedule(t, quickDates(today)[1].second, "Moved to tomorrow") }) {
+                                    TodoRow(t, today, actions)
+                                }
+                            }
+                            item(key = "h:$name") {
+                                GroupHead(name, items.size) {
+                                    if (name == "Overdue") {
+                                        TextButton(onClick = { scope.launch { snackbar.showSnackbar(vm.moveOverdueToToday()) } }) { Text("Move all to today") }
+                                    }
+                                }
+                            }
                         }
                         item(key = "done-toggle") {
                             TextButton(onClick = vm::toggleDone, modifier = Modifier.padding(start = 8.dp, top = 8.dp)) {
@@ -117,7 +168,7 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                             }
                         }
                         state.done?.let { done ->
-                            items(done.take(100), key = { "d:${it.path}:${it.line}" }) { t -> TodoRow(t, today, toggle, onOpenNote) }
+                            items(done.take(100), key = { "d:${it.path}:${it.line}" }) { t -> TodoRow(t, today, actions) }
                         }
                     }
                 }
@@ -144,6 +195,23 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = toolbarClearance(extra = 76.dp)))
     }
 
+    editing?.let { t ->
+        EditTodoDialog(
+            t,
+            today,
+            onSave = { text, due, time ->
+                editing = null
+                val dateChanged = due?.toString() != t.due || time != reminderTime(t.raw)
+                if (text != t.text || dateChanged) {
+                    scope.launch {
+                        vm.editTodo(t, text.takeIf { it != t.text }, dateChanged, due?.toString(), time)?.let { snackbar.showSnackbar(it) }
+                    }
+                }
+            },
+            onDismiss = { editing = null },
+        )
+    }
+
     if (adding) {
         TodoDialog(
             onAdd = { text, due ->
@@ -165,22 +233,95 @@ private fun EmptyHint() {
 }
 
 @Composable
-private fun GroupHead(name: String, count: Int) {
-    Row(Modifier.padding(start = 20.dp, top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.Bottom) {
+private fun GroupHead(name: String, count: Int, action: @Composable () -> Unit = {}) {
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(name, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
         Spacer(Modifier.width(8.dp))
         Text("$count", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.weight(1f))
+        action()
+    }
+}
+
+/** What a todo row can do: tick, edit (tap the text), reschedule (the date or the calendar button), open its note. */
+private class TodoActions(
+    val toggle: (Todo, Boolean) -> Unit,
+    val onEdit: (Todo) -> Unit,
+    val onReschedule: (Todo, LocalDate?) -> Unit,
+    val onOpenNote: (String, Int) -> Unit,
+)
+
+private val DUE = Regex("""📅\uFE0F?\s*(\d{4}-\d{2}-\d{2})""")
+
+/** One-tap dates, counted from the server's today (the user's time zone). Next week is next Monday. */
+private fun quickDates(today: String): List<Pair<String, LocalDate?>> {
+    val d = runCatching { LocalDate.parse(today) }.getOrElse { LocalDate.now() }
+    return listOf("Today" to d, "Tomorrow" to d.plusDays(1), "Next week" to d.with(TemporalAdjusters.next(DayOfWeek.MONDAY)), "No date" to null)
+}
+
+@Composable
+private fun SwipeToTomorrow(onSwiped: () -> Unit, content: @Composable () -> Unit) {
+    val state = rememberSwipeToDismissBoxState()
+    val scope = rememberCoroutineScope()
+    SwipeToDismissBox(
+        state = state,
+        enableDismissFromStartToEnd = false,
+        onDismiss = {
+            onSwiped()
+            // The row stays (with its new date) once the list reloads; slide it back meanwhile.
+            scope.launch { state.reset() }
+        },
+        backgroundContent = {
+            Row(
+                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondaryContainer).padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Tomorrow", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Outlined.Update, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
+        },
+    ) {
+        Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainerLowest)) { content() }
+    }
+}
+
+/** The calendar button's menu: the quick dates, or the full editor for any other day. */
+@Composable
+private fun RescheduleMenu(t: Todo, today: String, actions: TodoActions, expanded: Boolean, onDismiss: () -> Unit) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        for ((label, date) in quickDates(today)) {
+            if (date?.toString() == t.due || (date == null && t.due == null)) continue
+            DropdownMenuItem(
+                text = { Text(label) },
+                trailingIcon = date?.let { { Text(it.format(DateTimeFormatter.ofPattern("EEE d MMM")), color = MaterialTheme.colorScheme.onSurfaceVariant) } },
+                onClick = {
+                    onDismiss()
+                    actions.onReschedule(t, date)
+                },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text("Pick a date…") },
+            leadingIcon = { Icon(Icons.Outlined.EditCalendar, null) },
+            onClick = {
+                onDismiss()
+                actions.onEdit(t)
+            },
+        )
     }
 }
 
 @Composable
-private fun TodoRow(t: Todo, today: String, onToggle: (Todo, Boolean) -> Unit, onOpenNote: (String, Int) -> Unit) {
+private fun TodoRow(t: Todo, today: String, actions: TodoActions) {
     val done = !t.open
     val overdue = t.open && t.due != null && t.due < today
+    var menu by remember { mutableStateOf(false) }
     Column {
-        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 16.dp, top = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.Top) {
-            Checkbox(checked = done, onCheckedChange = { onToggle(t, it) })
-            Column(Modifier.weight(1f).padding(top = 12.dp)) {
+        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.Top) {
+            Checkbox(checked = done, onCheckedChange = { actions.toggle(t, it) })
+            Column(Modifier.weight(1f).padding(top = 12.dp).then(if (done) Modifier else Modifier.clickable { actions.onEdit(t) })) {
                 Text(
                     t.text.ifEmpty { "(empty)" },
                     style = MaterialTheme.typography.bodyLarge.copy(textDecoration = if (done) TextDecoration.LineThrough else null),
@@ -189,14 +330,14 @@ private fun TodoRow(t: Todo, today: String, onToggle: (Todo, Boolean) -> Unit, o
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 2.dp)) {
                     if (t.due != null) {
                         val color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.then(if (done) Modifier else Modifier.clickable { menu = true }), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.Event, null, Modifier.size(15.dp), tint = color)
                             Spacer(Modifier.width(3.dp))
                             Text(dueLabel(t, today), style = MaterialTheme.typography.labelMedium, color = color)
                         }
                     }
                     if (t.path != TODO_NOTE) {
-                        Row(Modifier.clickable { onOpenNote(t.path, t.line) }, verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.clickable { actions.onOpenNote(t.path, t.line) }, verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.Description, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.width(3.dp))
                             Text(t.noteTitle, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -204,9 +345,74 @@ private fun TodoRow(t: Todo, today: String, onToggle: (Todo, Boolean) -> Unit, o
                     }
                 }
             }
+            if (!done) {
+                Box {
+                    IconButton(onClick = { menu = true }) {
+                        Icon(Icons.Outlined.EditCalendar, "Reschedule", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    RescheduleMenu(t, today, actions, menu) { menu = false }
+                }
+            }
         }
         HorizontalDivider(Modifier.padding(start = 56.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
     }
+}
+
+/** Text, date and reminder time for one todo, with the quick dates as chips. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EditTodoDialog(t: Todo, today: String, onSave: (String, LocalDate?, String?) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var text by remember { mutableStateOf(t.text) }
+    var due by remember { mutableStateOf(t.due?.let { runCatching { LocalDate.parse(it) }.getOrNull() }) }
+    var time by remember { mutableStateOf(reminderTime(t.raw)?.let { LocalTime.parse(it) }) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit todo") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(text, { text = it }, label = { Text("Todo") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for ((label, date) in quickDates(today)) {
+                        FilterChip(
+                            selected = due == date,
+                            onClick = {
+                                due = date
+                                if (date == null) time = null
+                            },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = {
+                        val now = due ?: LocalDate.now()
+                        DatePickerDialog(context, { _, y, m, d -> due = LocalDate.of(y, m + 1, d) }, now.year, now.monthValue - 1, now.dayOfMonth).show()
+                    }) {
+                        Icon(Icons.Outlined.Event, null)
+                        Text("  " + (due?.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)) ?: "No date"))
+                    }
+                    TextButton(onClick = {
+                        val now = time ?: LocalTime.of(9, 0)
+                        TimePickerDialog(context, { _, h, min ->
+                            time = LocalTime.of(h, min)
+                            if (due == null) due = quickDates(today)[0].second
+                        }, now.hour, now.minute, android.text.format.DateFormat.is24HourFormat(context)).show()
+                    }) {
+                        Icon(Icons.Outlined.Alarm, null)
+                        Text("  " + (time?.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)) ?: "No reminder"))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(text.trim(), due, time?.let { "%02d:%02d".format(it.hour, it.minute) }) },
+                enabled = text.isNotBlank(),
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 private val HAS_TIME = Regex("""\(@\d{4}-\d{2}-\d{2}[ T]\d""")

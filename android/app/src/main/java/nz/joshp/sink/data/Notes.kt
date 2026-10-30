@@ -107,8 +107,15 @@ private data class FolderPath(val path: String)
 @Serializable
 data class TodoList(val todos: List<Todo> = emptyList(), val today: String = "")
 
+/** Where a ticked line ended up; [next] is the new copy a recurring todo added above it (to take out on undo). */
 @Serializable
-private data class Toggled(val line: Int, val raw: String)
+data class Toggled(val line: Int, val raw: String, val next: String? = null)
+
+private val REMINDER_TIME = Regex("""\(@\d{4}-\d{2}-\d{2}[ T](\d{1,2}):(\d{2})\)""")
+
+/** A todo's reminder time as HH:mm, if its line has one (a due date alone has none). */
+fun reminderTime(raw: String): String? =
+    REMINDER_TIME.find(raw)?.let { "${it.groupValues[1].padStart(2, '0')}:${it.groupValues[2]}" }
 
 /** Where quick todos go (server/src/todos.ts TODO_FILE). */
 const val TODO_NOTE = "Todo.md"
@@ -268,14 +275,33 @@ suspend fun Api.backlinksJson(path: String): String =
 
 suspend fun Api.todos(view: String = "open"): TodoList = call(request("/api/todos?view=$view").build()) { json.decodeFromString(it) }
 
-suspend fun Api.toggleTodo(t: Todo, done: Boolean) {
+suspend fun Api.toggleTodo(t: Todo, done: Boolean, next: String? = null): Toggled {
     val body = buildJsonObject {
         put("path", t.path)
         put("line", t.line)
         put("raw", t.raw)
         put("done", done)
+        next?.let { put("next", it) }
     }
-    call(request("/api/todos/toggle").post(jsonBody(body)).build()) { json.decodeFromString<Toggled>(it) }
+    return call(request("/api/todos/toggle").post(jsonBody(body)).build()) { json.decodeFromString<Toggled>(it) }
+}
+
+/**
+ * Changes a todo's text and/or its date. With [setDate], [due] and [time] are written as given (null clears);
+ * without, the date and reminder stay as they are.
+ */
+suspend fun Api.editTodo(t: Todo, text: String? = null, setDate: Boolean = false, due: String? = null, time: String? = null) {
+    val body = buildJsonObject {
+        put("path", t.path)
+        put("line", t.line)
+        put("raw", t.raw)
+        text?.let { put("text", it) }
+        if (setDate) {
+            put("due", due)
+            put("time", if (due == null) null else time)
+        }
+    }
+    call(request("/api/todos/edit").post(jsonBody(body)).build()) { }
 }
 
 suspend fun Api.addTodo(text: String, due: String?, time: String?) {

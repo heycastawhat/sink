@@ -36,6 +36,9 @@ import nz.joshp.sink.data.restoreNote
 import nz.joshp.sink.data.searchNotes
 import nz.joshp.sink.data.todos
 import nz.joshp.sink.data.toggleTodo
+import nz.joshp.sink.data.Toggled
+import nz.joshp.sink.data.editTodo
+import nz.joshp.sink.data.reminderTime
 import nz.joshp.sink.reminders.ReminderSync
 
 data class NotesState(
@@ -328,22 +331,53 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         if (_todos.value.done != null) loadTodos()
     }
 
-    /** Ticks straight away on screen, then on the server; a 409 means the line changed, so reload. */
-    suspend fun toggle(t: Todo, done: Boolean): String? {
+    /**
+     * Ticks straight away on screen, then on the server; a 409 means the line changed, so reload. Returns where the
+     * line ended up (for Undo) or an error message.
+     */
+    suspend fun toggle(t: Todo, done: Boolean): Result<Toggled> {
         _todos.update { s ->
             s.copy(open = s.open.map { if (it === t) it.copy(status = if (done) "done" else "open") else it })
         }
-        val api = api() ?: return "Signed out"
-        val error = runCatching { api.toggleTodo(t, done) }.exceptionOrNull()
+        val api = api() ?: return Result.failure(Exception("Signed out"))
+        val result = runCatching { api.toggleTodo(t, done) }
         delay(350)
         loadTodos()
         ReminderSync.now(getApplication())
-        return when {
-            error == null -> null
-            error is ApiException && error.code == 409 -> "That todo changed; reloaded"
-            else -> error.message ?: "Couldn't save"
-        }
+        return result.recoverCatching { throw Exception(todoError(it)) }
     }
+
+    /** Unticks what [toggle] ticked, taking out the next copy a recurring todo added. */
+    suspend fun undoToggle(t: Todo, ticked: Toggled): String? {
+        val api = api() ?: return "Signed out"
+        val error = runCatching { api.toggleTodo(t.copy(line = ticked.line, raw = ticked.raw), false, ticked.next) }.exceptionOrNull()
+        loadTodos()
+        ReminderSync.now(getApplication())
+        return error?.let(::todoError)
+    }
+
+    /** New text and/or date for a todo (see [editTodo]); null on success, else an error message. */
+    suspend fun editTodo(t: Todo, text: String? = null, setDate: Boolean = false, due: String? = null, time: String? = null): String? {
+        val api = api() ?: return "Signed out"
+        val error = runCatching { api.editTodo(t, text, setDate, due, time) }.exceptionOrNull()
+        loadTodos()
+        if (setDate) ReminderSync.now(getApplication())
+        return error?.let(::todoError)
+    }
+
+    /** Every overdue todo moved to today, keeping reminder times. One at a time: each save needs the note's latest hash. */
+    suspend fun moveOverdueToToday(): String {
+        val api = api() ?: return "Signed out"
+        val today = _todos.value.today
+        val overdue = _todos.value.open.filter { it.due != null && it.due < today }
+        val failed = overdue.count { t -> runCatching { api.editTodo(t, setDate = true, due = today, time = reminderTime(t.raw)) }.isFailure }
+        loadTodos()
+        ReminderSync.now(getApplication())
+        return if (failed == 0) "Moved ${overdue.size} to today" else "Moved ${overdue.size - failed}; $failed changed, reloaded"
+    }
+
+    private fun todoError(e: Throwable) =
+        if (e is ApiException && e.code == 409) "That todo changed; reloaded" else e.message ?: "Couldn't save"
 
     suspend fun addTodo(text: String, due: String?, time: String?): String? {
         val api = api() ?: return "Signed out"
