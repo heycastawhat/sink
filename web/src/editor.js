@@ -2,7 +2,7 @@
 // CodeMirror edits the raw text (files are the truth, and Obsidian edits them too), with Obsidian-style live preview:
 // markup hides on lines the cursor isn't on, checkboxes tick, `![[images]]` show, `[[links]]` open.
 
-import { EditorState, RangeSetBuilder, StateField, Transaction } from '@codemirror/state';
+import { EditorSelection, EditorState, RangeSetBuilder, StateField, Transaction } from '@codemirror/state';
 import {
   EditorView,
   Decoration,
@@ -11,7 +11,7 @@ import {
   keymap,
   placeholder as placeholderExt,
 } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, indentLess, indentMore, indentWithTab, redo, undo } from '@codemirror/commands';
 import { syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput, indentUnit } from '@codemirror/language';
 import { markdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
@@ -369,6 +369,88 @@ const CORE_COMMANDS = [
   },
 ];
 
+// ---------- formatting (the phone's bar above the keyboard) ----------
+
+// What a line starts with: its indent, then a heading, task, bullet, numbered item or quote marker.
+const LINE_START = /^(\s*)(#{1,6} |[-*+] \[[^\]]\] |[-*+] |\d+[.)] |> )?/;
+const LINE_KINDS = {
+  h1: () => '# ',
+  h2: () => '## ',
+  h3: () => '### ',
+  task: () => '- [ ] ',
+  bullet: () => '- ',
+  numbered: (i) => `${i + 1}. `,
+  quote: () => '> ',
+};
+const kindOf = (marker = '') =>
+  /^#{1,3} $/.test(marker) ? `h${marker.length - 1}`
+  : /^[-*+] \[/.test(marker) ? 'task'
+  : /^[-*+] $/.test(marker) ? 'bullet'
+  : /^\d/.test(marker) ? 'numbered'
+  : marker === '> ' ? 'quote'
+  : null;
+
+/** Makes every selected line a heading, task, list item or quote; again on lines already that kind takes it off. */
+function formatLines(view, kind) {
+  const { state } = view;
+  const lines = [];
+  for (const r of state.selection.ranges) {
+    for (let n = state.doc.lineAt(r.from).number; n <= state.doc.lineAt(r.to).number; n++) {
+      if (!lines.includes(n)) lines.push(n);
+    }
+  }
+  const off = lines.every((n) => kindOf(state.doc.line(n).text.match(LINE_START)[2]) === kind);
+  const changes = lines.map((n, i) => {
+    const line = state.doc.line(n);
+    const [whole, indent] = line.text.match(LINE_START);
+    return { from: line.from + indent.length, to: line.from + whole.length, insert: off ? '' : LINE_KINDS[kind](i) };
+  });
+  view.dispatch(state.update({ changes, scrollIntoView: true, userEvent: 'input.format' }));
+}
+
+/** Wraps the selection in a mark (bold, italic, …) or takes it off; with nothing selected the caret goes in between. */
+function wrapSelection(view, open, close = open) {
+  const { state } = view;
+  const tr = state.changeByRange((r) => {
+    const before = state.sliceDoc(r.from - open.length, r.from);
+    const after = state.sliceDoc(r.to, r.to + close.length);
+    if (before === open && after === close) {
+      return {
+        changes: [{ from: r.from - open.length, to: r.from }, { from: r.to, to: r.to + close.length }],
+        range: EditorSelection.range(r.from - open.length, r.to - open.length),
+      };
+    }
+    return {
+      changes: [{ from: r.from, insert: open }, { from: r.to, insert: close }],
+      range: EditorSelection.range(r.from + open.length, r.to + open.length),
+    };
+  });
+  view.dispatch(state.update(tr, { scrollIntoView: true, userEvent: 'input.format' }));
+}
+
+const FORMATS = {
+  bold: (v) => wrapSelection(v, '**'),
+  italic: (v) => wrapSelection(v, '*'),
+  strike: (v) => wrapSelection(v, '~~'),
+  code: (v) => wrapSelection(v, '`'),
+  link: (v) => wrapSelection(v, '[[', ']]'),
+  indent: (v) => indentMore(v),
+  outdent: (v) => indentLess(v),
+  undo: (v) => undo(v),
+  redo: (v) => redo(v),
+};
+
+// Typing "[] " for a todo, as people do, makes it a real one ("- [ ] "), which the todo list and checkboxes need.
+const looseTask = EditorView.inputHandler.of((view, from, to, text) => {
+  if (text !== ' ') return false;
+  const line = view.state.doc.lineAt(from);
+  const m = line.text.slice(0, from - line.from).match(/^(\s*)(?:[-*+] )?\[\]$/);
+  if (!m) return false;
+  const start = line.from + m[1].length;
+  view.dispatch({ changes: { from: start, to, insert: '- [ ] ' }, selection: { anchor: start + 6 }, userEvent: 'input.type' });
+  return true;
+});
+
 /** What a slash command gets to work with. */
 function commandContext(view, opts) {
   return {
@@ -693,6 +775,7 @@ export function createEditor(opts) {
         syntaxHighlighting(highlight),
         livePreview(opts),
         properties,
+        looseTask,
         pluginBlocks,
         tables,
         autocompletion({ override: [completeLinks, completeCommands], icons: false }),
@@ -790,6 +873,12 @@ export function createEditor(opts) {
     goToLine(n) {
       const line = view.state.doc.line(Math.min(Math.max(n + 1, 1), view.state.doc.lines));
       view.dispatch({ selection: { anchor: line.to }, scrollIntoView: true });
+      view.focus();
+    },
+    /** h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike, code, link, indent, outdent, undo, redo. */
+    format(kind) {
+      if (LINE_KINDS[kind]) formatLines(view, kind);
+      else FORMATS[kind]?.(view);
       view.focus();
     },
     destroy: () => view.destroy(),

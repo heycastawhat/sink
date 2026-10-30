@@ -10,6 +10,8 @@
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
 //   sink.setText(text)  sink.insert(text)  sink.getText()  sink.focus()
+//   sink.format(kind)   the bar above the keyboard: h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike,
+//                       code, link, indent, outdent, undo, redo (see editor.js format)
 //   sink.backlinks(items)   GET /api/notes/backlinks' items, shown under the note; tapping one calls openLink(path)
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
 
@@ -92,6 +94,9 @@ window.sink = {
   },
   focus() {
     editor?.focus(true);
+  },
+  format(kind) {
+    editor?.format(kind);
   },
   pickImage() {
     bridge.pickImage();

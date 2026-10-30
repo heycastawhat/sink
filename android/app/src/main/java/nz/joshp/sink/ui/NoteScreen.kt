@@ -2,6 +2,27 @@ package nz.joshp.sink.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material.icons.automirrored.outlined.FormatIndentDecrease
+import androidx.compose.material.icons.automirrored.outlined.FormatIndentIncrease
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
+import androidx.compose.material.icons.automirrored.outlined.Redo
+import androidx.compose.material.icons.automirrored.outlined.Undo
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.FormatBold
+import androidx.compose.material.icons.outlined.FormatItalic
+import androidx.compose.material.icons.outlined.FormatListNumbered
+import androidx.compose.material.icons.outlined.FormatQuote
+import androidx.compose.material.icons.outlined.KeyboardHide
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.StrikethroughS
 import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.net.Uri
@@ -366,6 +387,13 @@ fun NoteScreen(
 
     fun flushAndLeave() = flush(onBack)
 
+    val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    fun hideKeyboard() {
+        val w = web ?: return
+        w.evaluateJavascript("document.activeElement && document.activeElement.blur()", null)
+        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(w.windowToken, 0)
+    }
+
     // Switching apps or locking the phone saves too.
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
@@ -678,112 +706,119 @@ fun NoteScreen(
                     }
                 }
             }
-            // The toolbar sits at the bottom, under the thumb (and just above the keyboard while typing).
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = ::flushAndLeave) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
-                Text(
-                    crumb,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    status,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-                IconButton(onClick = { scope.launch { setMeta(pin = !pinned) } }) {
-                    Icon(if (pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (pinned) "Unpin" else "Pin")
-                }
-                IconButton(onClick = { palette = !palette }) { Icon(Icons.Outlined.Palette, "Colour") }
-                Box {
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Add image") },
-                            leadingIcon = { Icon(Icons.Outlined.AddPhotoAlternate, null) },
-                            onClick = {
-                                menu = false
-                                picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Insert template") },
-                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
-                            onClick = {
-                                menu = false
-                                templating = TemplateAsk.Menu
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Go to note") },
-                            leadingIcon = { Icon(Icons.Outlined.Search, null) },
-                            onClick = {
-                                menu = false
-                                onSwitch()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Move to folder") },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) },
-                            onClick = {
-                                menu = false
-                                moving = true
-                            },
-                        )
-                        if (ed.path != null && ed.path?.endsWith(".excalidraw.md", ignoreCase = true) != true) DropdownMenuItem(
-                            text = { Text("Share link") },
-                            leadingIcon = { Icon(Icons.Outlined.Share, null) },
-                            onClick = {
-                                menu = false
-                                // Saved first, so the link shows what's on screen.
-                                flush { sharing = true }
-                            },
-                        )
-                        if (ed.path != null) DropdownMenuItem(
-                            text = { Text("Version history") },
-                            leadingIcon = { Icon(Icons.Outlined.History, null) },
-                            onClick = {
-                                menu = false
-                                history = true
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Rename") },
-                            leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null) },
-                            onClick = {
-                                menu = false
-                                renaming = true
-                            },
-                        )
-                        if (ed.path != null) {
-                            val archived = ed.path?.startsWith("Archive/", ignoreCase = true) == true
+            // While typing, the bar above the keyboard is for formatting; the note's toolbar comes back with the keyboard down.
+            if (keyboardUp) {
+                FormatBar(onFormat = { js("window.sink.format(${JsonPrimitive(it)})") }, onImage = {
+                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }, onDone = ::hideKeyboard)
+            } else {
+                // The toolbar sits at the bottom, under the thumb.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = ::flushAndLeave) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                    Text(
+                        crumb,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        status,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                    IconButton(onClick = { scope.launch { setMeta(pin = !pinned) } }) {
+                        Icon(if (pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (pinned) "Unpin" else "Pin")
+                    }
+                    IconButton(onClick = { palette = !palette }) { Icon(Icons.Outlined.Palette, "Colour") }
+                    Box {
+                        IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(
-                                text = { Text(if (archived) "Unarchive" else "Archive") },
-                                leadingIcon = { Icon(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
+                                text = { Text("Add image") },
+                                leadingIcon = { Icon(Icons.Outlined.AddPhotoAlternate, null) },
                                 onClick = {
                                     menu = false
-                                    archive()
+                                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Insert template") },
+                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                                onClick = {
+                                    menu = false
+                                    templating = TemplateAsk.Menu
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Go to note") },
+                                leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                                onClick = {
+                                    menu = false
+                                    onSwitch()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Move to folder") },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) },
+                                onClick = {
+                                    menu = false
+                                    moving = true
+                                },
+                            )
+                            if (ed.path != null && ed.path?.endsWith(".excalidraw.md", ignoreCase = true) != true) DropdownMenuItem(
+                                text = { Text("Share link") },
+                                leadingIcon = { Icon(Icons.Outlined.Share, null) },
+                                onClick = {
+                                    menu = false
+                                    // Saved first, so the link shows what's on screen.
+                                    flush { sharing = true }
+                                },
+                            )
+                            if (ed.path != null) DropdownMenuItem(
+                                text = { Text("Version history") },
+                                leadingIcon = { Icon(Icons.Outlined.History, null) },
+                                onClick = {
+                                    menu = false
+                                    history = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Rename") },
+                                leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null) },
+                                onClick = {
+                                    menu = false
+                                    renaming = true
+                                },
+                            )
+                            if (ed.path != null) {
+                                val archived = ed.path?.startsWith("Archive/", ignoreCase = true) == true
+                                DropdownMenuItem(
+                                    text = { Text(if (archived) "Unarchive" else "Archive") },
+                                    leadingIcon = { Icon(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
+                                    onClick = {
+                                        menu = false
+                                        archive()
+                                    },
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Delete") },
+                                leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                onClick = {
+                                    menu = false
+                                    trash()
                                 },
                             )
                         }
-                        DropdownMenuItem(
-                            text = { Text("Delete") },
-                            leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                            onClick = {
-                                menu = false
-                                trash()
-                            },
-                        )
                     }
                 }
             }
@@ -895,6 +930,46 @@ fun NoteScreen(
             },
             onDismiss = { renaming = false },
         )
+    }
+}
+
+/**
+ * The bar above the keyboard: headings, todos, lists and marks a tap away (the editor page does the edit, see
+ * editor.js format), scrolling sideways, with the keyboard's own close at the end.
+ */
+@Composable
+private fun FormatBar(onFormat: (String) -> Unit, onImage: () -> Unit, onDone: () -> Unit) {
+    @Composable
+    fun Label(text: String) = Text(text, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+    val tools: List<Pair<String, @Composable () -> Unit>> = listOf(
+        Pair("h1") { Label("H1") },
+        Pair("h2") { Label("H2") },
+        Pair("h3") { Label("H3") },
+        Pair("task") { Icon(Icons.Outlined.CheckBox, "Todo") },
+        Pair("bullet") { Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, "Bulleted list") },
+        Pair("numbered") { Icon(Icons.Outlined.FormatListNumbered, "Numbered list") },
+        Pair("bold") { Icon(Icons.Outlined.FormatBold, "Bold") },
+        Pair("italic") { Icon(Icons.Outlined.FormatItalic, "Italic") },
+        Pair("strike") { Icon(Icons.Outlined.StrikethroughS, "Strikethrough") },
+        Pair("link") { Icon(Icons.Outlined.Link, "Link to a note") },
+        Pair("quote") { Icon(Icons.Outlined.FormatQuote, "Quote") },
+        Pair("code") { Icon(Icons.Outlined.Code, "Code") },
+        Pair("outdent") { Icon(Icons.AutoMirrored.Outlined.FormatIndentDecrease, "Outdent") },
+        Pair("indent") { Icon(Icons.AutoMirrored.Outlined.FormatIndentIncrease, "Indent") },
+        Pair("undo") { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") },
+        Pair("redo") { Icon(Icons.AutoMirrored.Outlined.Redo, "Redo") },
+    )
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            for ((kind, content) in tools.take(3)) IconButton(onClick = { onFormat(kind) }) { content() }
+            for ((kind, content) in tools.drop(3).take(3)) IconButton(onClick = { onFormat(kind) }) { content() }
+            IconButton(onClick = onImage) { Icon(Icons.Outlined.AddPhotoAlternate, "Add image") }
+            for ((kind, content) in tools.drop(6)) IconButton(onClick = { onFormat(kind) }) { content() }
+        }
+        IconButton(onClick = onDone) { Icon(Icons.Outlined.KeyboardHide, "Hide keyboard") }
     }
 }
 
