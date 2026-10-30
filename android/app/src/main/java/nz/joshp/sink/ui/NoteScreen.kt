@@ -39,6 +39,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material.icons.outlined.Archive
@@ -98,6 +100,7 @@ import kotlinx.serialization.json.putJsonObject
 import nz.joshp.sink.data.backlinksJson
 import nz.joshp.sink.data.pluginFile
 import nz.joshp.sink.data.saveNote
+import nz.joshp.sink.data.templatesIn
 import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.NOTE_COLORS
@@ -130,6 +133,7 @@ private class Bridge(
     val onChanged: (String) -> Unit,
     val onLink: (String) -> Unit,
     val onPickImage: () -> Unit,
+    val onPickTemplate: () -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
 
@@ -137,7 +141,10 @@ private class Bridge(
     @JavascriptInterface fun changed(text: String) = main.post { onChanged(text) }.let { }
     @JavascriptInterface fun openLink(target: String) = main.post { onLink(target) }.let { }
     @JavascriptInterface fun pickImage() = main.post(onPickImage).let { }
+    @JavascriptInterface fun pickTemplate() = main.post(onPickTemplate).let { }
 }
+
+private enum class TemplateAsk { Slash, Menu }
 
 /** The app's Material colours as the CSS variables the editor styles use. */
 private fun ColorScheme.css() = mapOf(
@@ -181,6 +188,8 @@ fun NoteScreen(
     serverUrl: String,
     onBack: () -> Unit,
     onOpenNote: (String) -> Unit,
+    /** Opens the quick switcher. */
+    onSwitch: () -> Unit = {},
     /** For a new note: text to start with, e.g. shared from another app. */
     initialText: String = "",
     /** For a new note: photos and PDFs shared from another app (copies in the cache), uploaded and embedded. */
@@ -211,6 +220,8 @@ fun NoteScreen(
     var renaming by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
     var sharing by remember { mutableStateOf(false) }
+    // Picking a template to drop in: from /template (the page waits for an answer) or the menu.
+    var templating by remember { mutableStateOf<TemplateAsk?>(null) }
     var web by remember { mutableStateOf<WebView?>(null) }
     var pageReady by remember { mutableStateOf(false) }
     var loadedNote by remember { mutableStateOf<String?>(null) }
@@ -647,6 +658,7 @@ fun NoteScreen(
                     },
                     onLink = ::openLink,
                     onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onPickTemplate = { templating = TemplateAsk.Slash },
                 )).also { web = it } },
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
@@ -702,6 +714,22 @@ fun NoteScreen(
                             onClick = {
                                 menu = false
                                 picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Insert template") },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                            onClick = {
+                                menu = false
+                                templating = TemplateAsk.Menu
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Go to note") },
+                            leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                            onClick = {
+                                menu = false
+                                onSwitch()
                             },
                         )
                         DropdownMenuItem(
@@ -765,6 +793,28 @@ fun NoteScreen(
     }
 
     DisposableEffect(Unit) { onDispose { web?.destroy() } }
+
+    templating?.let { ask ->
+        // /template is waiting on an answer; anything but a template is null, so it stops waiting.
+        fun answer(text: String?) {
+            templating = null
+            if (ask == TemplateAsk.Slash) js("window.sink.template(${JsonPrimitive(text)})")
+            else if (text != null) js("window.sink.insert(${JsonPrimitive(text)})")
+        }
+        TemplatePickerSheet(
+            templatesIn(vm.state.value.notes),
+            onPick = { p ->
+                templating = null
+                scope.launch {
+                    val title = ed.path?.substringAfterLast('/')?.removeSuffix(".md").orEmpty()
+                    val (text, error) = vm.templateText(p, title, inline = true)
+                    answer(text)
+                    error?.let { snackbar.showSnackbar(it) }
+                }
+            },
+            onDismiss = { answer(null) },
+        )
+    }
 
     /**
      * Saves, then moves the note to [dest] (a full path ending in .md). The editor keeps going on the moved file.

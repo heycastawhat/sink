@@ -2,6 +2,7 @@ package nz.joshp.sink.ui
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -117,6 +118,20 @@ class MainActivity : ComponentActivity() {
 
     // A note route from a todo reminder, the New note tile, or text and files shared from another app.
     private val openNote = mutableStateOf<String?>(null)
+
+    // The quick switcher, open over whatever screen is showing.
+    private val switching = mutableStateOf(false)
+
+    /** Ctrl+K (or Ctrl+O, as in Obsidian) with a keyboard attached: the quick switcher, from anywhere, even mid-note. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && (event.isCtrlPressed || event.isMetaPressed) &&
+            (event.keyCode == KeyEvent.KEYCODE_K || event.keyCode == KeyEvent.KEYCODE_O)
+        ) {
+            switching.value = true
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
 
     private fun noteTarget(intent: Intent): String? = when {
         SharedFiles.uris(intent).isNotEmpty() -> null
@@ -248,7 +263,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxSize(),
             ) {
                 composable("notes") {
-                    NotesScreen(notesVm, onOpen = { openNoteAt(it, null) }, onNew = { nav.navigate(noteRoute(null, folder = notesVm.state.value.folder)) })
+                    NotesScreen(notesVm, onOpen = { openNoteAt(it, null) }, onNew = { text -> nav.navigate(noteRoute(null, folder = notesVm.state.value.folder, text = text)) })
                 }
                 composable("todos") { TodosScreen(notesVm, onOpenNote = { p, l -> openNoteAt(p, l) }) }
                 composable(
@@ -270,6 +285,7 @@ class MainActivity : ComponentActivity() {
                         serverUrl = session.serverUrl,
                         onBack = { nav.popBackStack() },
                         onOpenNote = { openNoteAt(it, null) },
+                        onSwitch = { switching.value = true },
                         initialText = e.arguments?.getString("text").orEmpty(),
                         sharedFiles = e.arguments?.getString("files").orEmpty().split('\n').filter { it.isNotEmpty() }.map(::File),
                     )
@@ -284,6 +300,29 @@ class MainActivity : ComponentActivity() {
                 )
             }
           }
+        }
+
+        if (switching.value) {
+            val state by notesVm.state.collectAsState()
+            val opened by notesVm.opened.collectAsState()
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            QuickSwitcherSheet(
+                state.notes,
+                opened,
+                onOpen = { path ->
+                    switching.value = false
+                    openNoteAt(path, null)
+                },
+                onCreate = { title ->
+                    switching.value = false
+                    scope.launch {
+                        val (path, error) = notesVm.newNamed(title)
+                        if (path != null) openNoteAt(path, null)
+                        else android.widget.Toast.makeText(this@MainActivity, error, android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onDismiss = { switching.value = false },
+            )
         }
     }
 

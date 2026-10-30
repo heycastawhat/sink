@@ -26,6 +26,8 @@ import nz.joshp.sink.data.Todo
 import nz.joshp.sink.data.addTodo
 import nz.joshp.sink.data.createFolder
 import nz.joshp.sink.data.createNote
+import nz.joshp.sink.data.fillTemplate
+import nz.joshp.sink.data.note
 import nz.joshp.sink.data.moveNote
 import nz.joshp.sink.data.restoreFolder
 import nz.joshp.sink.data.trashNote
@@ -345,6 +347,24 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         loadTodos()
         if (due != null) ReminderSync.now(getApplication())
         return error?.let { it.message ?: "Couldn't add" }
+    }
+
+    /**
+     * A template's text with its variables filled in (see Templates.kt), or null and an error message. Uses the
+     * phone's copy when the server can't be reached.
+     */
+    suspend fun templateText(path: String, title: String = "", inline: Boolean = false): Pair<String?, String?> {
+        val note = runCatching { api()?.note(path) }.getOrNull() ?: store.note(path)
+            ?: return null to "Couldn't load that template. You're offline."
+        return fillTemplate(note.content, title, inline) to null
+    }
+
+    /** The quick switcher's "new note called …": its path, or null and an error message. */
+    suspend fun newNamed(title: String): Pair<String?, String?> {
+        val api = api() ?: return null to "Signed out"
+        val made = runCatching { api.createNote(_state.value.folder, title, "# $title\n\n") }
+        refresh()
+        return made.fold({ it.path to null }, { null to (it.message ?: "Couldn't make that note") })
     }
 
     /** A blank Excalidraw board in Boards/, named for now: its path, or null and an error message. */

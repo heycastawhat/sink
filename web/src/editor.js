@@ -345,7 +345,7 @@ const CORE_COMMANDS = [
   {
     id: 'template',
     name: 'Insert a template',
-    // The app picks it (opts.pickTemplate); pages without templates (a shared note, Android for now) skip it.
+    // The app picks it (opts.pickTemplate); pages without templates (a shared note) skip it.
     available: (opts) => !!opts.pickTemplate,
     run: async (ctx, opts) => {
       const text = await opts.pickTemplate();

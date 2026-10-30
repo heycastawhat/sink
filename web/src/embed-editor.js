@@ -4,6 +4,7 @@
 //   SinkBridge.changed(text)                text edited (debounced)
 //   SinkBridge.openLink(target)             [[wikilink]] or url tapped
 //   SinkBridge.pickImage()                  user wants to attach an image; reply with sink.insert(text)
+//   SinkBridge.pickTemplate()               /template: user wants a template; reply with sink.template(text or null)
 // The app drives it with:
 //   sink.load({ text, dark, colors, links, line, plugins })   colors: { '--md-sys-color-primary': '#...', ... }
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
@@ -23,6 +24,15 @@ const bridge = window.SinkBridge ?? {
   openLink() {},
   pickImage() {},
 };
+
+// /template's answer from the app: the filled-in text, or null if the picker was closed.
+let templateReply = null;
+const pickTemplate = () =>
+  new Promise((resolve) => {
+    templateReply?.(null);
+    templateReply = resolve;
+    bridge.pickTemplate();
+  });
 
 let editor = null;
 let links = [];
@@ -57,6 +67,8 @@ window.sink = {
       resolveEmbed: attachment,
       resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
       linkTargets: () => links,
+      // Only when the app can pick one (an older app has no pickTemplate, so the command stays hidden).
+      pickTemplate: bridge.pickTemplate ? pickTemplate : undefined,
     });
     if (line != null) editor.goToLine(line);
     else if (!text.trim()) editor.focus(true);
@@ -83,6 +95,10 @@ window.sink = {
   },
   pickImage() {
     bridge.pickImage();
+  },
+  template(text) {
+    templateReply?.(text);
+    templateReply = null;
   },
   backlinks(items = []) {
     const box = document.getElementById('links');

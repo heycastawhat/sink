@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AddTask
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Draw
@@ -33,11 +34,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import nz.joshp.sink.data.templatesIn
 import java.time.LocalDate
 
 /**
  * The "new" button on Notes: a toggle FAB that opens a stack of labelled actions (Material 3 Expressive's
- * FAB menu) for a note, a todo, a folder or a board. [folder] is where new things go.
+ * FAB menu) for a note (blank or from a template), a todo, a folder or a board. [folder] is where new things go;
+ * [onNewNote] opens a draft starting with the given text.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -45,7 +48,7 @@ fun NewMenuFab(
     vm: NotesViewModel,
     folder: String,
     snackbar: SnackbarHostState,
-    onNewNote: () -> Unit,
+    onNewNote: (text: String) -> Unit,
     onOpen: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -53,6 +56,7 @@ fun NewMenuFab(
     var expanded by remember { mutableStateOf(false) }
     var todo by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf(false) }
+    var templating by remember { mutableStateOf(false) }
     BackHandler(enabled = expanded) { expanded = false }
     fun pick(action: () -> Unit) {
         expanded = false
@@ -69,9 +73,14 @@ fun NewMenuFab(
         modifier = modifier,
     ) {
         FloatingActionButtonMenuItem(
-            onClick = { pick(onNewNote) },
+            onClick = { pick { onNewNote("") } },
             icon = { Icon(Icons.Outlined.Edit, null) },
             text = { Text("Note") },
+        )
+        FloatingActionButtonMenuItem(
+            onClick = { pick { templating = true } },
+            icon = { Icon(Icons.Outlined.ContentCopy, null) },
+            text = { Text("From template") },
         )
         FloatingActionButtonMenuItem(
             onClick = { pick { todo = true } },
@@ -97,6 +106,20 @@ fun NewMenuFab(
         )
     }
 
+    if (templating) {
+        val notes = vm.state.value.notes
+        TemplatePickerSheet(
+            templatesIn(notes),
+            onPick = { path ->
+                templating = false
+                scope.launch {
+                    val (text, error) = vm.templateText(path)
+                    if (text != null) onNewNote(text) else snackbar.showSnackbar(error ?: "Couldn't load that template")
+                }
+            },
+            onDismiss = { templating = false },
+        )
+    }
     if (todo) {
         TodoDialog(
             onAdd = { text, due ->

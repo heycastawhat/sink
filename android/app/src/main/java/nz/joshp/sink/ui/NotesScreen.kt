@@ -113,7 +113,7 @@ fun noteTint(color: String?, base: Color = MaterialTheme.colorScheme.surfaceCont
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit) {
+fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: String) -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.refresh() }
     val snackbar = remember { SnackbarHostState() }
