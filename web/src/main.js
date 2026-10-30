@@ -279,6 +279,15 @@ async function renderSettings() {
     </div>
     <m3e-switch id="hide-foldered"${notes.prefs.hideFoldered ? ' checked' : ''}></m3e-switch>
   </div>
+  <div class="setting-row">
+    <div class="grow">
+      <div class="setting-title">Import from Google Keep</div>
+      <div class="muted small">In <a href="https://takeout.google.com/" target="_blank" rel="noopener">Google Takeout</a>, export only Keep, then pick the zip here. Notes land in a Keep folder with their checklists, labels, colours, pins and images. Running it again skips notes already imported.</div>
+      <div id="keep-status" class="small" aria-live="polite" hidden></div>
+    </div>
+    <m3e-button id="keep-import" variant="tonal">${ic('upload', 'icon')}Import</m3e-button>
+    <input id="keep-file" type="file" accept=".zip,.json,image/*" multiple hidden />
+  </div>
 </section>
 
 <section class="setting-card">
@@ -371,7 +380,33 @@ async function renderTokens() {
 
 $('settings').addEventListener('change', (e) => {
   if (e.target.id === 'hide-foldered') notes.prefs.hideFoldered = e.target.checked;
+  if (e.target.id === 'keep-file') runKeepImport(e.target);
 });
+
+/** Google Keep import from Settings: loaded only when used. */
+async function runKeepImport(input) {
+  const files = [...input.files];
+  input.value = '';
+  if (!files.length) return;
+  const status = $('keep-status');
+  const button = $('keep-import');
+  status.hidden = false;
+  status.textContent = 'Reading…';
+  button.disabled = true;
+  try {
+    const { importKeep } = await import('./keep-import.js');
+    const r = await importKeep(files, (done, total) => (status.textContent = `Importing ${done} of ${total}…`));
+    status.textContent =
+      [`Imported ${r.imported} note${r.imported === 1 ? '' : 's'}`, r.skipped && `skipped ${r.skipped} already here`, r.failed && `${r.failed} failed`]
+        .filter(Boolean)
+        .join(', ') + '.';
+    notes.loadNotes();
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+}
 
 $('settings').addEventListener('click', async (e) => {
   const scheme = e.target.closest('[data-scheme]');
@@ -415,6 +450,8 @@ $('settings').addEventListener('click', async (e) => {
     } catch (err) {
       toast(err.message);
     }
+  } else if (id === 'keep-import') {
+    $('keep-file').click();
   } else if (id === 'open-trash') {
     location.hash = '#/trash';
   } else if (id === 'logout') {

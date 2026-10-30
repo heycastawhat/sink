@@ -5,11 +5,12 @@ grid that opens each note fullscreen in an Obsidian-style editor. With todos, Ex
 app, and an MCP server so AI assistants can read and write your notes.
 
 - **Keep's feel:** card grid, pinned notes, colours, "Take a note…", checklists.
-- **Obsidian's editor:** live preview markdown (headings, tasks, callouts, code blocks, `[[wikilinks]]`, `#tags`,
+- **Obsidian's editor:** live preview markdown (headings, tasks, callouts, code blocks, `[[wikilinks]]` with backlinks, `#tags`,
   embedded images, properties). Files stay exactly as you wrote them.
 - **Your files:** one `.md` per note in a normal folder. Point Sink at an Obsidian vault, a NAS share or a
   Syncthing folder and both apps edit the same files. Deleted notes go to `.trash/`, like Obsidian;
   Undo or the Trash page puts them back.
+- **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Todos:** every `- [ ]` in every note, in one list, with due dates and reminders (Obsidian Tasks syntax).
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
