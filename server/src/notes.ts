@@ -15,6 +15,9 @@ export const TRASH = ".trash";
 export const ATTACHMENTS = "attachments";
 const MAX_NOTE_BYTES = 5 * 1024 * 1024;
 const SKIP_DIRS = new Set(["node_modules"]);
+/** Version history: a new version at most this often per note, and this many kept. */
+const VERSION_GAP_MS = 10 * 60_000;
+const MAX_VERSIONS = 50;
 
 export type NoteMeta = {
   path: string;
@@ -464,6 +467,51 @@ export class Vault {
     }
   }
 
+  // ---- version history
+
+  /**
+   * Keeps `content` (what the file held before a write) as a version, unless the last one is under VERSION_GAP_MS
+   * old: autosave writes every few seconds while someone types, and one version per sitting is what's useful.
+   * Only the newest MAX_VERSIONS per note are kept.
+   */
+  private snapshot(path: string, content: string, always = false, at = now()) {
+    const last = this.db.query<{ at: number }, [string]>("SELECT max(at) AS at FROM versions WHERE path = ?").get(path)?.at;
+    if (!always && last && at - last < VERSION_GAP_MS) return;
+    this.db.query("INSERT INTO versions (path, at, content) VALUES (?, ?, ?)").run(path, at, content);
+    this.db
+      .query("DELETE FROM versions WHERE path = ? AND id NOT IN (SELECT id FROM versions WHERE path = ? ORDER BY at DESC LIMIT ?)")
+      .run(path, path, MAX_VERSIONS);
+  }
+
+  /** A note's earlier versions, newest first: when, how big, and how it starts. */
+  versions(path: string): { id: number; at: number; size: number; preview: string }[] {
+    path = cleanPath(path, "note");
+    return this.db
+      .query<{ id: number; at: number; size: number; preview: string }, [string]>(
+        "SELECT id, at, length(content) AS size, substr(content, 1, 400) AS preview FROM versions WHERE path = ? ORDER BY at DESC",
+      )
+      .all(path)
+      .map((v) => ({
+        ...v,
+        // Its words, not its title (which every version shares): body lines without headings, run together.
+        preview: splitFrontmatter(v.preview)
+          .body.split("\n")
+          .filter((l) => l.trim() && !/^#{1,6}\s/.test(l))
+          .map((l) => l.trim())
+          .join(" ")
+          .slice(0, 160),
+      }));
+  }
+
+  /** One earlier version's full text. */
+  version(path: string, id: number): { id: number; at: number; content: string } {
+    const v = this.db
+      .query<{ id: number; at: number; content: string }, [number, string]>("SELECT id, at, content FROM versions WHERE id = ? AND path = ?")
+      .get(id, cleanPath(path, "note"));
+    if (!v) throw new VaultError(404, "no such version");
+    return v;
+  }
+
   /** A note's title from the index, without reading the file. */
   title(path: string): string | undefined {
     return this.db.query<{ title: string }, [string]>("SELECT title FROM notes WHERE path = ?").get(path)?.title;
@@ -489,7 +537,7 @@ export class Vault {
    * Saves a note. `baseHash` is the hash the client last read: null means "create, must not exist";
    * a mismatch is a conflict and returns the file as it is now so the client can merge.
    */
-  async write(path: string, content: string, baseHash: string | null): Promise<NoteMeta> {
+  async write(path: string, content: string, baseHash: string | null, opts: { keepVersion?: boolean } = {}): Promise<NoteMeta> {
     path = cleanPath(path, "note");
     if (Buffer.byteLength(content) > MAX_NOTE_BYTES) throw new VaultError(413, "note too large");
     const abs = await this.abs(path);
@@ -509,6 +557,7 @@ export class Vault {
           return m;
         }
       }
+      if (current !== null) this.snapshot(path, current, opts.keepVersion);
       await mkdir(dirname(abs), { recursive: true });
       await atomicWrite(abs, content);
       const st = await stat(abs);

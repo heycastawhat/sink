@@ -2,7 +2,7 @@
 
 import { esc } from './util.js';
 
-const ic = (name) => `<m3e-icon name="${esc(name)}"></m3e-icon>`;
+const ic = (name, slot) => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}></m3e-icon>`;
 
 function open(html, wire) {
   const host = document.getElementById('theme') ?? document.body;
@@ -58,6 +58,64 @@ export function askText({ title, label = 'Name', value = '', action = 'Save' }) 
         // Select the name without its extension, like a file manager.
         if (value) input.setSelectionRange(0, value.replace(/(\.excalidraw)?\.md$/i, '').length);
       };
+    },
+  );
+}
+
+/**
+ * Version history: `versions` (newest first, from GET /api/notes/versions) as a list; picking one loads its text
+ * with `load(id)` to read before restoring. `when(at)` formats a time. Resolves to the text to restore, or null.
+ */
+export function pickVersion({ versions, load, when }) {
+  return open(
+    `<div class="sink-dialog-body version-dialog">
+  <h2>Version history</h2>
+  <p class="muted small">Sink keeps the text from before each editing session, newest first.</p>
+  <div class="picker-list" role="listbox">${
+    versions.length
+      ? versions
+          .map(
+            (v) => `<button type="button" class="picker-row version-row" data-id="${v.id}">
+  ${ic('history')}<span class="version-main"><span class="version-when">${esc(when(v.at))}</span><span class="version-preview">${esc(v.preview || 'Empty')}</span></span></button>`,
+          )
+          .join('')
+      : '<p class="muted version-empty">No earlier versions yet. They start once you edit this note.</p>'
+  }</div>
+  <pre class="version-text" hidden></pre>
+  <p class="dialog-error" hidden></p>
+  <div class="dialog-actions">
+    <m3e-button data-back variant="text" hidden>${ic('arrow_back', 'icon')}All versions</m3e-button>
+    <span class="spacer"></span>
+    <m3e-button data-cancel variant="text">Close</m3e-button>
+    <m3e-button data-ok variant="filled" hidden>Restore</m3e-button>
+  </div>
+</div>`,
+    (dlg, done) => {
+      const list = dlg.querySelector('.picker-list');
+      const text = dlg.querySelector('.version-text');
+      const error = dlg.querySelector('.dialog-error');
+      const [backBtn, okBtn] = [dlg.querySelector('[data-back]'), dlg.querySelector('[data-ok]')];
+      let picked = null;
+      const show = (reading) => {
+        list.hidden = reading;
+        text.hidden = backBtn.hidden = okBtn.hidden = !reading;
+      };
+      list.addEventListener('click', async (e) => {
+        const row = e.target.closest('[data-id]');
+        if (!row) return;
+        try {
+          picked = (await load(Number(row.dataset.id))).content;
+          text.textContent = picked;
+          error.hidden = true;
+          show(true);
+        } catch (err) {
+          error.textContent = err.message;
+          error.hidden = false;
+        }
+      });
+      backBtn.addEventListener('click', () => show(false));
+      okBtn.addEventListener('click', () => done(picked));
+      dlg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
     },
   );
 }

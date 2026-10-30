@@ -7,7 +7,7 @@ import { backlinksHtml } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
-import { askText, pickFolder } from './dialogs.js';
+import { askText, pickFolder, pickVersion } from './dialogs.js';
 
 const $ = (id) => document.getElementById(id);
 const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
@@ -1080,6 +1080,32 @@ function wireScreen() {
       relocate(path);
     } catch (err) {
       toast(err.status === 409 ? `There's already a note called “${name}” here` : err.status === 400 ? 'Names can’t start with a dot or contain \\ : * ? " < > |' : err.message);
+    }
+  });
+
+  $('note-history').addEventListener('click', async () => {
+    if (!screen.path || !screen.editor) return;
+    await flush();
+    const path = screen.path;
+    let versions;
+    try {
+      ({ items: versions } = await api.versions(path));
+    } catch (err) {
+      return toast(err.message);
+    }
+    const when = (at) =>
+      new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    const text = await pickVersion({ versions, load: (id) => api.version(path, id), when });
+    if (text == null || screen.path !== path) return;
+    try {
+      // keep_version: what's here now becomes a version too, so a restore can itself be undone from this list.
+      const saved = await api.saveNote(path, text, screen.hash, {}, { keep_version: true });
+      Object.assign(screen, { hash: saved.hash, saved: text });
+      screen.editor.setText(text);
+      setStatus('Restored');
+      toast('Restored that version. The text it replaced is in the history too.');
+    } catch (err) {
+      toast(err.status === 409 ? 'This note changed elsewhere just now. Try again.' : err.message);
     }
   });
 

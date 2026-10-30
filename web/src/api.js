@@ -40,8 +40,10 @@ export const api = {
   searchNotes: (q) => request(`/notes?q=${encodeURIComponent(q)}&limit=100`),
   note: (path) => request(`/notes/file?${p(path)}`),
   backlinks: (path) => request(`/notes/backlinks?${p(path)}`),
-  saveNote: (path, content, baseHash, init = {}) =>
-    request(`/notes/file?${p(path)}`, { ...json('PUT', { content, base_hash: baseHash }), ...init }),
+  saveNote: (path, content, baseHash, init = {}, extra = {}) =>
+    request(`/notes/file?${p(path)}`, { ...json('PUT', { content, base_hash: baseHash, ...extra }), ...init }),
+  versions: (path) => request(`/notes/versions?${p(path)}`),
+  version: (path, id) => request(`/notes/versions/${id}?${p(path)}`),
   createNote: (body) => request('/notes', json('POST', body)),
   noteMeta: (path, body) => request(`/notes/meta?${p(path)}`, json('PATCH', body)),
   moveNote: (from, to) => request('/notes/move', json('POST', { from, to })),

@@ -1595,6 +1595,45 @@ body.dragging-note [data-drop-folder] {
   font-weight: 600;
 }
 
+.version-row {
+  align-items: flex-start;
+}
+
+.version-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.version-when {
+  font-weight: 600;
+}
+
+.version-preview {
+  overflow: hidden;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.version-empty {
+  margin: 12px;
+}
+
+.version-text {
+  max-height: 360px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border-radius: 12px;
+  background: var(--md-sys-color-surface-container-lowest);
+  font: 13px/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .picker-row m3e-icon {
   flex: none;
   --m3e-icon-size: 20px;

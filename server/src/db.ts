@@ -307,6 +307,17 @@ export const migrations: string[] = [
   CREATE INDEX links_src ON links(src);
   UPDATE notes SET mtime = 0;
   `,
+  // Version history: a note's text as it was before Sink overwrote it, at most one per note every few minutes.
+  // Lives here (the data dir), not in the vault, so Obsidian and sync tools never see it.
+  `
+  CREATE TABLE versions (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE,
+    at INTEGER NOT NULL,
+    content TEXT NOT NULL
+  );
+  CREATE INDEX versions_path ON versions(path, at DESC);
+  `,
 ];
 
 export function openDb(path: string): Database {

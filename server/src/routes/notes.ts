@@ -27,7 +27,8 @@ const TYPES: Record<string, string> = {
 };
 
 const pathQuery = z.object({ path: z.string().min(1).max(1024) });
-const saveBody = z.object({ content: z.string(), base_hash: z.string().max(64).nullable() });
+// keep_version: always keep the text being replaced as a version (restoring an old one shouldn't lose the current).
+const saveBody = z.object({ content: z.string(), base_hash: z.string().max(64).nullable(), keep_version: z.boolean().optional() });
 const createBody = z.object({
   folder: z.string().max(1024).default(""),
   title: z.string().trim().max(200).default(""),
@@ -71,6 +72,24 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     }),
   );
 
+  // Version history: the list, and one version's text. Restoring is a normal save of that text.
+  app.get("/notes/versions", (c) =>
+    run(c, async () => {
+      const q = pathQuery.safeParse(c.req.query());
+      if (!q.success) return c.json({ error: "invalid query" }, 400);
+      return c.json({ items: vault.versions(q.data.path) });
+    }),
+  );
+
+  app.get("/notes/versions/:id", (c) =>
+    run(c, async () => {
+      const q = pathQuery.safeParse(c.req.query());
+      const id = Number(c.req.param("id"));
+      if (!q.success || !Number.isInteger(id)) return c.json({ error: "invalid request" }, 400);
+      return c.json(vault.version(q.data.path, id));
+    }),
+  );
+
   // Notes that link to this one.
   app.get("/notes/backlinks", (c) =>
     run(c, async () => {
@@ -85,7 +104,7 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const q = pathQuery.safeParse(c.req.query());
       const body = saveBody.safeParse(await c.req.json().catch(() => null));
       if (!q.success || !body.success) return c.json({ error: "invalid request" }, 400);
-      return c.json(await vault.write(q.data.path, body.data.content, body.data.base_hash));
+      return c.json(await vault.write(q.data.path, body.data.content, body.data.base_hash, { keepVersion: body.data.keep_version }));
     }),
   );
 

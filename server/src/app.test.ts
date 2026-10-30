@@ -568,6 +568,37 @@ describe("notes", () => {
     expect((((await after.json()) as any).items as { path: string }[]).map((i) => i.path)).toEqual(["Links.md"]);
   });
 
+  test("version history: one per sitting, newest first, survives a rename, restorable", async () => {
+    const token = await login();
+    const created = (await (await send(token, "POST", "/api/notes", { title: "Essay", content: "# Essay\n\nv1\n" })).json()) as any;
+    let hash = created.hash;
+    const save = async (text: string) => {
+      hash = ((await (await send(token, "PUT", q("Essay.md"), { content: text, base_hash: hash })).json()) as any).hash;
+    };
+    await save("# Essay\n\nv2\n");
+    await save("# Essay\n\nv3\n"); // same sitting: no new version
+    const list = async (path = "Essay.md") =>
+      (((await (await get(token, `/api/notes/versions?path=${encodeURIComponent(path)}`)).json()) as any).items as any[]);
+    expect((await list()).map((v) => v.preview)).toEqual(["v1"]);
+
+    // Ten minutes later, the next save keeps what was there.
+    setup.db.query("UPDATE versions SET at = at - 11 * 60000").run();
+    await save("# Essay\n\nv4\n");
+    expect((await list()).map((v) => v.preview)).toEqual(["v3", "v1"]);
+
+    await send(token, "POST", "/api/notes/move", { from: "Essay.md", to: "Drafts/Essay.md" });
+    const moved = await list("Drafts/Essay.md");
+    expect(moved).toHaveLength(2);
+    const old = (await (await get(token, `/api/notes/versions/${moved[1].id}?path=${encodeURIComponent("Drafts/Essay.md")}`)).json()) as any;
+    expect(old.content).toBe("# Essay\n\nv1\n");
+    // Restoring keeps what it replaces, even mid-sitting.
+    const cur = (await (await get(token, q("Drafts/Essay.md"))).json()) as any;
+    await send(token, "PUT", q("Drafts/Essay.md"), { content: old.content, base_hash: cur.hash, keep_version: true });
+    expect((await list("Drafts/Essay.md")).map((v) => v.preview)).toEqual(["v4", "v3", "v1"]);
+    // Another note's path can't read it.
+    expect((await get(token, `/api/notes/versions/${moved[1].id}?path=Other.md`)).status).toBe(404);
+  });
+
   test("renaming only the case of a note works", async () => {
     const token = await login();
     await send(token, "POST", "/api/notes", { title: "shopping", content: "# shopping\n" });
