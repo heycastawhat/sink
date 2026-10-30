@@ -132,13 +132,33 @@ suspend fun Api.searchNotes(q: String): List<NoteMeta> {
 
 suspend fun Api.note(path: String): Note = call(authed(pathUrl("/api/notes/file", path)).build()) { json.decodeFromString(it) }
 
-suspend fun Api.saveNote(path: String, content: String, baseHash: String?): NoteMeta {
+/** [keepVersion]: keep the text being replaced as a version even mid-sitting (restoring an old version). */
+suspend fun Api.saveNote(path: String, content: String, baseHash: String?, keepVersion: Boolean = false): NoteMeta {
     val body = buildJsonObject {
         put("content", content)
         if (baseHash == null) put("base_hash", JsonNull) else put("base_hash", baseHash)
+        if (keepVersion) put("keep_version", true)
     }
     return call(authed(pathUrl("/api/notes/file", path)).put(jsonBody(body)).build()) { json.decodeFromString(it) }
 }
+
+/** An earlier version of a note (version history): when, how big, and how it starts. */
+@Serializable
+data class Version(val id: Long, val at: Long, val size: Int = 0, val preview: String = "")
+
+@Serializable
+private data class VersionList(val items: List<Version>)
+
+@Serializable
+private data class VersionText(val content: String)
+
+/** A note's earlier versions, newest first. */
+suspend fun Api.versions(path: String): List<Version> =
+    call(authed(pathUrl("/api/notes/versions", path)).build()) { json.decodeFromString<VersionList>(it).items }
+
+/** One earlier version's full text. */
+suspend fun Api.versionText(path: String, id: Long): String =
+    call(authed(pathUrl("/api/notes/versions/$id", path)).build()) { json.decodeFromString<VersionText>(it).content }
 
 suspend fun Api.createNote(folder: String, title: String, content: String): NoteMeta {
     val body = buildJsonObject {

@@ -18,6 +18,7 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
 import './editor.css';
+import { inlineHtml } from './util.js';
 import { registry } from './plugin-api.js';
 
 const highlight = HighlightStyle.define([
@@ -263,6 +264,102 @@ const pluginBlocks = StateField.define({
     tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? pluginBlocksDeco(tr.state) : deco,
   provide: (f) => EditorView.decorations.from(f),
 });
+
+/** A markdown table's row as cells: split on unescaped pipes, outer pipes optional. */
+function tableCells(line) {
+  const cells = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/);
+  return cells.map((c) => c.trim().replace(/\\\|/g, '|'));
+}
+
+/** A GFM table, drawn as a table while the cursor is elsewhere (Obsidian's live preview). Click it to edit. */
+class TableWidget extends WidgetType {
+  constructor(source) {
+    super();
+    this.source = source;
+  }
+  eq(other) {
+    return other.source === this.source;
+  }
+  toDOM(view) {
+    const [head, delim, ...rows] = this.source.split('\n').filter((l) => l.trim());
+    const align = tableCells(delim ?? '').map((d) => (/^:-+:$/.test(d) ? 'center' : /^-+:$/.test(d) ? 'right' : ''));
+    const cell = (tag, text, i) => `<${tag}${align[i] ? ` style="text-align:${align[i]}"` : ''}>${inlineHtml(text)}</${tag}>`;
+    const width = tableCells(head).length;
+    const pad = (cells) => [...cells, ...Array(Math.max(0, width - cells.length)).fill('')].slice(0, width);
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-table';
+    wrap.title = 'Click to edit';
+    wrap.innerHTML = `<table><thead><tr>${pad(tableCells(head)).map((c, i) => cell('th', c, i)).join('')}</tr></thead><tbody>${rows
+      .map((r) => `<tr>${pad(tableCells(r)).map((c, i) => cell('td', c, i)).join('')}</tr>`)
+      .join('')}</tbody></table>`;
+    // Clicking a cell opens the table's markdown with the caret on that row (CodeMirror can't place it in a widget).
+    wrap.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      // The table is replaced by its source at once, so outer handlers would see a click on nothing.
+      e.stopPropagation();
+      const tr = e.target.closest('tr');
+      const body = tr?.parentElement?.tagName === 'TBODY';
+      const row = !tr ? 0 : body ? 2 + [...tr.parentElement.children].indexOf(tr) : 0;
+      // posAtDOM gives one edge of the widget; the Table node around it gives its first line.
+      const at = view.posAtDOM(wrap);
+      let node = syntaxTree(view.state).resolveInner(at, -1);
+      while (node && node.name !== 'Table') node = node.parent;
+      if (!node) node = syntaxTree(view.state).resolveInner(at, 1);
+      while (node && node.name !== 'Table') node = node.parent;
+      const start = view.state.doc.lineAt(node ? node.from : at);
+      const line = view.state.doc.line(Math.min(start.number + row, view.state.doc.lines));
+      view.dispatch({ selection: { anchor: line.from + Math.min(2, line.length) } });
+      view.focus();
+    });
+    return wrap;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+function tablesDeco(state) {
+  const ranges = [];
+  const sel = state.selection.ranges;
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== 'Table') return;
+      const from = state.doc.lineAt(node.from).from;
+      const to = state.doc.lineAt(node.to).to;
+      if (!sel.some((r) => r.to >= from && r.from <= to)) {
+        ranges.push(Decoration.replace({ widget: new TableWidget(state.sliceDoc(from, to)), block: true }).range(from, to));
+      }
+      return false;
+    },
+  });
+  return Decoration.set(ranges);
+}
+
+// Same as plugin blocks: a state field, refreshed as the parse tree grows.
+const tables = StateField.define({
+  create: (state) => tablesDeco(state),
+  update: (deco, tr) => (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? tablesDeco(tr.state) : deco),
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+/** Slash commands that are part of the editor, not a plugin. */
+const CORE_COMMANDS = [
+  {
+    id: 'table',
+    name: 'Table',
+    // On its own line, with a blank line before it so markdown reads it as a table, caret in the first header.
+    run: (ctx) => {
+      const { state } = ctx.view;
+      const at = state.selection.main.head;
+      const line = state.doc.lineAt(at);
+      const before = line.text.trim() ? '\n\n' : line.number > 1 && state.doc.line(line.number - 1).text.trim() ? '\n' : '';
+      const table = '| Column | Column |\n| ------ | ------ |\n|        |        |\n';
+      const from = line.text.trim() ? line.to : at;
+      ctx.view.dispatch({ changes: { from, insert: before + table }, selection: { anchor: from + before.length + 2, head: from + before.length + 8 } });
+      ctx.view.focus();
+    },
+  },
+];
 
 /** What a slash command gets to work with. */
 function commandContext(view, opts) {
@@ -531,14 +628,15 @@ export function createEditor(opts) {
     };
   };
 
-  // Typing "/" at the start of a line or after a space offers plugin commands: /mermaid, /today, …
+  // Typing "/" at the start of a line or after a space offers the editor's own commands (/table) and plugin ones
+  // (/mermaid, /today, …).
   const completeCommands = (ctx) => {
     const m = ctx.matchBefore(/(?:^|\s)\/[\w-]*$/);
-    if (!m || !registry.commands.length) return null;
+    if (!m) return null;
     const slash = m.from + m.text.indexOf('/');
     return {
       from: slash,
-      options: registry.commands.map((c) => ({
+      options: [...CORE_COMMANDS, ...registry.commands].map((c) => ({
         label: `/${c.id}`,
         detail: c.name,
         apply: (view, _completion, from, to) => {
@@ -587,6 +685,7 @@ export function createEditor(opts) {
         livePreview(opts),
         properties,
         pluginBlocks,
+        tables,
         autocompletion({ override: [completeLinks, completeCommands], icons: false }),
         placeholderExt(opts.placeholder ?? 'Note'),
         // Tab takes the highlighted suggestion ([[link]] or /command); with no menu open it indents as usual.

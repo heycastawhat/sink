@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.FormatColorReset
@@ -93,6 +94,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import nz.joshp.sink.data.backlinksJson
 import nz.joshp.sink.data.pluginFile
+import nz.joshp.sink.data.saveNote
 import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.NOTE_COLORS
@@ -204,6 +206,7 @@ fun NoteScreen(
     var palette by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var history by remember { mutableStateOf(false) }
     var web by remember { mutableStateOf<WebView?>(null) }
     var pageReady by remember { mutableStateOf(false) }
     var loadedNote by remember { mutableStateOf<String?>(null) }
@@ -495,6 +498,32 @@ fun NoteScreen(
         }
     }
 
+    /** Puts an earlier version back. The text it replaces is kept as a version too, so a restore can be undone. */
+    fun restore(text: String) {
+        history = false
+        val p = ed.path ?: return
+        scope.launch {
+            saveJob?.cancel()
+            save()
+            runCatching { api()!!.saveNote(p, text, ed.hash, keepVersion = true) }
+                .onSuccess { m ->
+                    store.saveNote(Note(m.path, m.title, m.hash, text, m.mtime, m.pinned, m.color))
+                    ed.hash = m.hash
+                    ed.saved = text
+                    ed.current = text
+                    setEditorText(text)
+                    status = "Restored"
+                    vm.refresh()
+                }
+                .onFailure {
+                    snackbar.showSnackbar(
+                        if ((it as? ApiException)?.code == 409) "This note changed elsewhere just now. Try again."
+                        else "Couldn't restore: ${it.message}",
+                    )
+                }
+        }
+    }
+
     /** No "are you sure?": the notes list offers Undo, and the web's Trash page has it after that. */
     fun trash() {
         saveJob?.cancel()
@@ -579,6 +608,14 @@ fun NoteScreen(
                             onClick = {
                                 menu = false
                                 moving = true
+                            },
+                        )
+                        if (ed.path != null) DropdownMenuItem(
+                            text = { Text("Version history") },
+                            leadingIcon = { Icon(Icons.Outlined.History, null) },
+                            onClick = {
+                                menu = false
+                                history = true
                             },
                         )
                         DropdownMenuItem(
@@ -688,6 +725,12 @@ fun NoteScreen(
             },
             onDismiss = { moving = false },
         )
+    }
+
+    if (history) {
+        val p = ed.path
+        if (p == null) history = false
+        else VersionHistorySheet(api = ::api, path = p, onRestore = ::restore, onDismiss = { history = false })
     }
 
     if (renaming) {
