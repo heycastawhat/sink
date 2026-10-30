@@ -7,7 +7,8 @@ import { backlinksHtml } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
-import { askText, pickFolder, pickVersion, shareNote } from './dialogs.js';
+import { askText, pickFolder, pickFromList, pickVersion, shareNote } from './dialogs.js';
+import { fillTemplate, templatesIn } from './templates.js';
 
 const $ = (id) => document.getElementById(id);
 const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
@@ -777,6 +778,8 @@ function mountEditor(text) {
       return embed;
     },
     onError: (err) => toast(`Upload failed: ${err.message}`),
+    // /template: a filled-in template at the cursor.
+    pickTemplate: () => chooseTemplate(screen.path ? fileName(screen.path) : '', { inline: true }),
   });
 }
 
@@ -959,7 +962,39 @@ export function newNote() {
   openFromApp('#/new');
 }
 
-export async function openDraft({ text = '', folder = state.folder } = {}) {
+/** Text the next draft starts with (New → From template). */
+let draftText = '';
+
+/** Asks which template; resolves to its text with the variables filled in, or null. */
+async function chooseTemplate(title = '', { inline = false } = {}) {
+  if (!state.loaded) await loadNotes();
+  const templates = templatesIn(state.notes);
+  const path = await pickFromList({
+    title: 'Templates',
+    items: templates.map((n) => ({ id: n.path, label: n.title, detail: n.excerpt?.split('\n').find((l) => l.trim()) ?? '' })),
+    empty: 'Put notes in a folder called Templates to use them here. {{title}}, {{date}} and {{time}} get filled in.',
+  });
+  if (!path) return null;
+  const note = await api.note(path);
+  // Dropped into the middle of a note, its frontmatter would just be text: leave it behind there.
+  const text = inline ? note.content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/, '') : note.content;
+  return fillTemplate(text, { title });
+}
+
+/** New → From template: a new note that starts as a filled-in template. */
+export async function newFromTemplate() {
+  try {
+    const text = await chooseTemplate();
+    if (text == null) return;
+    draftText = text;
+    newNote();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+export async function openDraft({ text = draftText, folder = state.folder } = {}) {
+  draftText = '';
   await closeEditor();
   showScreen();
   Object.assign(screen, { path: null, folder, hash: null, saved: '', pinned: false, color: null });

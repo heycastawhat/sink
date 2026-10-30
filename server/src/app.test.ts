@@ -666,6 +666,42 @@ describe("notes", () => {
     expect((await setup.app.request(`/api/public/share/${share.id}`)).status).toBe(404);
   });
 
+  test("moving or renaming a note updates links to it", async () => {
+    const token = await login();
+    const make = (folder: string, title: string, content: string) => send(token, "POST", "/api/notes", { folder, title, content });
+    await make("Garden", "Soil", "# Soil\n");
+    await make("", "Plan", "# Plan\n\n[[Soil]], [[soil#pH|the dirt]], ![[Garden/Soil]], [notes](Garden/Soil.md#top), [[Soils]], [[Other]]\n");
+    await send(token, "POST", "/api/notes/move", { from: "Garden/Soil.md", to: "Beds/Loam.md" });
+    const plan = ((await (await get(token, q("Plan.md"))).json()) as any).content;
+    expect(plan).toBe("# Plan\n\n[[Loam]], [[Loam#pH|the dirt]], ![[Beds/Loam]], [notes](Beds/Loam.md#top), [[Soils]], [[Other]]\n");
+
+    // A bare name another note also has is left alone: it may mean that one.
+    await make("", "Loam", "# Loam (the other one)\n");
+    await make("", "Mix", "# Mix\n\n[[Loam]] and [[Beds/Loam]]\n");
+    await send(token, "POST", "/api/notes/move", { from: "Beds/Loam.md", to: "Beds/Clay.md" });
+    expect(((await (await get(token, q("Mix.md"))).json()) as any).content).toBe("# Mix\n\n[[Loam]] and [[Beds/Clay]]\n");
+
+    // A whole folder moving updates path links into it.
+    await send(token, "POST", "/api/notes/move", { from: "Beds", to: "Garden/Beds" });
+    expect(((await (await get(token, q("Mix.md"))).json()) as any).content).toBe("# Mix\n\n[[Loam]] and [[Garden/Beds/Clay]]\n");
+  });
+
+  test("export: every note and attachment in a zip that unzips", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "Ideas", title: "Garden", content: "# Garden\n\nRaised beds, cedar. ".repeat(20) });
+    writeFileSync(file("photo.png"), "not really a png");
+    const res = await get(token, "/api/notes/export");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toContain("sink-notes-");
+    const out = join(mkdtempSync(join(tmpdir(), "sink-zip-")), "x.zip");
+    writeFileSync(out, new Uint8Array(await res.arrayBuffer()));
+    const list = Bun.spawnSync(["unzip", "-Z1", out]).stdout.toString().trim().split("\n").sort();
+    expect(list).toEqual(["Ideas/Garden.md", "photo.png"]);
+    const text = Bun.spawnSync(["unzip", "-p", out, "Ideas/Garden.md"]).stdout.toString();
+    expect(text).toBe("# Garden\n\nRaised beds, cedar. ".repeat(20));
+    expect(Bun.spawnSync(["unzip", "-tq", out]).exitCode).toBe(0);
+  });
+
   test("renaming only the case of a note works", async () => {
     const token = await login();
     await send(token, "POST", "/api/notes", { title: "shopping", content: "# shopping\n" });

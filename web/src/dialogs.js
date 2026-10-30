@@ -63,6 +63,37 @@ export function askText({ title, label = 'Name', value = '', action = 'Save' }) 
 }
 
 /**
+ * Picks one of `items` ({ id, label, detail?, icon? }). Resolves to its id, or null if cancelled. `empty` is shown
+ * when there's nothing to pick.
+ */
+export function pickFromList({ title, items, empty = 'Nothing here yet.' }) {
+  return open(
+    `<div class="sink-dialog-body">
+  <h2>${esc(title)}</h2>
+  <div class="picker-list" role="listbox">${
+    items.length
+      ? items
+          .map(
+            (it) => `<button type="button" class="picker-row version-row" data-id="${esc(it.id)}">${ic(it.icon ?? 'description')}<span class="version-main"><span class="version-when">${esc(it.label)}</span>${
+              it.detail ? `<span class="version-preview">${esc(it.detail)}</span>` : ''
+            }</span></button>`,
+          )
+          .join('')
+      : `<p class="muted version-empty">${esc(empty)}</p>`
+  }</div>
+  <div class="dialog-actions"><m3e-button data-cancel variant="text">Cancel</m3e-button></div>
+</div>`,
+    (dlg, done) => {
+      dlg.querySelector('.picker-list').addEventListener('click', (e) => {
+        const row = e.target.closest('[data-id]');
+        if (row) done(row.dataset.id);
+      });
+      dlg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
+    },
+  );
+}
+
+/**
  * Sharing one note: a link anyone can read (not edit). `shared` is the current link or null; `share()` makes one
  * and resolves to its URL, `unshare()` stops it. Resolves when closed.
  */

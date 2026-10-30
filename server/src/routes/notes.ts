@@ -4,6 +4,7 @@ import { extname } from "node:path";
 import { z } from "zod";
 import type { AuthEnv } from "../auth";
 import { cleanPath, COLORS, toFtsQuery, VaultError, type Vault } from "../notes";
+import { ZipWriter } from "../zip";
 
 const TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -206,6 +207,23 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const path = ref ? vault.resolveFile(ref) : null;
       if (!path) return c.json({ error: "not found" }, 404);
       return attachmentResponse(vault, path);
+    }),
+  );
+
+  // Everything in the vault as a zip (Settings → Download all notes). Not for assistants' tokens.
+  app.get("/notes/export", (c) =>
+    run(c, async () => {
+      if (c.get("scope") !== "full") return c.json({ error: "not allowed with this token" }, 403);
+      const zip = new ZipWriter();
+      for await (const f of vault.allFiles()) zip.add(f.path, f.data, f.mtime);
+      const day = new Date().toISOString().slice(0, 10);
+      return new Response(zip.finish(), {
+        headers: {
+          "content-type": "application/zip",
+          "content-disposition": `attachment; filename="sink-notes-${day}.zip"`,
+          "cache-control": "no-store",
+        },
+      });
     }),
   );
 

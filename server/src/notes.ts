@@ -212,6 +212,29 @@ export function parseLinks(content: string): { target: string; line: string }[] 
   return out;
 }
 
+/** Rewrites links to a note that moved (see Vault.relink). `oldFull`/`oldName` are lower case, without ".md". */
+export function rewriteLinks(
+  content: string,
+  m: { oldFull: string; oldName: string; newFull: string; newName: string; byName: boolean },
+): string {
+  const norm = (t: string) => t.trim().replace(/^(\.{1,2}\/|\/)+/, "").replace(/\.md$/i, "").toLowerCase();
+  const wiki = content.replace(/(!?\[\[)([^\]|#]+)((?:#[^\]|]*)?(?:\|[^\]]*)?\]\])/g, (all, open: string, t: string, rest: string) => {
+    const n = norm(t);
+    const ext = /\.md\s*$/i.test(t) ? ".md" : "";
+    if (t.includes("/")) return n === m.oldFull || m.oldFull.endsWith("/" + n) ? `${open}${m.newFull}${ext}${rest}` : all;
+    return m.byName && n === m.oldName ? `${open}${m.newName}${ext}${rest}` : all;
+  });
+  return wiki.replace(/\]\(<?([^)>\s]+\.md)(#[^)>]*)?(>?)\)/gi, (all, href: string, anchor = "", close: string) => {
+    let decoded = href;
+    try {
+      decoded = decodeURIComponent(href);
+    } catch {}
+    if (/^[a-z][a-z0-9+.-]*:/i.test(decoded) || norm(decoded) !== m.oldFull) return all;
+    const next = close ? `${m.newFull}.md` : encodeURI(`${m.newFull}.md`);
+    return `](${close ? "<" : ""}${next}${anchor}${close})`;
+  });
+}
+
 export function cardText(body: string, title: string): string {
   const lines = body.replace(/^\s+/, "").split("\n");
   if (lines[0]?.replace(/^#+\s*/, "").trim() === title) lines.shift();
@@ -640,6 +663,41 @@ export class Vault {
     }
     for (let d = dirname(to); d !== "."; d = dirname(d)) this.folders.add(d);
     for (const old of moved) this.emit({ type: "note.moved", path: isNote ? to : to + old.slice(from.length), from: old, source: "sink" });
+    // Links to what moved follow it, as in Obsidian. A failure here leaves a link stale, never the move undone.
+    for (const old of moved) {
+      await this.relink(old, isNote ? to : to + old.slice(from.length)).catch((err) =>
+        console.warn(`[notes] couldn't update links to ${old}: ${(err as Error).message}`),
+      );
+    }
+  }
+
+  /**
+   * After a note moved from `from` to `to`, rewrites links to it in other notes: `[[Folder/Name]]` and markdown
+   * links by path always; `[[Name]]` by name only when it was renamed and no other note has its old name (else
+   * the link may mean that one). Headings and aliases are kept. Titles used as links are left alone.
+   */
+  private async relink(from: string, to: string) {
+    const oldFull = from.replace(/\.md$/i, "").toLowerCase();
+    const parts = oldFull.split("/");
+    const oldName = parts.at(-1)!;
+    const newFull = to.replace(/\.md$/i, "");
+    const newName = newFull.split("/").pop()!;
+    const renamed = newName.toLowerCase() !== oldName;
+    const nameIsOurs = !this.db
+      .query<{ n: number }, [string, string, string, string]>(
+        "SELECT count(*) AS n FROM notes WHERE path != ? AND (lower(path) = ? OR substr(lower(path), -length(?)) = ?)",
+      )
+      .get(to, `${oldName}.md`, `/${oldName}.md`, `/${oldName}.md`)!.n;
+    const refs = parts.map((_, i) => parts.slice(i).join("/"));
+    const srcs = this.db
+      .query<{ src: string }, string[]>(`SELECT DISTINCT src FROM links WHERE target IN (${refs.map(() => "?").join(", ")})`)
+      .all(...refs)
+      .map((r) => r.src);
+    for (const src of srcs) {
+      const note = await this.read(src);
+      const next = rewriteLinks(note.content, { oldFull, oldName, newFull, newName, byName: renamed && nameIsOurs });
+      if (next !== note.content) await this.write(src, next, note.hash);
+    }
   }
 
   /** Moves a note or folder into `.trash/`, keeping its path there (Obsidian's "move to .trash" behaviour). */
@@ -898,6 +956,27 @@ export class Vault {
       fsError(err, "attachment");
     }
     throw new VaultError(409, "too many attachments with that name");
+  }
+
+  /**
+   * Every file in the vault (notes, attachments, anything else), for an export. Hidden folders (.trash, .obsidian)
+   * and symlinks are left out, as the scan leaves them.
+   */
+  async *allFiles(): AsyncGenerator<{ path: string; data: Uint8Array; mtime: Date }> {
+    const walk = async function* (this: Vault, rel: string): AsyncGenerator<{ path: string; data: Uint8Array; mtime: Date }> {
+      const entries = await readdir(rel ? join(this.dir, rel) : this.dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.name.startsWith(".") || SKIP_DIRS.has(e.name)) continue;
+        const path = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) yield* walk.call(this, path);
+        else if (e.isFile()) {
+          const abs = await this.abs(path);
+          const st = await stat(abs);
+          yield { path, data: await readFile(abs), mtime: st.mtime };
+        }
+      }
+    };
+    yield* walk.call(this, "");
   }
 
   async readFile(path: string): Promise<Uint8Array> {

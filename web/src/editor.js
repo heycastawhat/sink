@@ -343,6 +343,16 @@ const tables = StateField.define({
 /** Slash commands that are part of the editor, not a plugin. */
 const CORE_COMMANDS = [
   {
+    id: 'template',
+    name: 'Insert a template',
+    // The app picks it (opts.pickTemplate); pages without templates (a shared note, Android for now) skip it.
+    available: (opts) => !!opts.pickTemplate,
+    run: async (ctx, opts) => {
+      const text = await opts.pickTemplate();
+      if (text) ctx.insert(text);
+    },
+  },
+  {
     id: 'table',
     name: 'Table',
     // On its own line, with a blank line before it so markdown reads it as a table, caret in the first header.
@@ -635,12 +645,12 @@ export function createEditor(opts) {
     const slash = m.from + m.text.indexOf('/');
     return {
       from: slash,
-      options: [...CORE_COMMANDS, ...registry.commands].map((c) => ({
+      options: [...CORE_COMMANDS.filter((c) => !c.available || c.available(opts)), ...registry.commands].map((c) => ({
         label: `/${c.id}`,
         detail: c.name,
         apply: (view, _completion, from, to) => {
           view.dispatch({ changes: { from, to, insert: '' } });
-          Promise.resolve(c.run(commandContext(view, opts))).catch((err) => opts.onError?.(err));
+          Promise.resolve(c.run(commandContext(view, opts), opts)).catch((err) => opts.onError?.(err));
         },
       })),
       validFor: /^\/[\w-]*$/,

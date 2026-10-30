@@ -304,6 +304,13 @@ async function renderSettings() {
     <m3e-button id="keep-import" variant="tonal">${ic('upload', 'icon')}Import</m3e-button>
     <input id="keep-file" type="file" accept=".zip,.json,image/*" multiple hidden />
   </div>
+  <div class="setting-row">
+    <div class="grow">
+      <div class="setting-title">Download all notes</div>
+      <div class="muted small">Every note and attachment as a zip of plain files, in their folders. Opens in Obsidian or any editor.</div>
+    </div>
+    <m3e-button id="export-notes" variant="tonal">${ic('download', 'icon')}Download</m3e-button>
+  </div>
 </section>
 
 <section class="setting-card">
@@ -466,6 +473,8 @@ $('settings').addEventListener('click', async (e) => {
     } catch (err) {
       toast(err.message);
     }
+  } else if (id === 'export-notes') {
+    location.href = '/api/notes/export';
   } else if (id === 'keep-import') {
     $('keep-file').click();
   } else if (id === 'open-trash') {
@@ -484,6 +493,7 @@ const NEW_ITEMS = [
   { id: 'todo', label: 'Todo', icon: 'add_task', run: () => notes.quickTodo() },
   { id: 'folder', label: 'Folder', icon: 'create_new_folder', run: () => notes.newFolderHere(state.view === 'notes' ? state.folder : '') },
   { id: 'board', label: 'Board', icon: 'draw', run: () => notes.newBoard() },
+  { id: 'template', label: 'From template', icon: 'content_copy', run: () => notes.newFromTemplate() },
 ];
 const itemHtml = (cls) =>
   NEW_ITEMS.map((it) => `<button class="${cls}" role="menuitem" data-new="${it.id}">${ic(it.icon)}<span>${it.label}</span></button>`).join('');
