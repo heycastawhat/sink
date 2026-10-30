@@ -72,6 +72,18 @@ function readFiles(files) {
   return entries;
 }
 
+/** The file name the server gives a note with this title (server/src/notes.ts fileNameFor), without ".md". */
+function fileNameFor(title) {
+  const name = title
+    .replace(/[\\/:*?"<>|#^[\]\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '')
+    .slice(0, 100)
+    .trim();
+  return name || 'Untitled';
+}
+
 const yamlString = (s) => (/^[\w .-]+$/.test(s) && !/^(true|false|null|yes|no)$/i.test(s) ? s : JSON.stringify(s));
 
 /** One Keep note (Takeout's JSON) as markdown, without its images. */
@@ -111,8 +123,11 @@ export async function importKeep(files, progress = () => {}) {
   const notes = [...entries.keys()].filter((n) => /\.json$/i.test(n) && !/Labels\.txt$/i.test(n));
   // Images are found by file name, next to the JSON that mentions them.
   const byName = new Map([...entries.keys()].map((n) => [n.split('/').pop(), n]));
+  // Already imported: the server names each note's file after its title, numbering repeats ("Groceries 1.md"), so
+  // the nth Keep note called X lands at a known path. If that path is there, this note was imported before.
   const { notes: existing } = await api.notes();
-  const have = new Set(existing.map((n) => `${n.path.includes('/') ? n.path.slice(0, n.path.lastIndexOf('/')) : ''}\n${n.title}`));
+  const have = new Set(existing.map((n) => n.path.toLowerCase()));
+  const seen = new Map();
   const result = { imported: 0, skipped: 0, failed: 0 };
   const text = new TextDecoder();
   let done = 0;
@@ -127,7 +142,10 @@ export async function importKeep(files, progress = () => {}) {
     if (typeof k !== 'object' || !k || !('textContent' in k || 'listContent' in k)) continue;
     if (k.isTrashed) continue;
     const note = keepToMarkdown(k);
-    if (have.has(`${note.folder}\n${note.title}`)) {
+    const base = `${note.folder}/${fileNameFor(note.title)}`;
+    const nth = seen.get(base.toLowerCase()) ?? 0;
+    seen.set(base.toLowerCase(), nth + 1);
+    if (have.has(`${base}${nth ? ` ${nth}` : ''}.md`.toLowerCase())) {
       result.skipped++;
       continue;
     }
@@ -141,7 +159,6 @@ export async function importKeep(files, progress = () => {}) {
         content += `\n${embed}\n`;
       }
       await api.createNote({ folder: note.folder, title: note.title, content });
-      have.add(`${note.folder}\n${note.title}`);
       result.imported++;
     } catch {
       result.failed++;

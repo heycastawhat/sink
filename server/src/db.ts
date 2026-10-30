@@ -318,6 +318,15 @@ export const migrations: string[] = [
   );
   CREATE INDEX versions_path ON versions(path, at DESC);
   `,
+  // Versions outlive their index row: a note in the trash (or briefly missing on a flaky share) keeps its history,
+  // and a save never fails on it. Moves update the path; the trash purge drops versions of notes long gone.
+  `
+  CREATE TABLE versions_new (id INTEGER PRIMARY KEY, path TEXT NOT NULL, at INTEGER NOT NULL, content TEXT NOT NULL);
+  INSERT INTO versions_new SELECT id, path, at, content FROM versions;
+  DROP TABLE versions;
+  ALTER TABLE versions_new RENAME TO versions;
+  CREATE INDEX versions_path ON versions(path, at DESC);
+  `,
 ];
 
 export function openDb(path: string): Database {

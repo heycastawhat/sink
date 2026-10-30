@@ -498,29 +498,50 @@ fun NoteScreen(
         }
     }
 
-    /** Puts an earlier version back. The text it replaces is kept as a version too, so a restore can be undone. */
+    /**
+     * Puts an earlier version back. The text it replaces is kept as a version too, so a restore can be undone. Runs
+     * under the save lock after saving what's on screen, so no autosave races it; refused while an offline edit is
+     * still queued, since replaying that later would fight the restored text.
+     */
     fun restore(text: String) {
         history = false
-        val p = ed.path ?: return
-        scope.launch {
+        val w = web ?: return
+        w.evaluateJavascript("window.sink.getText()") { raw ->
+            runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
             saveJob?.cancel()
-            save()
-            runCatching { api()!!.saveNote(p, text, ed.hash, keepVersion = true) }
-                .onSuccess { m ->
-                    store.saveNote(Note(m.path, m.title, m.hash, text, m.mtime, m.pinned, m.color))
-                    ed.hash = m.hash
-                    ed.saved = text
-                    ed.current = text
-                    setEditorText(text)
-                    status = "Restored"
-                    vm.refresh()
+            scope.launch {
+                saveLock.withLock {
+                    val p = ed.path ?: return@withLock
+                    val api = api() ?: return@withLock
+                    if (ed.dirty) {
+                        val r = NoteSaver.save(context, api, PendingEdit(ed.key, p, ed.folder, ed.hash, ed.current))
+                        if (r is SaveResult.Saved) {
+                            ed.hash = r.meta.hash
+                            ed.saved = ed.current
+                        }
+                    }
+                    if (ed.queued != null || store.pending(ed.key) != null || ed.dirty) {
+                        snackbar.showSnackbar("Your latest edits haven't reached the server yet. Try again once they have.")
+                        return@withLock
+                    }
+                    runCatching { api.saveNote(p, text, ed.hash, keepVersion = true) }
+                        .onSuccess { m ->
+                            store.saveNote(Note(m.path, m.title, m.hash, text, m.mtime, m.pinned, m.color))
+                            ed.hash = m.hash
+                            ed.saved = text
+                            ed.current = text
+                            setEditorText(text)
+                            status = "Restored"
+                            vm.refresh()
+                        }
+                        .onFailure {
+                            snackbar.showSnackbar(
+                                if ((it as? ApiException)?.code == 409) "This note changed elsewhere just now. Try again."
+                                else "Couldn't restore: ${it.message}",
+                            )
+                        }
                 }
-                .onFailure {
-                    snackbar.showSnackbar(
-                        if ((it as? ApiException)?.code == 409) "This note changed elsewhere just now. Try again."
-                        else "Couldn't restore: ${it.message}",
-                    )
-                }
+            }
         }
     }
 

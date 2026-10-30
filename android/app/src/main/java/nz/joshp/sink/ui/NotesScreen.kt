@@ -402,7 +402,7 @@ private fun cardLines(text: String): List<CardLine> {
         val l = raw.substring(lead.length)
         // Table rows as their cells; the |---| line under the header is dropped.
         if (TABLE_ROW.matches(l)) {
-            if (!TABLE_RULE.matches(l)) out += CardLine.Row(l.trim().removePrefix("|").removeSuffix("|").split(Regex("""(?<!\\)\|""")).map { it.trim() })
+            if (!TABLE_RULE.matches(l)) out += CardLine.Row(l.trim().removePrefix("|").removeSuffix("|").split(Regex("""(?<!\\)\|""")).map { it.trim().replace("\\|", "|") })
             continue
         }
         TASK.find(l)?.let { out += CardLine.Task(it.groupValues[1] != " ", it.groupValues[2], depth); continue }

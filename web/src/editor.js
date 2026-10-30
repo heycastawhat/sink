@@ -18,7 +18,7 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
 import './editor.css';
-import { inlineHtml } from './util.js';
+import { inlineHtml, tableCells } from './util.js';
 import { registry } from './plugin-api.js';
 
 const highlight = HighlightStyle.define([
@@ -265,12 +265,6 @@ const pluginBlocks = StateField.define({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-/** A markdown table's row as cells: split on unescaped pipes, outer pipes optional. */
-function tableCells(line) {
-  const cells = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/);
-  return cells.map((c) => c.trim().replace(/\\\|/g, '|'));
-}
-
 /** A GFM table, drawn as a table while the cursor is elsewhere (Obsidian's live preview). Click it to edit. */
 class TableWidget extends WidgetType {
   constructor(source) {
@@ -323,6 +317,8 @@ function tablesDeco(state) {
   const sel = state.selection.ranges;
   syntaxTree(state).iterate({
     enter(node) {
+      // A table in a quote or callout stays as text: its lines start with "> ", which isn't part of the table.
+      if (node.name === 'Blockquote') return false;
       if (node.name !== 'Table') return;
       const from = state.doc.lineAt(node.from).from;
       const to = state.doc.lineAt(node.to).to;

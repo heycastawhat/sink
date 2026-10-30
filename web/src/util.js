@@ -28,3 +28,9 @@ export function inlineHtml(s) {
     .replace(/==([^=]+)==/g, '<mark>$1</mark>');
   return html.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${code[i]}</code>`);
 }
+
+/** A markdown table row as its cells: split on unescaped pipes (outer ones optional), `\|` read as a pipe. */
+export function tableCells(line) {
+  const cells = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/);
+  return cells.map((c) => c.trim().replace(/\\\|/g, '|'));
+}

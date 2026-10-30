@@ -2,7 +2,7 @@
 // Notes are files in the vault on the NAS; saves carry the hash we last saw, so edits made elsewhere
 // (Obsidian, the phone) are never silently overwritten.
 
-import { esc, folderOf, inlineHtml } from './util.js';
+import { esc, folderOf, inlineHtml, tableCells } from './util.js';
 import { backlinksHtml } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
@@ -122,7 +122,7 @@ function excerptHtml(text) {
     // Table rows as their cells, spaced out; the |---| line under the header is dropped.
     if (/^\|.*\|\s*$/.test(l)) {
       if (/^\|[\s:|-]+\|\s*$/.test(l)) continue;
-      const cells = l.trim().slice(1, -1).split(/(?<!\\)\|/).map((c) => `<span>${inlineHtml(c.trim())}</span>`);
+      const cells = tableCells(l).map((c) => `<span>${inlineHtml(c)}</span>`);
       out.push(`<span class="ln tr">${cells.join('')}</span>`);
       continue;
     }

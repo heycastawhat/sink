@@ -15,8 +15,12 @@ export const TRASH = ".trash";
 export const ATTACHMENTS = "attachments";
 const MAX_NOTE_BYTES = 5 * 1024 * 1024;
 const SKIP_DIRS = new Set(["node_modules"]);
-/** Version history: a new version at most this often per note, and this many kept. */
+/**
+ * Version history (boards excluded): a new version at most every VERSION_GAP_MS per note, or whenever a write comes
+ * after SITTING_GAP_MS without one; MAX_VERSIONS kept per note.
+ */
 const VERSION_GAP_MS = 10 * 60_000;
+const SITTING_GAP_MS = 2 * 60_000;
 const MAX_VERSIONS = 50;
 
 export type NoteMeta = {
@@ -476,10 +480,18 @@ export class Vault {
    */
   private snapshot(path: string, content: string, always = false, at = now()) {
     const last = this.db.query<{ at: number }, [string]>("SELECT max(at) AS at FROM versions WHERE path = ?").get(path)?.at;
-    if (!always && last && at - last < VERSION_GAP_MS) return;
+    // The text being replaced was last written this long ago. Autosave writes every few seconds while someone types;
+    // a pause longer than SITTING_GAP_MS means this write starts a new sitting (maybe another device or an
+    // assistant), so what was there is worth keeping even if the last version is recent.
+    const written = this.db.query<{ mtime: number }, [string]>("SELECT mtime FROM notes WHERE path = ?").get(path)?.mtime ?? 0;
+    const newSitting = at - written >= SITTING_GAP_MS;
+    if (!always && !newSitting && last && at - last < VERSION_GAP_MS) return;
+    // The same text twice in a row isn't a new version.
+    const newest = this.db.query<{ content: string }, [string]>("SELECT content FROM versions WHERE path = ? ORDER BY at DESC, id DESC LIMIT 1").get(path);
+    if (newest?.content === content) return;
     this.db.query("INSERT INTO versions (path, at, content) VALUES (?, ?, ?)").run(path, at, content);
     this.db
-      .query("DELETE FROM versions WHERE path = ? AND id NOT IN (SELECT id FROM versions WHERE path = ? ORDER BY at DESC LIMIT ?)")
+      .query("DELETE FROM versions WHERE path = ? AND id NOT IN (SELECT id FROM versions WHERE path = ? ORDER BY at DESC, id DESC LIMIT ?)")
       .run(path, path, MAX_VERSIONS);
   }
 
@@ -488,7 +500,8 @@ export class Vault {
     path = cleanPath(path, "note");
     return this.db
       .query<{ id: number; at: number; size: number; preview: string }, [string]>(
-        "SELECT id, at, length(content) AS size, substr(content, 1, 400) AS preview FROM versions WHERE path = ? ORDER BY at DESC",
+        // Enough to get past long frontmatter before taking the words.
+        "SELECT id, at, length(content) AS size, substr(content, 1, 4000) AS preview FROM versions WHERE path = ? ORDER BY at DESC, id DESC",
       )
       .all(path)
       .map((v) => ({
@@ -557,7 +570,7 @@ export class Vault {
           return m;
         }
       }
-      if (current !== null) this.snapshot(path, current, opts.keepVersion);
+      if (current !== null && !isBoard(path)) this.snapshot(path, current, opts.keepVersion);
       await mkdir(dirname(abs), { recursive: true });
       await atomicWrite(abs, content);
       const st = await stat(abs);
@@ -613,11 +626,14 @@ export class Vault {
           .all(from.length + 1, from + "/")
           .map((r) => r.path);
     this.db.transaction(() => {
-      if (isNote) this.db.query("UPDATE notes SET path = ? WHERE path = ?").run(to, from);
-      else
-        this.db
-          .query("UPDATE notes SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?")
-          .run(to, from.length + 1, from.length + 1, from + "/");
+      // Version history isn't tied to the notes table (it outlives a note's row), so it moves here too.
+      for (const table of ["notes", "versions"]) {
+        if (isNote) this.db.query(`UPDATE ${table} SET path = ? WHERE path = ?`).run(to, from);
+        else
+          this.db
+            .query(`UPDATE ${table} SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?`)
+            .run(to, from.length + 1, from.length + 1, from + "/");
+      }
     })();
     if (!isNote) {
       this.folders = new Set([...this.folders].map((f) => (f === from ? to : f.startsWith(from + "/") ? to + f.slice(from.length) : f)));
@@ -809,6 +825,10 @@ export class Vault {
   /** Deletes what Sink trashed more than `days` ago. Things Obsidian or a person put in .trash/ are left alone. */
   async purgeTrash(days: number, at = now()): Promise<number> {
     if (days <= 0) return 0;
+    // History of notes that have been gone (not in the index) for as long as the trash keeps things.
+    this.db
+      .query("DELETE FROM versions WHERE path NOT IN (SELECT path FROM notes) AND at < ?")
+      .run(at - days * 24 * 60 * 60 * 1000);
     const old = this.db
       .query<{ path: string }, [number]>("SELECT path FROM trash WHERE at < ?")
       .all(at - days * 24 * 60 * 60 * 1000);

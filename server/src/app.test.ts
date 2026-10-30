@@ -595,6 +595,23 @@ describe("notes", () => {
     const cur = (await (await get(token, q("Drafts/Essay.md"))).json()) as any;
     await send(token, "PUT", q("Drafts/Essay.md"), { content: old.content, base_hash: cur.hash, keep_version: true });
     expect((await list("Drafts/Essay.md")).map((v) => v.preview)).toEqual(["v4", "v3", "v1"]);
+    // A write after a pause (another device, an assistant) keeps what was there, even soon after the last version.
+    const now2 = (await (await get(token, q("Drafts/Essay.md"))).json()) as any;
+    setup.db.query("UPDATE notes SET mtime = mtime - 3 * 60000 WHERE path = 'Drafts/Essay.md'").run();
+    const phone = await send(token, "PUT", q("Drafts/Essay.md"), { content: "# Essay\n\nfrom the phone\n", base_hash: now2.hash });
+    expect(phone.status).toBe(200);
+    expect((await list("Drafts/Essay.md"))[0].preview).toBe("v1");
+
+    // Deleting the note and putting it back keeps its history.
+    const del = (await (await send(token, "DELETE", q("Drafts/Essay.md"))).json()) as any;
+    await send(token, "POST", "/api/notes/trash/restore", { path: del.trashed_to });
+    expect((await list("Drafts/Essay.md")).length).toBeGreaterThanOrEqual(4);
+
+    // Boards keep no versions (their drawing JSON would fill the database).
+    const board = (await (await send(token, "POST", "/api/notes", { title: "Sketch.excalidraw", content: "a" })).json()) as any;
+    await send(token, "PUT", q(board.path), { content: "b", base_hash: board.hash, keep_version: true });
+    expect(await list(board.path)).toEqual([]);
+
     // Another note's path can't read it.
     expect((await get(token, `/api/notes/versions/${moved[1].id}?path=Other.md`)).status).toBe(404);
   });
