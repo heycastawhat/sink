@@ -1306,6 +1306,21 @@ body.note-open {
   overflow-wrap: anywhere;
 }
 
+button.todo-text {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  text-align: start;
+  cursor: text;
+}
+
+button.todo-text:hover {
+  color: var(--md-sys-color-primary);
+}
+
 .todo.done .todo-text {
   color: var(--md-sys-color-on-surface-variant);
   text-decoration: line-through;
@@ -1317,6 +1332,62 @@ body.note-open {
   gap: 10px;
   color: var(--md-sys-color-on-surface-variant);
   font-size: 12px;
+}
+
+button.due {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.due:hover {
+  color: var(--md-sys-color-primary);
+}
+
+/* Reschedule: on hover with a mouse, always there on touch. */
+.todo-when {
+  flex: none;
+  margin: -6px 0 -6px auto;
+  color: var(--md-sys-color-on-surface-variant);
+  opacity: 0;
+}
+
+.todo:hover .todo-when,
+.todo-when:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .todo-when {
+    opacity: 1;
+  }
+}
+
+#todo-overdue-today {
+  margin: -8px 0 -8px auto;
+}
+
+.date-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dialog-row {
+  display: flex;
+  gap: 12px;
+}
+
+.dialog-row .dialog-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.dialog-row input {
+  color-scheme: light dark;
 }
 
 .todo-meta .due,

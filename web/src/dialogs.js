@@ -94,6 +94,51 @@ export function pickFromList({ title, items, empty = 'Nothing here yet.' }) {
 }
 
 /**
+ * Editing a todo: its text, due date and reminder time. `dates` ({ label, due }) are one-tap date buttons (Today,
+ * Tomorrow...). Resolves to { text, due, time } with empty fields as null, or null if cancelled.
+ */
+export function editTodo({ text, due, time, dates }) {
+  return open(
+    `<form method="dialog" class="sink-dialog-body">
+  <h2>Edit todo</h2>
+  <label class="dialog-field"><span>Todo</span><input name="text" value="${esc(text)}" autocomplete="off" required /></label>
+  <div class="date-chips">${dates.map((d) => `<m3e-button type="button" variant="tonal" size="small" data-due="${esc(d.due ?? '')}">${esc(d.label)}</m3e-button>`).join('')}</div>
+  <div class="dialog-row">
+    <label class="dialog-field"><span>Due</span><input name="due" type="date" value="${esc(due ?? '')}" /></label>
+    <label class="dialog-field"><span>Remind at</span><input name="time" type="time" value="${esc(time ?? '')}" /></label>
+  </div>
+  <div class="dialog-actions">
+    <m3e-button data-cancel variant="text">Cancel</m3e-button>
+    <m3e-button data-ok variant="filled">Save</m3e-button>
+  </div>
+</form>`,
+    (dlg, done) => {
+      const [textIn, dueIn, timeIn] = ['text', 'due', 'time'].map((n) => dlg.querySelector(`[name="${n}"]`));
+      const submit = () => {
+        const value = textIn.value.trim();
+        if (!value) return textIn.focus();
+        // A reminder time needs a day to be on.
+        if (timeIn.value && !dueIn.value) dueIn.value = dates[0]?.due ?? '';
+        done({ text: value, due: dueIn.value || null, time: (dueIn.value && timeIn.value) || null });
+      };
+      dlg.querySelector('form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        submit();
+      });
+      dlg.querySelector('.date-chips').addEventListener('click', (e) => {
+        const chip = e.target.closest('[data-due]');
+        if (!chip) return;
+        dueIn.value = chip.dataset.due;
+        if (!chip.dataset.due) timeIn.value = '';
+      });
+      dlg.querySelector('[data-ok]').addEventListener('click', submit);
+      dlg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
+      return () => textIn.focus();
+    },
+  );
+}
+
+/**
  * Sharing one note: a link anyone can read (not edit). `shared` is the current link or null; `share()` makes one
  * and resolves to its URL, `unshare()` stops it. Resolves when closed.
  */

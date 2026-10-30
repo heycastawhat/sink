@@ -65,5 +65,6 @@ export const api = {
 
   todos: (view = 'open') => request(`/todos?view=${view}`),
   addTodo: (body) => request('/todos', json('POST', body)),
-  toggleTodo: (t, done) => request('/todos/toggle', json('POST', { path: t.path, line: t.line, raw: t.raw, done })),
+  toggleTodo: (t, done, next) => request('/todos/toggle', json('POST', { path: t.path, line: t.line, raw: t.raw, done, next })),
+  editTodo: (t, change) => request('/todos/edit', json('POST', { path: t.path, line: t.line, raw: t.raw, ...change })),
 };

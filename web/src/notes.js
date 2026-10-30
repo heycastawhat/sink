@@ -7,7 +7,7 @@ import { backlinksHtml } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
-import { askText, pickFolder, pickFromList, pickVersion, shareNote } from './dialogs.js';
+import { askText, editTodo, pickFolder, pickFromList, pickVersion, shareNote } from './dialogs.js';
 import { fillTemplate, templatesIn } from './templates.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1498,20 +1498,43 @@ function dueLabel(due) {
   return new Date(`${due}T12:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
+const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+/** One-tap dates for rescheduling, counted from the server's today (the user's time zone, not the browser's). */
+function quickDates() {
+  const today = todoState.today;
+  const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+  return [
+    { label: 'Today', due: today, icon: 'today' },
+    { label: 'Tomorrow', due: addDays(today, 1), icon: 'wb_sunny' },
+    // Next Monday, a week away if today is Monday.
+    { label: 'Next week', due: addDays(today, (8 - weekday) % 7 || 7), icon: 'date_range' },
+    { label: 'No date', due: null, icon: 'event_busy' },
+  ];
+}
+
+/** The reminder's time as HH:mm, if the todo has one. */
+function reminderTime(raw) {
+  const m = /\(@\d{4}-\d{2}-\d{2}[ T](\d{1,2}):(\d{2})\)/.exec(raw);
+  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null;
+}
+
 function todoRow(t) {
   const done = t.status !== 'open';
   const overdue = !done && t.due && t.due < todoState.today;
-  const time = t.remind_at && /\(@\d{4}-\d{2}-\d{2}[ T]\d/.test(t.raw) ? new Date(t.remind_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
+  const time = t.remind_at && reminderTime(t.raw) ? new Date(t.remind_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
+  const when = t.due ? `${ic('event')}${esc(dueLabel(t.due))}${time ? ` ${esc(time)}` : ''}` : '';
   return `
 <li class="todo${done ? ' done' : ''}" data-key="${esc(t.path)}:${t.line}">
   <input type="checkbox" class="todo-box" ${done ? 'checked' : ''} aria-label="${esc(t.text)}" />
   <div class="todo-main">
-    <span class="todo-text">${esc(t.text || '(empty)')}</span>
+    ${done ? `<span class="todo-text">${esc(t.text || '(empty)')}</span>` : `<button type="button" class="todo-text" data-edit title="Edit">${esc(t.text || '(empty)')}</button>`}
     <span class="todo-meta">
-      ${t.due ? `<span class="due${overdue ? ' overdue' : ''}">${ic('event')}${esc(dueLabel(t.due))}${time ? ` ${esc(time)}` : ''}</span>` : ''}
+      ${t.due ? (done ? `<span class="due">${when}</span>` : `<button type="button" class="due${overdue ? ' overdue' : ''}" data-when title="Reschedule">${when}</button>`) : ''}
       ${t.path === 'Todo.md' ? '' : `<a class="todo-note" href="${noteHash(t.path, t.line)}">${ic('description')}${esc(t.note_title)}</a>`}
     </span>
   </div>
+  ${done ? '' : `<m3e-icon-button class="todo-when" data-when aria-label="Reschedule" title="Reschedule">${ic('event_upcoming')}</m3e-icon-button>`}
 </li>`;
 }
 
@@ -1526,7 +1549,13 @@ function renderTodos() {
     ['Someday', todoState.open.filter((t) => !t.due)],
   ].filter(([, items]) => items.length);
   $('todo-list').innerHTML = groups.length
-    ? groups.map(([name, items]) => `<section class="todo-group"><h2 class="day">${name}<span>${items.length}</span></h2><ul>${items.map(todoRow).join('')}</ul></section>`).join('')
+    ? groups
+        .map(
+          ([name, items]) => `<section class="todo-group"><h2 class="day">${name}<span>${items.length}</span>${
+            name === 'Overdue' ? '<m3e-button id="todo-overdue-today" variant="text" size="small">Move all to today</m3e-button>' : ''
+          }</h2><ul>${items.map(todoRow).join('')}</ul></section>`,
+        )
+        .join('')
     : `<div class="empty"><m3e-shape name="sunny" class="empty-shape"></m3e-shape><h2 class="empty-title">All clear</h2>
        <p class="muted">Add one above, or write <code>- [ ] thing</code> in any note.</p></div>`;
   $('todo-done-toggle').textContent = todoState.done ? 'Hide done' : 'Show done';
@@ -1541,21 +1570,89 @@ function findTodo(key) {
   return [...todoState.open, ...(todoState.done ?? [])].find((t) => `${t.path}:${t.line}` === key);
 }
 
+const todoError = (err) => toast(err.status === 409 ? 'That todo changed; reloaded' : err.message);
+
+/** Saves a change to one todo (text, due, time; null clears) and reloads the list. */
+async function saveTodo(t, change) {
+  if (!Object.keys(change).length) return;
+  try {
+    await api.editTodo(t, change);
+  } catch (err) {
+    todoError(err);
+  }
+  loadTodos();
+}
+
+async function editTodoAt(t) {
+  const time = reminderTime(t.raw);
+  const out = await editTodo({ text: t.text, due: t.due, time, dates: quickDates() });
+  if (!out) return;
+  const change = {};
+  if (out.text !== t.text) change.text = out.text;
+  if (out.due !== t.due) change.due = out.due;
+  if (out.time !== time) change.time = out.time;
+  await saveTodo(t, change);
+}
+
+async function rescheduleTodo(t) {
+  const items = [
+    ...quickDates()
+      .filter((d) => d.due !== t.due && (d.due || t.due))
+      .map((d) => ({
+        id: d.due ?? 'none',
+        label: d.label,
+        detail: d.due ? new Date(`${d.due}T12:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) : '',
+        icon: d.icon,
+      })),
+    { id: 'pick', label: 'Pick a date…', icon: 'edit_calendar' },
+  ];
+  const id = await pickFromList({ title: 'Reschedule', items });
+  if (!id) return;
+  if (id === 'pick') return editTodoAt(t);
+  await saveTodo(t, { due: id === 'none' ? null : id });
+}
+
 function wireTodos() {
   $('todos').addEventListener('change', async (e) => {
     if (!e.target.classList.contains('todo-box')) return;
     const li = e.target.closest('.todo');
     const t = findTodo(li.dataset.key);
     if (!t) return;
-    li.classList.toggle('done', e.target.checked);
+    const done = e.target.checked;
+    li.classList.toggle('done', done);
     try {
-      await api.toggleTodo(t, e.target.checked);
+      const out = await api.toggleTodo(t, done);
+      if (done) {
+        // A recurring todo's next copy goes in above it; Undo takes that back out too.
+        const next = out.next && /📅️?\s*(\d{4}-\d{2}-\d{2})/u.exec(out.next)?.[1];
+        toast(next ? `Done. Next: ${new Date(`${next}T12:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}` : 'Done', {
+          action: 'Undo',
+          onAction: async () => {
+            await api.toggleTodo({ path: t.path, line: out.line, raw: out.raw }, false, out.next).catch(todoError);
+            loadTodos();
+          },
+        });
+      }
     } catch (err) {
-      e.target.checked = !e.target.checked;
-      toast(err.status === 409 ? 'That todo changed; reloaded' : err.message);
+      e.target.checked = !done;
+      todoError(err);
     }
     // Let the tick show before the row moves.
     setTimeout(loadTodos, 350);
+  });
+  $('todos').addEventListener('click', async (e) => {
+    if (e.target.closest('#todo-overdue-today')) {
+      const overdue = todoState.open.filter((t) => t.due && t.due < todoState.today);
+      // One at a time: several can be in the same note, and each save needs the note's latest hash.
+      for (const t of overdue) await api.editTodo(t, { due: todoState.today }).catch(todoError);
+      toast(`Moved ${overdue.length} to today`);
+      return loadTodos();
+    }
+    const li = e.target.closest('.todo');
+    const t = li && findTodo(li.dataset.key);
+    if (!t || t.status !== 'open') return;
+    if (e.target.closest('[data-edit]')) editTodoAt(t);
+    else if (e.target.closest('[data-when]')) rescheduleTodo(t);
   });
   $('todo-form').addEventListener('submit', async (e) => {
     e.preventDefault();
