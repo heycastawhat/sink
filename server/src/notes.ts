@@ -303,6 +303,7 @@ export class Vault {
         .all()
         .map((r) => [r.path, r]),
     );
+    const building = known.size === 0;
     const folders = new Set<string>();
     const files = new Map<string, string[]>();
     const seen = new Set<string>();
@@ -336,7 +337,8 @@ export class Vault {
         const m = this.index(path, content, st.size, mtime);
         prev ? result.updated++ : result.added++;
         // A touched file with the same text isn't a change worth telling anyone about.
-        if (before !== m.hash) this.emit({ type: prev ? "note.updated" : "note.created", path, source: "external" });
+        // Nor is filling an empty index (a new or rebuilt database): those notes aren't new, just new to us.
+        if (before !== m.hash && !building) this.emit({ type: prev ? "note.updated" : "note.created", path, source: "external" });
       }
     };
 
@@ -462,6 +464,11 @@ export class Vault {
     }
   }
 
+  /** A note's title from the index, without reading the file. */
+  title(path: string): string | undefined {
+    return this.db.query<{ title: string }, [string]>("SELECT title FROM notes WHERE path = ?").get(path)?.title;
+  }
+
   private row(path: string) {
     return this.db.query<Row, [string]>("SELECT path, title, tags, mtime, size, hash, pinned, color FROM notes WHERE path = ?").get(path);
   }
@@ -537,8 +544,14 @@ export class Vault {
     if (!isNote && to.startsWith(from + "/")) throw new VaultError(400, "can't move a folder into itself");
     try {
       const [src, dest] = [await this.abs(from), await this.abs(to)];
-      await stat(src);
-      if (await exists(dest)) throw new VaultError(409, "destination already exists");
+      const st = await stat(src);
+      // On a case-insensitive share (SMB, macOS) "shopping.md" -> "Shopping.md" finds the note itself at dest.
+      const there = await stat(dest).catch((e: NodeJS.ErrnoException) => {
+        if (e.code === "ENOENT") return null;
+        throw e;
+      });
+      const sameFile = there && to.toLowerCase() === from.toLowerCase() && there.ino === st.ino && there.dev === st.dev;
+      if (there && !sameFile) throw new VaultError(409, "destination already exists");
       await mkdir(dirname(dest), { recursive: true });
       await rename(src, dest);
     } catch (err) {

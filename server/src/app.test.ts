@@ -7,6 +7,7 @@ import { Auth, s256 } from "./auth";
 import { Oidc } from "./oidc";
 import { createApp } from "./app";
 import { Backups } from "./backup";
+import { pageText } from "./html";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
@@ -567,6 +568,17 @@ describe("notes", () => {
     expect((((await after.json()) as any).items as { path: string }[]).map((i) => i.path)).toEqual(["Links.md"]);
   });
 
+  test("renaming only the case of a note works", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { title: "shopping", content: "# shopping\n" });
+    const res = await send(token, "POST", "/api/notes/move", { from: "shopping.md", to: "Shopping.md" });
+    expect(res.status).toBe(200);
+    expect(((await (await get(token, q("Shopping.md"))).json()) as any).path).toBe("Shopping.md");
+    // A different note already at the destination still blocks the move.
+    await send(token, "POST", "/api/notes", { title: "list", content: "x" });
+    expect((await send(token, "POST", "/api/notes/move", { from: "list.md", to: "Shopping.md" })).status).toBe(409);
+  });
+
   test("create, read, save with hash, conflicts, list, search", async () => {
     const token = await login();
     const a = (await (await send(token, "POST", "/api/notes", { folder: "Ideas", title: "Garden: beds?", content: "# Garden beds\n\nRaised #garden beds, cedar.\n" })).json()) as any;
@@ -893,6 +905,10 @@ describe("todos", () => {
 });
 
 describe("helpers", () => {
+  test("email HTML entities decode once, and bad code points don't throw", () => {
+    expect(pageText("<body><p>a &amp;lt;b&amp;gt; &lt;i&gt; &#x41;&#66; &copy;x &#99999999;</p></body>")).toBe("a &lt;b&gt; <i> AB &copy;x");
+  });
+
   test("dates are the user's wall clock", () => {
     const tz = "America/New_York";
     expect(localIso(new Date("2026-10-22T04:12:07Z"), tz)).toBe("2026-10-22T00:12:07-04:00");

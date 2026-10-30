@@ -19,7 +19,9 @@ export function emptyBoard() {
 /** Reads the scene out of a board file. Handles the plugin's compressed and plain JSON blocks. */
 export function parseBoard(text) {
   const frontmatter = /^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/.exec(text)?.[0] ?? DEFAULT_FRONTMATTER;
-  const block = /```(compressed-json|json)\r?\n([\s\S]*?)\r?\n```/.exec(text.slice(text.search(/^#+ Drawing\s*$/m) >>> 0));
+  // From the `# Drawing` heading when there is one, so a json block quoted earlier isn't taken; else the whole file.
+  const from = Math.max(0, text.search(/^#+ Drawing\s*$/m));
+  const block = /```(compressed-json|json)\r?\n([\s\S]*?)\r?\n```/.exec(text.slice(from));
   let scene = { elements: [], appState: {}, files: {} };
   if (block) {
     const raw = block[1] === 'compressed-json' ? LZString.decompressFromBase64(block[2].replace(/\s+/g, '')) : block[2];

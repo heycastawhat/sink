@@ -2,7 +2,7 @@
 // CodeMirror edits the raw text (files are the truth, and Obsidian edits them too), with Obsidian-style live preview:
 // markup hides on lines the cursor isn't on, checkboxes tick, `![[images]]` show, `[[links]]` open.
 
-import { EditorState, RangeSetBuilder, StateField } from '@codemirror/state';
+import { EditorState, RangeSetBuilder, StateField, Transaction } from '@codemirror/state';
 import {
   EditorView,
   Decoration,
@@ -668,7 +668,9 @@ export function createEditor(opts) {
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
         selection: { anchor: head },
-        annotations: [EditorView.announce.of('Note updated')],
+        // Kept out of undo history: Ctrl+Z must never bring back the old version (autosave would then write it over
+        // the new one with the new hash, silently undoing someone else's edit).
+        annotations: [EditorView.announce.of('Note updated'), Transaction.addToHistory.of(false)],
       });
     },
     focus(atEnd) {

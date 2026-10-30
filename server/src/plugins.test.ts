@@ -201,5 +201,19 @@ describe("built-in plugins", () => {
     for (const text of ["xy", "xyz"]) hash = (await s.vault.write(m.path, text, hash)).hash;
     await new Promise((r) => setTimeout(r, 120));
     expect(calls.filter((c) => c.url.includes("hooks.test")).map((c) => JSON.parse(c.body).event)).toEqual(["note.created", "note.updated"]);
+
+    // Edit then rename within the quiet time: the update follows the note to its new path, never the old one.
+    calls.length = 0;
+    hash = (await s.vault.write(m.path, "moved soon", hash)).hash;
+    await s.vault.move(m.path, "Renamed.md");
+    await new Promise((r) => setTimeout(r, 120));
+    expect(calls.filter((c) => c.url.includes("hooks.test")).map((c) => JSON.parse(c.body).path)).toEqual(["Renamed.md"]);
+
+    // A todo event for the same note doesn't swallow its waiting update.
+    calls.length = 0;
+    hash = (await s.vault.write("Renamed.md", "- [ ] milk", hash)).hash;
+    s.vault.emit({ type: "todo.done", path: "Renamed.md", text: "milk", source: "sink" });
+    await new Promise((r) => setTimeout(r, 120));
+    expect(calls.filter((c) => c.url.includes("hooks.test")).map((c) => JSON.parse(c.body).event)).toEqual(["note.updated"]);
   });
 });

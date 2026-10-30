@@ -316,6 +316,17 @@ class NoteStore(context: Context) {
     fun allPending(): List<PendingEdit> =
         pendingDir.listFiles().orEmpty().mapNotNull { f -> runCatching { json.decodeFromString<PendingEdit>(f.readText()) }.getOrNull() }
 
+    private val createdDir = File(dir, "created").apply { mkdirs() }
+
+    /** A new note's draft [key] became [path] (saved by the sync worker), so its screen can carry on in that file. */
+    fun rememberCreated(key: String, path: String) = atomic(File(createdDir, id(key)), path)
+
+    /** Where the draft [key] was saved, once; null if it hasn't been. */
+    fun takeCreated(key: String): String? {
+        val f = File(createdDir, id(key))
+        return f.takeIf { it.isFile }?.readText()?.also { f.delete() }
+    }
+
     fun putPending(p: PendingEdit) = atomic(File(pendingDir, id(p.key)), json.encodeToString(PendingEdit.serializer(), p))
     fun clearPending(key: String) {
         File(pendingDir, id(key)).delete()
@@ -370,10 +381,20 @@ object NoteSaver {
             }
             store.saveNote(Note(meta.path, meta.title, meta.hash, edit.text, meta.mtime, meta.pinned, meta.color))
             store.clearPending(edit.key)
+            // A queued new note the worker just created: tell its screen (if still open) which file it is now.
+            if (edit.path == null && !requeue) store.rememberCreated(edit.key, meta.path)
             SaveResult.Saved(meta)
         } catch (e: ApiException) {
             when {
-                e.code == 409 && edit.path != null -> resolveConflict(context, api, edit, e.body)
+                // Saving our copy beside theirs needs the network too; if that fails, keep the edit queued (the
+                // retry meets the same conflict and tries again) rather than lose it.
+                e.code == 409 && edit.path != null -> try {
+                    resolveConflict(context, api, edit, e.body)
+                } catch (_: IOException) {
+                    offline(context, edit, requeue)
+                } catch (e2: ApiException) {
+                    if (e2.code == 401 || e2.code >= 500) offline(context, edit, requeue) else SaveResult.Failed(e2.message ?: "Couldn't save")
+                }
                 e.code == 401 || e.code >= 500 -> offline(context, edit, requeue)
                 else -> SaveResult.Failed(e.message ?: "Couldn't save")
             }

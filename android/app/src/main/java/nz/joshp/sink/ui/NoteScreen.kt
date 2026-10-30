@@ -226,6 +226,16 @@ fun NoteScreen(
      * half way: a save cut off after the server wrote would lose the new hash and make the next save a false conflict.
      */
     suspend fun saveNow() {
+        // A new note queued offline that the sync worker has since created: carry on in that file, not a second one.
+        if (ed.path == null && ed.queued != null) {
+            store.takeCreated(ed.key)?.let(store::note)?.let { n ->
+                ed.path = n.path
+                ed.hash = n.hash
+                if (n.content == ed.queued) ed.saved = n.content
+                ed.queued = null
+                crumb = n.path.substringBeforeLast('/', "").ifEmpty { "Notes" }
+            }
+        }
         val text = ed.current
         if (!ed.loaded || text == ed.saved) {
             if (ed.loaded) status = "Saved"

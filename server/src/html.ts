@@ -2,15 +2,15 @@
 
 const PAGE_TEXT_CHARS = 8000;
 
+const NAMED: Record<string, string> = { nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+/** HTML entities to text, in one pass so "&amp;lt;" stays "&lt;". Out-of-range code points are dropped, not thrown. */
 const decode = (s: string) =>
-  s
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+  s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(\w+));/gi, (all, dec: string, hex: string, name: string) => {
+    if (name) return NAMED[name.toLowerCase()] ?? all;
+    const n = dec ? Number(dec) : parseInt(hex, 16);
+    return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "";
+  });
 
 /** Title, description and readable text of an HTML document. */
 export function pageText(html: string): string {

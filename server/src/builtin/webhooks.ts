@@ -20,12 +20,11 @@ export function webhooksPlugin(fetchImpl: typeof fetch = fetch, retryDelays = [1
       const secret = sink.env("SECRET");
       const only = new Set((sink.env("EVENTS") ?? "").split(",").map((e) => e.trim()).filter(Boolean));
       const quietMs = Number(sink.env("QUIET_MS", "5000"));
+      // note.updated waiting for the note to go quiet, by path.
       const waiting = new Map<string, ReturnType<typeof setTimeout>>();
 
       const send = async (event: VaultEvent) => {
-        const title = event.type.startsWith("note.") && event.type !== "note.deleted"
-          ? sink.vault.list().notes.find((n) => n.path === event.path)?.title
-          : undefined;
+        const title = event.type.startsWith("note.") && event.type !== "note.deleted" ? sink.vault.title(event.path) : undefined;
         const body = JSON.stringify({ ...event, event: event.type, type: undefined, title, at: new Date().toISOString() });
         const headers: Record<string, string> = {
           "content-type": "application/json",
@@ -49,16 +48,15 @@ export function webhooksPlugin(fetchImpl: typeof fetch = fetch, retryDelays = [1
         );
       };
 
-      sink.on((event) => {
-        // Any newer event for a note supersedes its waiting update, even one this hook doesn't send:
-        // a delete must not be followed by a stale "updated".
-        const pending = waiting.get(event.path);
-        if (pending) {
-          clearTimeout(pending);
-          waiting.delete(event.path);
-        }
-        if (only.size && !only.has(event.type)) return;
-        if (event.type !== "note.updated") return send(event);
+      const cancel = (path: string) => {
+        const pending = waiting.get(path);
+        if (!pending) return false;
+        clearTimeout(pending);
+        waiting.delete(path);
+        return true;
+      };
+      const later = (event: VaultEvent) => {
+        cancel(event.path);
         waiting.set(
           event.path,
           setTimeout(() => {
@@ -66,6 +64,18 @@ export function webhooksPlugin(fetchImpl: typeof fetch = fetch, retryDelays = [1
             void send(event);
           }, quietMs),
         );
+      };
+
+      sink.on((event) => {
+        // A delete must not be followed by a stale "updated" for the gone note, even if this hook doesn't send
+        // deletes. A move carries a waiting update over to the new path. Todo ticks leave it alone: the note did change.
+        if (event.type === "note.deleted") cancel(event.path);
+        if (event.type === "note.moved" && cancel(event.from) && (!only.size || only.has("note.updated"))) {
+          later({ type: "note.updated", path: event.path, source: event.source });
+        }
+        if (only.size && !only.has(event.type)) return;
+        if (event.type === "note.updated") return later(event);
+        return send(event);
       });
     },
   };

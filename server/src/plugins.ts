@@ -45,7 +45,7 @@ export type PluginContext = {
   log(...args: unknown[]): void;
   timeZone: string;
   /** The notes vault: read, write (with the hash you read), create, list, search, move, trash. */
-  vault: Pick<Vault, "read" | "write" | "create" | "list" | "move" | "trash" | "saveAttachment">;
+  vault: Pick<Vault, "read" | "write" | "create" | "list" | "title" | "move" | "trash" | "saveAttachment">;
   /** Called for every change: note.created/updated/deleted/moved, todo.done/undone. */
   on(handler: (event: VaultEvent) => void | Promise<void>): void;
   /** Routes under /api/plugins/<id>/, signed in like the rest of the API. */
