@@ -110,6 +110,15 @@ export function createApp(deps: {
 
   if (config.webDir) {
     app.use("/*", appShellCsp);
+    // Pages always check for a new version (else a browser keeps running the old app after a deploy); the
+    // hashed files they load never change, so those can be kept for good.
+    app.use("/*", async (c, next) => {
+      await next();
+      if (c.req.path.startsWith("/api/") || c.res.headers.has("cache-control")) return;
+      const type = c.res.headers.get("content-type") ?? "";
+      if (c.req.path.startsWith("/assets/")) c.header("cache-control", "public, max-age=31536000, immutable");
+      else if (type.includes("text/html") || c.req.path.endsWith(".webmanifest")) c.header("cache-control", "no-cache");
+    });
     // A shared note's page; it loads the note from /api/public/share/<id>. Not for search engines, and it doesn't
     // tell the sites its links go to where the reader came from.
     app.get("/s/:id", async (c, next) => {
