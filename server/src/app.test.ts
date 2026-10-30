@@ -702,6 +702,23 @@ describe("notes", () => {
     expect(Bun.spawnSync(["unzip", "-tq", out]).exitCode).toBe(0);
   });
 
+  test("live events: a signed-in stream sees changes as they happen", async () => {
+    const token = await login();
+    expect((await setup.app.request("/api/events")).status).toBe(401);
+    const res = await get(token, "/api/events");
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const reader = res.body!.getReader();
+    let seen = "";
+    const until = async (needle: string) => {
+      while (!seen.includes(needle)) seen += new TextDecoder().decode((await reader.read()).value);
+    };
+    await until("event: ready");
+    await send(token, "POST", "/api/notes", { title: "Live", content: "# Live\n" });
+    await until("Live.md");
+    expect(seen).toContain('"type":"note.created"');
+    await reader.cancel();
+  });
+
   test("renaming only the case of a note works", async () => {
     const token = await login();
     await send(token, "POST", "/api/notes", { title: "shopping", content: "# shopping\n" });

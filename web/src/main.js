@@ -108,6 +108,7 @@ async function showApp() {
   $('login').hidden = true;
   $('app').hidden = false;
   notes.loadNotes().catch(() => {});
+  notes.listenForChanges();
   // Before the first note opens, so its diagrams and commands are there.
   await loadPlugins(
     {

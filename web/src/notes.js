@@ -15,7 +15,8 @@ const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` s
 
 export const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'brown', 'gray'];
 const SAVE_DELAY = 700;
-const POLL_MS = 15_000;
+// The open note is checked this often too, in case the live change stream is down.
+const POLL_MS = 30_000;
 const draftKey = (path) => `sink:unsaved:${path}`;
 
 let toast = (msg) => console.log(msg);
@@ -1105,20 +1106,52 @@ async function resolveConflict(mine, current) {
 }
 
 /** Picks up edits made elsewhere while the note sits open and untouched. */
+/** The open note, fetched again: a newer version from elsewhere replaces it unless there are unsaved edits. */
+async function refreshOpenNote() {
+  if (!screen.path || dirty() || screen.saving || document.hidden) return;
+  try {
+    const note = await api.note(screen.path);
+    if (note.hash !== screen.hash && !dirty()) {
+      Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
+      screen.editor.setText(note.content);
+      applyLook();
+      setStatus(`Updated ${relative(note.mtime)}`);
+    }
+  } catch {}
+}
+
 function startPolling() {
   clearInterval(screen.poll);
-  screen.poll = setInterval(async () => {
-    if (!screen.path || dirty() || screen.saving || document.hidden) return;
+  screen.poll = setInterval(refreshOpenNote, POLL_MS);
+}
+
+// ---------- live changes ----------
+
+/**
+ * The server's change stream (/api/events): another device's edit shows up here at once instead of on the next poll.
+ * The grid, todos and the open note refresh; the browser reconnects by itself if the stream drops.
+ */
+let changeTimer;
+let changes = null;
+/** Starts listening, once signed in (a signed-out stream is refused and the browser gives up on it). */
+export function listenForChanges() {
+  if (changes || typeof EventSource === 'undefined') return;
+  const source = (changes = new EventSource('/api/events'));
+  source.addEventListener('change', (e) => {
+    let change;
     try {
-      const note = await api.note(screen.path);
-      if (note.hash !== screen.hash && !dirty()) {
-        Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
-        screen.editor.setText(note.content);
-        applyLook();
-        setStatus(`Updated ${relative(note.mtime)}`);
-      }
-    } catch {}
-  }, POLL_MS);
+      change = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (screen.path && (change.path === screen.path || change.from === screen.path)) refreshOpenNote();
+    // A burst of autosaves is one refresh.
+    clearTimeout(changeTimer);
+    changeTimer = setTimeout(async () => {
+      await loadNotes();
+      if (!$('todos')?.hidden) loadTodos();
+    }, 400);
+  });
 }
 
 /** "Linked mentions" under the note: the notes that link here, each with the lines that do. */

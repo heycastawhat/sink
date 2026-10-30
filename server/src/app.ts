@@ -6,6 +6,7 @@ import { Auth, authRoutes, requestOrigin, requireAuth, type AuthEnv } from "./au
 import type { MiddlewareHandler } from "hono";
 import { noteRoutes } from "./routes/notes";
 import { publicShareRoutes, shareRoutes } from "./routes/share";
+import { eventRoutes } from "./routes/events";
 import { todoRoutes } from "./todos";
 import type { Vault } from "./notes";
 import { pluginFileType, type PluginHost } from "./plugins";
@@ -69,6 +70,7 @@ export function createApp(deps: {
   api.route("/", noteRoutes(vault, config.maxUploadBytes, config.trashDays));
   api.route("/", todoRoutes(db, vault, config.timeZone ?? "UTC"));
   api.route("/", shareRoutes(db, vault));
+  api.route("/", eventRoutes(vault));
   // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/.
   api.get("/plugins", (c) => c.json({ plugins: plugins?.list() ?? [] }));
   if (plugins) api.route("/plugins", plugins.routes);
