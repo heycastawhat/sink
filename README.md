@@ -15,6 +15,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Todos:** every `- [ ]` in every note, in one list, with due dates and reminders (Obsidian Tasks syntax).
   Recurring todos (`🔁 every week`) add their next copy when ticked; tick with Undo, tap to edit, reschedule in a tap.
+  Quick add reads dates off the end ("call mum tomorrow 6pm", "bins every tuesday"); priorities sort and show,
+  start dates (`🛫`) keep a todo out of the way until then, and the Todos tab counts what's overdue or due today.
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
 - **AI assistants:** connect Claude, ChatGPT or Poke as a custom connector (MCP) to search, read and write notes.
@@ -84,7 +86,7 @@ Or let [Obtainium](https://github.com/ImranR98/Obtainium) install and update it:
 
 - Notes and Todos tabs; notes open fullscreen in the same editor as the web.
 - Edits made offline are saved on the phone and sent when you're back online.
-- Todo reminders arrive as notifications, with a Done button.
+- Todo reminders arrive as notifications, with Done, 1 hour and Tomorrow buttons.
 - "New note" Quick Settings tile, and "Share → Sink" from any app turns text into a note, or photos and PDFs into a
   note with them attached.
 

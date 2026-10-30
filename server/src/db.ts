@@ -336,6 +336,13 @@ export const migrations: string[] = [
   `
   CREATE TABLE shares (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
   `,
+  // Tasks priority (0 highest .. 3 none .. 5 lowest) and start/scheduled dates. mtime 0 re-reads every note.
+  `
+  ALTER TABLE todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 3;
+  ALTER TABLE todos ADD COLUMN start TEXT;
+  ALTER TABLE todos ADD COLUMN scheduled TEXT;
+  UPDATE notes SET mtime = 0;
+  `,
 ];
 
 export function openDb(path: string): Database {

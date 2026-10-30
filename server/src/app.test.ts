@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
 import { Vault, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery } from "./notes";
 import { localIso, localTime, utcOffset } from "./time";
-import { editTodo, nextDate, nextOccurrence, parseTodos, setDone, todoLine } from "./todos";
+import { editTodo, nextDate, nextOccurrence, parseQuick, parseTodos, setDone, setStatus, todoLine } from "./todos";
 
 // A 1x1 PNG, for attachment uploads.
 const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
@@ -1102,6 +1102,53 @@ describe("todos", () => {
     expect(open.find((t: any) => t.text === "Oat milk").due).toBe("2026-11-01");
     expect((await send(token, "POST", "/api/todos/edit", { path: "Home.md", line: 3, raw: "- [ ] Milk", due: null })).status).toBe(409);
     expect((await send(token, "POST", "/api/todos/edit", { path: "Home.md", line: 0, raw: "# Home", text: "x" })).status).toBe(400);
+  });
+
+  test("priority, start and scheduled dates; cancelling", () => {
+    const [a, b, c] = parseTodos(
+      ["- [ ] Taxes ⏫ 🛫 2026-11-01 📅 2026-11-30", "- [ ] Garden ⏳ 2026-11-05 🔽", "- [-] Old plan ❌ 2026-10-01"].join("\n"),
+      "UTC",
+    );
+    expect([a!.priority, a!.start, a!.due]).toEqual([1, "2026-11-01", "2026-11-30"]);
+    // A scheduled date dates a todo with no due date.
+    expect([b!.priority, b!.scheduled, b!.due]).toEqual([4, "2026-11-05", "2026-11-05"]);
+    expect([c!.status, c!.done_on]).toEqual(["cancelled", "2026-10-01"]);
+    expect(setStatus("- [ ] Old plan ✅ 2026-10-01", "cancelled", "2026-10-30")).toBe("- [-] Old plan ❌ 2026-10-30");
+    expect(setDone("- [-] Old plan ❌ 2026-10-01", false, "2026-10-30")).toBe("- [ ] Old plan");
+    // Rescheduling a scheduled-only todo moves its scheduled date.
+    expect(editTodo("- [ ] Garden ⏳ 2026-11-05 🔽", { due: "2026-11-07" })).toBe("- [ ] Garden 🔽 ⏳ 2026-11-07");
+  });
+
+  test("quick add reads a date, time or repeat off the end", () => {
+    // 30 October 2026 is a Friday.
+    const q = (s: string) => parseQuick(s, "2026-10-30");
+    expect(q("call mum tomorrow 6pm")).toEqual({ text: "call mum", due: "2026-10-31", time: "18:00", every: undefined });
+    expect(q("dentist on 3 nov at 2:30pm")).toMatchObject({ text: "dentist", due: "2026-11-03", time: "14:30" });
+    expect(q("rates fri").due).toBe("2026-10-30");
+    expect(q("rates next fri").due).toBe("2026-11-06");
+    expect(q("party jan 3").due).toBe("2027-01-03");
+    expect(q("report in 2 weeks").due).toBe("2026-11-13");
+    expect(q("drinks tonight")).toMatchObject({ text: "drinks", due: "2026-10-30", time: "19:00" });
+    expect(q("call bank at 16:00")).toMatchObject({ text: "call bank", due: "2026-10-30", time: "16:00" });
+    expect(q("bins every tuesday")).toMatchObject({ text: "bins", every: "every tuesday", due: "2026-11-03" });
+    expect(q("stretch every day")).toMatchObject({ every: "every day", due: "2026-10-30" });
+    expect(q("read Monday notes")).toEqual({ text: "read Monday notes" });
+    expect(q("tomorrow")).toEqual({ text: "tomorrow" });
+    expect(todoLine("bins", "2026-11-03", "19:00", "every tuesday")).toBe("- [ ] bins 🔁 every tuesday 📅 2026-11-03 (@2026-11-03 19:00)");
+  });
+
+  test("natural quick add, cancel through edit, and the badge count", async () => {
+    const token = await login();
+    const today = ((await (await get(token, "/api/todos")).json()) as any).today as string;
+    const added = (await (await send(token, "POST", "/api/todos", { text: "pay rates today 5pm", natural: true })).json()) as any;
+    expect(added).toMatchObject({ raw: `- [ ] pay rates 📅 ${today} (@${today} 17:00)`, due: today, time: "17:00" });
+    // Without natural (assistants, email), the text is kept as written.
+    expect(((await (await send(token, "POST", "/api/todos", { text: "plan today" })).json()) as any).raw).toBe("- [ ] plan today");
+    await setup.vault.write("Old.md", "- [ ] late 📅 2020-01-01\n- [ ] not yet 🛫 2999-01-01 📅 2020-01-01\n", null);
+    expect(await (await get(token, "/api/todos/count")).json()).toEqual({ overdue: 1, today: 1 });
+    const cancelled = (await (await send(token, "POST", "/api/todos/edit", { path: "Old.md", line: 0, raw: "- [ ] late 📅 2020-01-01", status: "cancelled" })).json()) as any;
+    expect(cancelled.raw).toBe(`- [-] late 📅 2020-01-01 ❌ ${today}`);
+    expect(await (await get(token, "/api/todos/count")).json()).toEqual({ overdue: 0, today: 1 });
   });
 
   test("excalidraw boards index by name, not drawing JSON", () => {

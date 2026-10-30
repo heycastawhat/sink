@@ -302,9 +302,10 @@ export class Vault {
     this.db.query("DELETE FROM todos WHERE path = ?").run(path);
     if (!isBoard(path)) {
       const insert = this.db.query(
-        "INSERT INTO todos (path, line, raw, text, status, due, remind_at, done_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO todos (path, line, raw, text, status, due, remind_at, done_on, priority, start, scheduled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
-      for (const t of parseTodos(content, this.timeZone)) insert.run(path, t.line, t.raw, t.text, t.status, t.due, t.remind_at, t.done_on);
+      for (const t of parseTodos(content, this.timeZone))
+        insert.run(path, t.line, t.raw, t.text, t.status, t.due, t.remind_at, t.done_on, t.priority, t.start, t.scheduled);
     }
     this.db.query("DELETE FROM links WHERE src = ?").run(path);
     const link = this.db.query("INSERT INTO links (src, target, line) VALUES (?, ?, ?)");
