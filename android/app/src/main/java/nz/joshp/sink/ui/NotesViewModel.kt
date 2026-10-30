@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import nz.joshp.sink.data.changes
+import nz.joshp.sink.data.Change
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -70,6 +73,38 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     val trashed = MutableStateFlow<TrashedNote?>(null)
 
     private var searchJob: Job? = null
+
+    /** Changes from the server's live stream, for an open note to pick up (see [listen]). */
+    val changes = MutableSharedFlow<Change>(extraBufferCapacity = 32)
+
+    /**
+     * Follows the server's live changes while the app is in front: each one is passed on to [changes], and a burst of
+     * them refreshes the notes (and todos) once. Reconnects after a drop, waiting longer each time it fails.
+     */
+    suspend fun listen() {
+        var wait = 2_000L
+        while (true) {
+            val api = api()
+            if (api != null) {
+                var refresh: Job? = null
+                val ok = runCatching {
+                    api.changes().collect { c ->
+                        wait = 2_000L
+                        changes.emit(c)
+                        refresh?.cancel()
+                        refresh = viewModelScope.launch {
+                            delay(400)
+                            refresh()
+                            if (c.type.startsWith("todo.") || _todos.value.loaded) loadTodos()
+                        }
+                    }
+                }
+                if (ok.isSuccess) wait = 2_000L
+            }
+            delay(wait)
+            wait = (wait * 2).coerceAtMost(60_000L)
+        }
+    }
 
     private val _opened = MutableStateFlow(store.opened())
     /** When this phone last opened each note, for Recents. */

@@ -121,7 +121,7 @@ import java.security.MessageDigest
 private const val SAVE_DELAY_MS = 700L
 // A new note's file is named on its first save, so give the first line time to be written.
 private const val DRAFT_DELAY_MS = 3000L
-private const val POLL_MS = 15_000L
+private const val POLL_MS = 30_000L
 private const val EDITOR_URL = "https://appassets.androidplatform.net/editor.html"
 
 /** The editor page's callbacks (see web/src/embed-editor.js). They arrive on a binder thread. */
@@ -455,23 +455,31 @@ fun NoteScreen(
         js("window.sink.backlinks($items)")
     }
 
-    // Edits made elsewhere show up while the note sits open and untouched.
+    // Edits made elsewhere show up while the note sits open and untouched: at once from the live stream, and by a
+    // slower poll in case that's down.
+    suspend fun refreshOpen() {
+        val p = ed.path ?: return
+        if (ed.dirty || saveJob?.isActive == true || store.pending(p) != null) return
+        val n = runCatching { api()?.note(p) }.getOrNull() ?: return
+        if (n.hash != ed.hash && !ed.dirty) {
+            store.saveNote(n)
+            ed.hash = n.hash
+            ed.saved = n.content
+            ed.current = n.content
+            applyMeta(n)
+            setEditorText(n.content)
+            status = "Updated ${relativeTime(n.mtime)}"
+        }
+    }
     LaunchedEffect(path, pageReady) {
         while (pageReady) {
             delay(POLL_MS)
-            val p = ed.path ?: continue
-            if (ed.dirty || saveJob?.isActive == true || store.pending(p) != null) continue
-            val n = runCatching { api()?.note(p) }.getOrNull() ?: continue
-            if (n.hash != ed.hash && !ed.dirty) {
-                store.saveNote(n)
-                ed.hash = n.hash
-                ed.saved = n.content
-                ed.current = n.content
-                applyMeta(n)
-                setEditorText(n.content)
-                status = "Updated ${relativeTime(n.mtime)}"
-            }
+            refreshOpen()
         }
+    }
+    LaunchedEffect(pageReady) {
+        if (!pageReady) return@LaunchedEffect
+        vm.changes.collect { c -> if (c.path == ed.path || c.from == ed.path) refreshOpen() }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -626,8 +634,46 @@ fun NoteScreen(
             .fillMaxSize()
             .background(noteTint(color, MaterialTheme.colorScheme.surfaceContainerLowest, 0.16f)),
     ) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+            AndroidView(
+                factory = { ctx -> editorWebView(ctx, vm, Bridge(
+                    onReady = { pageReady = true },
+                    onChanged = { text ->
+                        if (ed.loaded) {
+                            ed.current = text
+                            status = "Editing…"
+                            scheduleSave()
+                        }
+                    },
+                    onLink = ::openLink,
+                    onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                )).also { web = it } },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+            if (palette) {
+                FlowRow(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Swatch(null, color == null) {
+                        palette = false
+                        scope.launch { setMeta(clearColor = true) }
+                    }
+                    for (c in NOTE_COLORS) Swatch(c, color == c) {
+                        palette = false
+                        scope.launch { setMeta(newColor = c) }
+                    }
+                }
+            }
+            // The toolbar sits at the bottom, under the thumb (and just above the keyboard while typing).
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 IconButton(onClick = ::flushAndLeave) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
                 Text(
                     crumb,
@@ -713,39 +759,9 @@ fun NoteScreen(
                     }
                 }
             }
-            if (palette) {
-                FlowRow(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Swatch(null, color == null) {
-                        palette = false
-                        scope.launch { setMeta(clearColor = true) }
-                    }
-                    for (c in NOTE_COLORS) Swatch(c, color == c) {
-                        palette = false
-                        scope.launch { setMeta(newColor = c) }
-                    }
-                }
-            }
-            AndroidView(
-                factory = { ctx -> editorWebView(ctx, vm, Bridge(
-                    onReady = { pageReady = true },
-                    onChanged = { text ->
-                        if (ed.loaded) {
-                            ed.current = text
-                            status = "Editing…"
-                            scheduleSave()
-                        }
-                    },
-                    onLink = ::openLink,
-                    onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                )).also { web = it } },
-                modifier = Modifier.fillMaxWidth().weight(1f),
-            )
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding())
+        // Above the bottom toolbar.
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().padding(bottom = 64.dp))
     }
 
     DisposableEffect(Unit) { onDispose { web?.destroy() } }

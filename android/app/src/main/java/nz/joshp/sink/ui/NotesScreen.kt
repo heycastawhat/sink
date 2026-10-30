@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -194,22 +196,6 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                 },
             )
             if (inside) FolderCrumbs(state.folder, onOpen = vm::setFolder, modifier = Modifier.padding(start = 14.dp, end = 16.dp, bottom = 8.dp))
-            TextField(
-                value = state.query,
-                onValueChange = vm::setQuery,
-                placeholder = { Text("Search notes") },
-                leadingIcon = { Icon(Icons.Outlined.Search, null) },
-                trailingIcon = { if (state.query.isNotEmpty()) IconButton(onClick = { vm.setQuery("") }) { Icon(Icons.Outlined.Close, "Clear") } },
-                singleLine = true,
-                shape = CircleShape,
-                colors = TextFieldDefaults.colors(
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                ),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            )
             if (subfolders.isNotEmpty() && !searching) {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
@@ -273,8 +259,30 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
             }
         }
 
+        // Search sits at the bottom, beside the + button, where a thumb reaches it; it rides up with the keyboard.
+        TextField(
+            value = state.query,
+            onValueChange = vm::setQuery,
+            placeholder = { Text("Search notes") },
+            leadingIcon = { Icon(Icons.Outlined.Search, null) },
+            trailingIcon = { if (state.query.isNotEmpty()) IconButton(onClick = { vm.setQuery("") }) { Icon(Icons.Outlined.Close, "Clear") } },
+            singleLine = true,
+            shape = CircleShape,
+            colors = TextFieldDefaults.colors(
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ),
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .imePadding()
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 96.dp, bottom = 24.dp)
+                .shadow(6.dp, CircleShape),
+        )
         NewMenuFab(vm, state.folder, snackbar, onNewNote = onNew, onOpen = onOpen, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp))
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
     }
 
     if (naming) {

@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -171,6 +172,11 @@ class MainActivity : ComponentActivity() {
         val nav = rememberNavController()
         val start = remember { if (openSettings) "settings" else "notes" }
         val loggedOut by notesVm.loggedOut.collectAsState()
+        // Live changes from the server while the app is on screen; stopped in the background to save battery.
+        val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(notesVm, lifecycle) {
+            lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) { notesVm.listen() }
+        }
         LaunchedEffect(loggedOut) { if (loggedOut) settings.clearToken() }
         val noteTarget = openNote.value
         LaunchedEffect(noteTarget) {
