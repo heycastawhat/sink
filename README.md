@@ -14,6 +14,7 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Version history:** earlier versions of every note, to read or restore.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Todos:** every `- [ ]` in every note, in one list, with due dates and reminders (Obsidian Tasks syntax).
+  Recurring todos (`🔁 every week`) add their next copy when ticked; tick with Undo, tap to edit, reschedule in a tap.
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
 - **AI assistants:** connect Claude, ChatGPT or Poke as a custom connector (MCP) to search, read and write notes.
@@ -110,7 +111,7 @@ Tools:
 
 - **Notes:** `search_notes` (by words, or list a folder), `read_note`, `save_note`, `style_note` (pin, colour)
 - **Folders:** `create_folder`, `move_note` (move or rename a note or a whole folder)
-- **Todos:** `list_todos`, `add_todo`, `complete_todo`
+- **Todos:** `list_todos`, `add_todo`, `complete_todo`, `update_todo`
 - **Trash:** `trash_note`, `list_trash`, `restore_from_trash`. Assistants can't delete anything for good; only you can
   empty the trash.
 

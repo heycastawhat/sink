@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
 import { Vault, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery } from "./notes";
 import { localIso, localTime, utcOffset } from "./time";
-import { parseTodos, setDone, todoLine } from "./todos";
+import { editTodo, nextDate, nextOccurrence, parseTodos, setDone, todoLine } from "./todos";
 
 // A 1x1 PNG, for attachment uploads.
 const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
@@ -341,6 +341,7 @@ describe("mcp", () => {
       "search_notes",
       "style_note",
       "trash_note",
+      "update_todo",
     ]);
 
     const created = await call(token, "save_note", { title: "Packing list", folder: "Trips", content: "# Packing list\n\n- [ ] passport\n" });
@@ -371,6 +372,9 @@ describe("mcp", () => {
     const ticked = await call(token, "complete_todo", { path: bank.path, line: bank.line, raw: bank.raw });
     expect(ticked.data.done).toMatch(/^- \[x\] call the bank/);
     expect((await call(token, "list_todos")).data.todos.map((t: any) => t.text)).toEqual(["passport", "charger"]);
+    const passport = (await call(token, "list_todos")).data.todos[0];
+    const moved = await call(token, "update_todo", { path: passport.path, line: passport.line, raw: passport.raw, due: "2026-12-01" });
+    expect(moved.data.updated).toBe("- [ ] passport 📅 2026-12-01");
   });
 
   test("folders, moving, trash and pin/colour", async () => {
@@ -1043,6 +1047,61 @@ describe("todos", () => {
     await send(token, "DELETE", "/api/notes/file?path=Travel");
     open = ((await (await get(token, "/api/todos")).json()) as any).todos;
     expect(open.map((t: any) => t.text)).toEqual(["milk", "bread"]);
+  });
+
+  test("recurring todos: next dates, and the next copy's line", () => {
+    expect(nextDate("every day", "2026-10-31")).toBe("2026-11-01");
+    expect(nextDate("every 2 weeks", "2026-10-30")).toBe("2026-11-13");
+    expect(nextDate("every month", "2026-01-31")).toBe("2026-02-28");
+    expect(nextDate("every year", "2028-02-29")).toBe("2029-02-28");
+    // 30 October 2026 is a Friday.
+    expect(nextDate("every weekday", "2026-10-30")).toBe("2026-11-02");
+    expect(nextDate("every Monday, Thursday", "2026-10-30")).toBe("2026-11-02");
+    expect(nextDate("every week on Friday", "2026-10-30")).toBe("2026-11-06");
+    expect(nextDate("every full moon", "2026-10-30")).toBeNull();
+
+    expect(nextOccurrence("  - [ ] Bins 🔁 every week 📅 2026-10-30 (@2026-10-30 19:00)", "2026-11-01")).toBe(
+      "  - [ ] Bins 🔁 every week 📅 2026-11-06 (@2026-11-06 19:00)",
+    );
+    // "when done" counts from today; the start date moves with the due date.
+    expect(nextOccurrence("- [ ] Haircut 🔁 every 4 weeks when done 🛫 2026-10-01 📅 2026-10-05", "2026-10-30")).toBe(
+      "- [ ] Haircut 🔁 every 4 weeks when done 🛫 2026-11-23 📅 2026-11-27",
+    );
+    expect(nextOccurrence("- [ ] Water plants 🔁 every 3 days", "2026-10-30")).toBe("- [ ] Water plants 🔁 every 3 days");
+    expect(nextOccurrence("- [ ] One-off 📅 2026-10-30", "2026-10-30")).toBeNull();
+  });
+
+  test("editTodo changes text, date and time, keeping the other fields", () => {
+    const raw = "- [ ] Pay rates ⏫ 🔁 every month 📅 2026-11-02 (@2026-11-02 18:00) ^rates";
+    expect(editTodo(raw, { text: "Pay council rates" })).toBe("- [ ] Pay council rates ⏫ 🔁 every month 📅 2026-11-02 (@2026-11-02 18:00) ^rates");
+    // Moving the date keeps the reminder's time.
+    expect(editTodo(raw, { due: "2026-11-03" })).toBe("- [ ] Pay rates ⏫ 🔁 every month 📅 2026-11-03 (@2026-11-03 18:00) ^rates");
+    expect(editTodo(raw, { time: null })).toBe("- [ ] Pay rates ⏫ 🔁 every month 📅 2026-11-02 ^rates");
+    expect(editTodo(raw, { due: null })).toBe("- [ ] Pay rates ⏫ 🔁 every month ^rates");
+    expect(editTodo("* [ ] milk", { due: "2026-11-01", time: "8:30" })).toBe("* [ ] milk 📅 2026-11-01 (@2026-11-01 8:30)");
+  });
+
+  test("ticking a recurring todo adds the next one; undo takes it back out; edit rewrites the line", async () => {
+    const token = await login();
+    const file = join(setup.vaultDir, "Home.md");
+    await setup.vault.write("Home.md", "# Home\n\n- [ ] Bins 🔁 every week 📅 2026-10-30\n- [ ] Milk\n", null);
+    const ticked = (await (
+      await send(token, "POST", "/api/todos/toggle", { path: "Home.md", line: 2, raw: "- [ ] Bins 🔁 every week 📅 2026-10-30", done: true })
+    ).json()) as any;
+    expect(ticked.line).toBe(3);
+    expect(ticked.next).toBe("- [ ] Bins 🔁 every week 📅 2026-11-06");
+    expect(readFileSync(file, "utf8")).toStartWith("# Home\n\n- [ ] Bins 🔁 every week 📅 2026-11-06\n- [x] Bins 🔁 every week 📅 2026-10-30 ✅ ");
+    await send(token, "POST", "/api/todos/toggle", { path: "Home.md", line: ticked.line, raw: ticked.raw, done: false, next: ticked.next });
+    expect(readFileSync(file, "utf8")).toBe("# Home\n\n- [ ] Bins 🔁 every week 📅 2026-10-30\n- [ ] Milk\n");
+
+    const edited = (await (
+      await send(token, "POST", "/api/todos/edit", { path: "Home.md", line: 3, raw: "- [ ] Milk", text: "Oat milk", due: "2026-11-01", time: "17:00" })
+    ).json()) as any;
+    expect(edited).toEqual({ ok: true, line: 3, raw: "- [ ] Oat milk 📅 2026-11-01 (@2026-11-01 17:00)" });
+    const open = ((await (await get(token, "/api/todos")).json()) as any).todos;
+    expect(open.find((t: any) => t.text === "Oat milk").due).toBe("2026-11-01");
+    expect((await send(token, "POST", "/api/todos/edit", { path: "Home.md", line: 3, raw: "- [ ] Milk", due: null })).status).toBe(409);
+    expect((await send(token, "POST", "/api/todos/edit", { path: "Home.md", line: 0, raw: "# Home", text: "x" })).status).toBe(400);
   });
 
   test("excalidraw boards index by name, not drawing JSON", () => {

@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { AuthEnv } from "./auth";
 import { localIso, localTime } from "./time";
@@ -85,6 +85,106 @@ export function todoLine(text: string, due?: string, time?: string): string {
   return `- [ ] ${clean}${due ? ` 📅 ${due}` : ""}`;
 }
 
+const REMINDER = new RegExp(String.raw`\s*\(@(${DATE})(?:[ T](\d{1,2}:\d{2}))?\)`);
+const DUE = new RegExp(String.raw`\s*📅\uFE0F?\s*(${DATE})`, "u");
+
+/**
+ * A task line with new text, due date or reminder time; whatever isn't passed stays as it was. Other Tasks fields
+ * (priority, recurrence, start dates) and a trailing block id are kept. Moving the date keeps the reminder's time
+ * unless `time` says otherwise; null clears.
+ */
+export function editTodo(raw: string, change: { text?: string; due?: string | null; time?: string | null }): string {
+  const m = TASK.exec(raw);
+  if (!m) throw new Error("not a task line");
+  let rest = m[4]!;
+  const id = /\s+\^[\w-]+$/.exec(rest)?.[0] ?? "";
+  rest = rest.slice(0, rest.length - id.length);
+  if (change.text !== undefined) {
+    const fields = (rest.match(FIELD) ?? []).map((f) => f.trim());
+    rest = [change.text.replace(/\s+/g, " ").trim(), ...fields].join(" ");
+  }
+  if (change.due !== undefined || change.time !== undefined) {
+    const reminder = REMINDER.exec(rest);
+    const due = change.due === undefined ? (DUE.exec(rest)?.[1] ?? reminder?.[1] ?? null) : change.due;
+    const time = change.time === undefined ? (reminder?.[2] ?? null) : change.time;
+    rest = rest.replace(DUE, "").replace(REMINDER, "");
+    if (due) rest += ` 📅 ${due}${time ? ` (@${due} ${time})` : ""}`;
+  }
+  return `${m[1]}${m[2]}${m[3]}${rest.trim()}${id}`;
+}
+
+// ---------- recurrence ----------
+
+const DAY_MS = 86_400_000;
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const dayNumber = (d: string) => Date.parse(`${d}T00:00:00Z`) / DAY_MS;
+const fromDayNumber = (n: number) => new Date(n * DAY_MS).toISOString().slice(0, 10);
+const addDays = (d: string, n: number) => fromDayNumber(dayNumber(d) + n);
+
+/** Month arithmetic the way Tasks (moment) does it: the 31st plus a month is the last day of a short month. */
+function addMonths(d: string, n: number): string {
+  const [y, m, day] = d.split("-").map(Number) as [number, number, number];
+  const first = new Date(Date.UTC(y, m - 1 + n, 1));
+  const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  first.setUTCDate(Math.min(day, last));
+  return first.toISOString().slice(0, 10);
+}
+
+/**
+ * The date after `from` for a Tasks rule ("every week", "every 3 days", "every weekday", "every Monday, Thursday",
+ * "every week on Friday"), or null for rules we don't understand, which then just tick off without a next one.
+ */
+export function nextDate(rule: string, from: string): string | null {
+  const r = rule.toLowerCase().replace(/^every\s+/, "").trim();
+  const unit = /^(?:(\d+)\s+)?(day|week|month|year)s?$/.exec(r);
+  if (unit) {
+    const n = Number(unit[1] ?? 1);
+    if (n < 1) return null;
+    if (unit[2] === "day") return addDays(from, n);
+    if (unit[2] === "week") return addDays(from, 7 * n);
+    return addMonths(from, unit[2] === "month" ? n : 12 * n);
+  }
+  const days =
+    r === "weekday"
+      ? [1, 2, 3, 4, 5]
+      : /^(?:week\s+on\s+)?[a-z]+(?:\s*(?:,|and)\s*[a-z]+)*$/.test(r)
+        ? r
+            .replace(/^week\s+on\s+/, "")
+            .split(/\s*(?:,|and)\s*/)
+            .map((w) => WEEKDAYS.indexOf(w))
+        : [];
+  if (!days.length || days.includes(-1)) return null;
+  for (let n = 1; n <= 7; n++) {
+    const next = addDays(from, n);
+    if (days.includes(new Date(`${next}T00:00:00Z`).getUTCDay())) return next;
+  }
+  return null;
+}
+
+/**
+ * The next copy of a recurring task (`🔁 every week`), open again with its dates moved on, or null if it doesn't
+ * recur. Like Tasks: the next date counts from the due date (else scheduled, else start), or from today with
+ * "when done"; every other date on the line moves by the same number of days.
+ */
+export function nextOccurrence(raw: string, today: string): string | null {
+  const m = TASK.exec(raw);
+  if (!m) return null;
+  const rest = m[4]!;
+  const rule = /🔁\uFE0F?\s*([^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(^]*)/u.exec(rest)?.[1]?.trim();
+  if (!rule) return null;
+  const whenDone = /\s+when done$/i.test(rule);
+  const base = [/📅\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /⏳\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /🛫\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u]
+    .map((re) => re.exec(rest)?.[1])
+    .find(Boolean);
+  const next = nextDate(rule.replace(/\s+when done$/i, ""), whenDone || !base ? today : base);
+  if (!next) return null;
+  const shift = base ? dayNumber(next) - dayNumber(base) : 0;
+  const moved = rest
+    .replace(new RegExp(String.raw`\s*[✅❌]\uFE0F?\s*${DATE}`, "gu"), "")
+    .replace(new RegExp(String.raw`([📅⏳🛫]\uFE0F?\s*|\(@)(${DATE})`, "gu"), (_, mark: string, d: string) => mark + addDays(d, shift));
+  return `${m[1]} ${m[3]}${moved}`;
+}
+
 type Row = Omit<Todo, "line"> & { line: number; path: string; note_title: string; mtime: number };
 
 const toggleBody = z.object({
@@ -92,6 +192,16 @@ const toggleBody = z.object({
   line: z.number().int().min(0),
   raw: z.string().max(10_000),
   done: z.boolean(),
+  // Undoing a tick: the next copy of a recurring todo that tick added, to take back out.
+  next: z.string().max(10_000).optional(),
+});
+const editBody = z.object({
+  path: z.string().min(1).max(1024),
+  line: z.number().int().min(0),
+  raw: z.string().max(10_000),
+  text: z.string().trim().min(1).max(2000).optional(),
+  due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  time: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
 });
 const addBody = z.object({
   text: z.string().trim().min(1).max(2000),
@@ -123,38 +233,80 @@ export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
     return c.json({ todos: rows, today: today() });
   });
 
-  // Ticks one line. The client sends the line as it saw it; if the file moved on, the same text elsewhere still counts.
+  /**
+   * Finds the line the client saw (where it was, or the same text alone elsewhere if the file moved on), lets `change`
+   * rewrite the note's lines, and saves. `change` returns where the line ended up. Retries once if a save lands between
+   * our read and write.
+   */
+  async function rewrite(path: string, line: number, raw: string, change: (lines: string[], at: number, cr: string) => number) {
+    for (let attempt = 0; ; attempt++) {
+      const note = await vault.read(path);
+      const lines = note.content.split("\n");
+      const strip = (l: string) => l.replace(/\r$/, "");
+      let at = strip(lines[line] ?? "") === raw ? line : -1;
+      if (at < 0) {
+        const matches = lines.flatMap((l, i) => (strip(l) === raw ? [i] : []));
+        if (matches.length !== 1) throw new VaultError(409, "todo changed; reload");
+        at = matches[0]!;
+      }
+      at = change(lines, at, lines[at]!.endsWith("\r") ? "\r" : "");
+      try {
+        await vault.write(path, lines.join("\n"), note.hash);
+        return { at, raw: strip(lines[at]!) };
+      } catch (err) {
+        if (err instanceof VaultError && err.status === 409 && attempt === 0) continue;
+        throw err;
+      }
+    }
+  }
+
+  const fail = (c: Context<AuthEnv>, err: unknown) => {
+    if (err instanceof VaultError) return c.json({ error: err.message }, err.status);
+    throw err;
+  };
+
+  // Ticks one line. Ticking a recurring todo adds its next copy above it, as Tasks does.
   app.post("/todos/toggle", async (c) => {
     const body = toggleBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid body" }, 400);
-    const { path, line, raw, done } = body.data;
+    const { path, line, raw, done, next } = body.data;
+    let added: string | null = null;
     try {
-      for (let attempt = 0; ; attempt++) {
-        const note = await vault.read(path);
-        const lines = note.content.split("\n");
-        const strip = (l: string) => l.replace(/\r$/, "");
-        let at = strip(lines[line] ?? "") === raw ? line : -1;
-        if (at < 0) {
-          const matches = lines.flatMap((l, i) => (strip(l) === raw ? [i] : []));
-          if (matches.length !== 1) return c.json({ error: "todo changed; reload" }, 409);
-          at = matches[0]!;
-        }
-        const cr = lines[at]!.endsWith("\r") ? "\r" : "";
+      const out = await rewrite(path, line, raw, (lines, at, cr) => {
         lines[at] = setDone(raw, done, today()) + cr;
-        try {
-          await vault.write(path, lines.join("\n"), note.hash);
-          const text = parseTodos(lines[at]!, timeZone)[0]?.text ?? "";
-          vault.emit({ type: done ? "todo.done" : "todo.undone", path, text, source: "sink" });
-          return c.json({ ok: true, line: at, raw: strip(lines[at]!) });
-        } catch (err) {
-          // Someone saved the note between our read and write: try once more on the new text.
-          if (err instanceof VaultError && err.status === 409 && attempt === 0) continue;
-          throw err;
+        added = done && parseTodos(raw, timeZone)[0]?.status === "open" ? nextOccurrence(raw, today()) : null;
+        if (added) {
+          lines.splice(at, 0, added + cr);
+          return at + 1;
         }
-      }
+        if (!done && next && at > 0 && lines[at - 1]!.replace(/\r$/, "") === next) {
+          lines.splice(at - 1, 1);
+          return at - 1;
+        }
+        return at;
+      });
+      const text = parseTodos(out.raw, timeZone)[0]?.text ?? "";
+      vault.emit({ type: done ? "todo.done" : "todo.undone", path, text, source: "sink" });
+      return c.json({ ok: true, line: out.at, raw: out.raw, ...(added ? { next: added } : {}) });
     } catch (err) {
-      if (err instanceof VaultError) return c.json({ error: err.message }, err.status);
-      throw err;
+      return fail(c, err);
+    }
+  });
+
+  // Changes a todo's text, due date or reminder time (null clears), leaving the rest of the line alone.
+  app.post("/todos/edit", async (c) => {
+    const body = editBody.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: "invalid body" }, 400);
+    const { path, line, raw, ...change } = body.data;
+    if (!TASK.test(raw)) return c.json({ error: "not a todo" }, 400);
+    try {
+      const out = await rewrite(path, line, raw, (lines, at, cr) => {
+        lines[at] = editTodo(raw, change) + cr;
+        return at;
+      });
+      return c.json({ ok: true, line: out.at, raw: out.raw });
+    } catch (err) {
+      return fail(c, err);
     }
   });
 

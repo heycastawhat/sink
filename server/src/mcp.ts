@@ -56,7 +56,7 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
         "Sink is the user's notes app: markdown files in their vault (Obsidian-compatible, organised in folders), plus " +
         "todos, which are `- [ ]` checkbox lines inside notes (Tasks plugin syntax: `📅 YYYY-MM-DD` due date, " +
         "`(@YYYY-MM-DD HH:mm)` reminder). Search first, then read_note for the full text. save_note creates or replaces " +
-        "a note; add_todo appends a todo to Todo.md and complete_todo ticks one off. Notes and folders can be moved, " +
+        "a note; add_todo appends a todo to Todo.md, complete_todo ticks one off and update_todo changes or reschedules one. Notes and folders can be moved, " +
         "renamed and trashed; the trash keeps them for the user to restore, so nothing is ever deleted for good from here.",
     },
   );
@@ -256,14 +256,40 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     safe(async ({ path, line, raw, done }) => {
-      const out = await json<{ raw: string }>(
+      const out = await json<{ raw: string; next?: string }>(
         await api("/api/todos/toggle", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ path, line, raw, done: done ?? true }),
         }),
       );
-      return text({ [done === false ? "reopened" : "done"]: out.raw, path });
+      return text({ [done === false ? "reopened" : "done"]: out.raw, path, ...(out.next ? { next: out.next } : {}) });
+    }),
+  );
+
+  server.registerTool(
+    "update_todo",
+    {
+      title: "Update todo",
+      description:
+        "Change a todo's text, due date or reminder time, e.g. to reschedule it. Pass path, line and raw exactly as " +
+        "list_todos gave them. Leave a field out to keep it; null clears the date or time. Moving the date keeps the " +
+        "reminder's time of day.",
+      inputSchema: {
+        path: z.string().max(1024),
+        line: z.number().int().min(0),
+        raw: z.string().max(4000),
+        text: z.string().min(1).max(2000).optional(),
+        due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional().describe("YYYY-MM-DD, or null for no date"),
+        time: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional().describe("HH:mm reminder on the due date, or null"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    safe(async (args) => {
+      const out = await json<{ raw: string }>(
+        await api("/api/todos/edit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) }),
+      );
+      return text({ updated: out.raw, path: args.path });
     }),
   );
 
