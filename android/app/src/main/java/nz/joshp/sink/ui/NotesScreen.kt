@@ -182,7 +182,8 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     // Back climbs out of a folder before it leaves the tab.
     BackHandler(enabled = inside) { vm.folderUp() }
 
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
+    // Pulling up for a new note works from the search field and toolbar area too, not just the list.
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest).pullUpFromAnywhere(pullUp)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             ScreenTitle(
                 state.folder.substringAfterLast('/').ifEmpty { "Notes" },

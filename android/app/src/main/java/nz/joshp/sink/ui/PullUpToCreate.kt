@@ -6,6 +6,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -38,6 +39,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -69,7 +71,8 @@ class PullUpToCreate internal constructor(
     internal val progress get() = (pull / threshold).coerceIn(0f, 1f)
     private var settling = false
 
-    private fun drag(by: Float) {
+    internal fun drag(by: Float) {
+        if (settling) return
         val wasReady = ready
         pull = (pull + by).coerceAtLeast(0f)
         if (ready != wasReady) tick()
@@ -98,7 +101,8 @@ class PullUpToCreate internal constructor(
         }
     }
 
-    private fun release() {
+    internal fun release() {
+        if (pull <= 0f || settling) return
         settling = true
         val create = ready
         scope.launch {
@@ -142,6 +146,23 @@ fun rememberPullUpToCreate(onCreate: () -> Unit): PullUpToCreate {
 
 /** Put on the scrolling list whose bottom the drawer comes up from. */
 fun Modifier.pullUpToCreate(state: PullUpToCreate): Modifier = nestedScroll(state.connection)
+
+/**
+ * Put on the whole screen: a drag that starts on something that doesn't scroll (the search field, the space around
+ * the toolbar, the fade over the list's end) pulls the drawer too. Drags on the list itself are the list's, and come
+ * through [pullUpToCreate] instead; a tap still reaches whatever is under the finger.
+ */
+fun Modifier.pullUpFromAnywhere(state: PullUpToCreate): Modifier = pointerInput(state) {
+    detectVerticalDragGestures(
+        onDragEnd = { state.release() },
+        onDragCancel = { state.release() },
+    ) { change, dy ->
+        if (dy >= 0f && state.pull <= 0f) return@detectVerticalDragGestures
+        change.consume()
+        // Same resistance on the way up as from the list; straight back down.
+        state.drag(if (dy < 0f) -dy * 0.55f else -dy)
+    }
+}
 
 /** The drawer itself, over everything at the bottom of the screen (the search field and toolbar included). */
 @Composable
