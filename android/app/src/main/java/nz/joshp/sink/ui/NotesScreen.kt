@@ -147,10 +147,11 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
     val inside = state.folder.isNotEmpty()
     // Subfolders right here, unless searching (results span every folder).
     val subfolders = remember(state.folders, state.folder) { childFolders(state.folders, state.folder) }
-    // Home's Recent row (not in folders or search), once there are enough notes for it to save scrolling.
+    // Home's Recent row (not in folders or search).
     val opened by vm.opened.collectAsStateWithLifecycle()
     val recent = remember(state.notes, opened) { recentNotes(state.notes, opened) }
-    val showRecent = !inside && !searching && state.notes.size > 6
+    // Once there are enough notes for it to save scrolling, or whenever home leaves some out (filed in folders).
+    val showRecent = !inside && !searching && (state.notes.size > 6 || (hideFoldered && state.notes.any { '/' in it.path }))
     var recentShut by rememberSaveable { mutableStateOf(false) }
     // Back climbs out of a folder before it leaves the tab.
     BackHandler(enabled = inside) { vm.folderUp() }
@@ -226,7 +227,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                 when {
                     !state.loaded -> Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
                     list.isEmpty() && state.error != null && state.notes.isEmpty() -> EmptyState("Can't reach your notes", state.error ?: "")
-                    list.isEmpty() -> EmptyState(
+                    list.isEmpty() && !showRecent -> EmptyState(
                         when {
                             state.query.isNotBlank() -> "Nothing matches"
                             inside -> "Nothing in here yet"
@@ -248,6 +249,15 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                         if (showRecent) {
                             item(key = "recent", span = StaggeredGridItemSpan.FullLine) {
                                 RecentStrip(recent, recentShut, onToggle = { recentShut = !recentShut }, onOpen = onOpen)
+                            }
+                            // Home with everything filed away: say where the notes are.
+                            if (list.isEmpty()) item(key = "filed", span = StaggeredGridItemSpan.FullLine) {
+                                Text(
+                                    "Everything's filed away in folders. New notes you take here stay on this page.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 16.dp),
+                                )
                             }
                         }
                         if (pinned.isNotEmpty()) {

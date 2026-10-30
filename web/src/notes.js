@@ -338,12 +338,15 @@ const recentPrefs = {
 
 /**
  * Home's Recent row: the notes you opened here or edited anywhere lately, as preview cards, like Drive's suggested
- * files. Only on home, not in folders or search, and only once there are enough notes for it to save scrolling.
+ * files. Only on home, not in folders or search.
  */
 function renderRecentStrip() {
   const root = $('notes-recent');
   if (!root) return;
-  const show = !state.folder && !state.results && state.notes.length > 6;
+  // Once there are enough notes for it to save scrolling, or whenever home leaves some out (filed away in folders):
+  // then it's the quickest way back to them.
+  const hidden = prefs.hideFoldered && state.notes.some((n) => n.path.includes('/'));
+  const show = !state.folder && !state.results && (state.notes.length > 6 || hidden);
   root.hidden = !show;
   if (!show) return;
   const opens = opened.read();
