@@ -7,6 +7,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import android.net.Uri
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
@@ -20,8 +34,6 @@ import androidx.navigation.navArgument
 import nz.joshp.sink.BuildConfig
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -226,13 +238,14 @@ class MainActivity : ComponentActivity() {
         }
 
         Scaffold(
-            bottomBar = { if (showBar) TabBar(nav, route) },
             containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-        ) { inner ->
+        ) { _ ->
+          Box(Modifier.fillMaxSize()) {
+            // Screens draw to the bottom edge; the tabs float over them (each screen leaves room, see toolbarClearance).
             NavHost(
                 nav,
                 startDestination = start,
-                modifier = Modifier.fillMaxSize().padding(bottom = if (showBar) inner.calculateBottomPadding() else 0.dp),
+                modifier = Modifier.fillMaxSize(),
             ) {
                 composable("notes") {
                     NotesScreen(notesVm, onOpen = { openNoteAt(it, null) }, onNew = { nav.navigate(noteRoute(null, folder = notesVm.state.value.folder)) })
@@ -263,6 +276,14 @@ class MainActivity : ComponentActivity() {
                 }
                 composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onCheckForUpdates = checkForUpdates) }
             }
+            if (showBar) {
+                FloatingTabs(
+                    nav,
+                    route,
+                    Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(start = 16.dp, bottom = TOOLBAR_BOTTOM),
+                )
+            }
+          }
         }
     }
 
@@ -275,24 +296,48 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * The tabs as a floating toolbar (Material 3 Expressive), bottom left where a thumb rests, with each screen's + button
+ * beside it on the right. The open tab shows its name; the others are icons.
+ */
 @Composable
-private fun TabBar(nav: NavHostController, selected: String?) {
-    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-        for (t in TABS) {
-            val on = selected == t.route
-            NavigationBarItem(
-                selected = on,
-                onClick = {
-                    nav.navigate(t.route) {
-                        // Tabs keep one copy each and remember where you were in them.
-                        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
+private fun FloatingTabs(nav: NavHostController, selected: String?, modifier: Modifier = Modifier) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shadowElevation = 6.dp,
+        modifier = modifier.height(TOOLBAR_HEIGHT),
+    ) {
+        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            for (t in TABS) {
+                val on = selected == t.route
+                Row(
+                    Modifier
+                        .height(48.dp)
+                        .clip(CircleShape)
+                        .background(if (on) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                        .clickable {
+                            nav.navigate(t.route) {
+                                // Tabs keep one copy each and remember where you were in them.
+                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                        .padding(horizontal = if (on) 16.dp else 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (on) t.selectedIcon else t.icon,
+                        if (on) null else t.label,
+                        tint = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (on) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(t.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSecondaryContainer)
                     }
-                },
-                icon = { Icon(if (on) t.selectedIcon else t.icon, null) },
-                label = { Text(t.label) },
-            )
+                }
+            }
         }
     }
 }

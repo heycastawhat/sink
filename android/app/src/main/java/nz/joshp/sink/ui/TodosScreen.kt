@@ -1,5 +1,10 @@
 package nz.joshp.sink.ui
 
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.WindowInsets
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.compose.foundation.background
@@ -94,16 +99,17 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             ScreenTitle("Todos")
-            AddTodo { text, due, time -> vm.addTodo(text, due, time)?.let { snackbar.showSnackbar(it) } }
             PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = { vm.loadTodos(pull = true) }, modifier = Modifier.fillMaxSize()) {
                 when {
                     !state.loaded -> Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
                     state.open.isEmpty() && state.error != null -> EmptyState("Can't reach your todos", state.error ?: "")
-                    else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
+                    // From the bottom up, like Notes: overdue and today's right above the add field, later ones and
+                    // the done list further up. Within a group the soonest is lowest; each heading sits above its group.
+                    else -> LazyColumn(Modifier.fillMaxSize(), reverseLayout = true, contentPadding = PaddingValues(top = 8.dp, bottom = toolbarClearance(extra = 76.dp))) {
                         if (groups.isEmpty()) item { EmptyHint() }
                         for ((name, items) in groups) {
-                            item(key = "h:$name") { GroupHead(name, items.size) }
                             items(items, key = { "o:${it.path}:${it.line}" }) { t -> TodoRow(t, today, toggle, onOpenNote) }
+                            item(key = "h:$name") { GroupHead(name, items.size) }
                         }
                         item(key = "done-toggle") {
                             TextButton(onClick = vm::toggleDone, modifier = Modifier.padding(start = 8.dp, top = 8.dp)) {
@@ -117,12 +123,25 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                 }
             }
         }
-        FloatingActionButton(
-            onClick = { adding = true },
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-        ) { Icon(Icons.Outlined.AddTask, "New todo") }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
+        // Quick add sits at the bottom, above the floating tabs (on the keyboard while typing), like Notes' search.
+        val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+        Box(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .then(if (keyboardUp) Modifier.imePadding() else Modifier.navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 4.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+        ) {
+            AddTodo { text, due, time -> vm.addTodo(text, due, time)?.let { snackbar.showSnackbar(it) } }
+        }
+        if (!keyboardUp) {
+            FloatingActionButton(
+                onClick = { adding = true },
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 16.dp, bottom = TOOLBAR_BOTTOM + 4.dp),
+            ) { Icon(Icons.Outlined.AddTask, "New todo") }
+        }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = toolbarClearance(extra = 76.dp)))
     }
 
     if (adding) {

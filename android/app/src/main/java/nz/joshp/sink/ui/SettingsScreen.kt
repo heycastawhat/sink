@@ -81,7 +81,8 @@ fun SettingsScreen(
             .background(MaterialTheme.colorScheme.surfaceContainerLowest)
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(bottom = 24.dp),
+            // Clear of the floating tabs at the end of the page.
+            .padding(bottom = toolbarClearance()),
     ) {
         ScreenTitle("Settings", onBack = onBack)
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {

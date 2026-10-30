@@ -1,5 +1,9 @@
 package nz.joshp.sink.ui
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -83,3 +87,15 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
         modifier = modifier,
     )
 }
+
+/** The floating tab toolbar's size and distance from the bottom (above the system navigation bar). */
+val TOOLBAR_HEIGHT = 64.dp
+val TOOLBAR_BOTTOM = 16.dp
+
+/**
+ * Room to leave at the bottom of a screen's scrolling content so its end clears the floating toolbar (and [extra],
+ * e.g. a search field above it) and the system navigation bar.
+ */
+@Composable
+fun toolbarClearance(extra: Dp = 0.dp): Dp =
+    WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 16.dp + extra

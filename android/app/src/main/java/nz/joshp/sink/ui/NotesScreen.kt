@@ -12,6 +12,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
@@ -20,7 +24,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -196,24 +199,12 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                 },
             )
             if (inside) FolderCrumbs(state.folder, onOpen = vm::setFolder, modifier = Modifier.padding(start = 14.dp, end = 16.dp, bottom = 8.dp))
-            if (subfolders.isNotEmpty() && !searching) {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(subfolders, key = { it }) { f ->
-                        FolderTile(f.substringAfterLast('/'), countIn(state.notes, f)) { vm.setFolder(f) }
-                    }
-                }
-            } else {
-                Spacer(Modifier.size(10.dp))
-            }
 
             PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = { vm.refresh(pull = true) }, modifier = Modifier.fillMaxSize()) {
                 when {
                     !state.loaded -> Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
                     list.isEmpty() && state.error != null && state.notes.isEmpty() -> EmptyState("Can't reach your notes", state.error ?: "")
-                    list.isEmpty() && !showRecent -> EmptyState(
+                    list.isEmpty() && !showRecent && (subfolders.isEmpty() || searching) -> EmptyState(
                         when {
                             state.query.isNotBlank() -> "Nothing matches"
                             inside -> "Nothing in here yet"
@@ -225,13 +216,23 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                             else -> "Tap the pencil to write one. It's saved as a markdown file on your server."
                         },
                     )
+                    // Laid out from the bottom up, where a thumb reaches: folders, then Recent, pinned notes, and the
+                    // newest notes, with older ones further up (scroll up for them). Each section's label comes after
+                    // its items here, which puts it above them on screen.
                     else -> LazyVerticalStaggeredGrid(
                         columns = StaggeredGridCells.Adaptive(160.dp),
-                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 104.dp),
+                        reverseLayout = true,
+                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = toolbarClearance(extra = 68.dp)),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalItemSpacing = 10.dp,
                         modifier = Modifier.fillMaxSize(),
                     ) {
+                        if (subfolders.isNotEmpty() && !searching) {
+                            items(subfolders.reversed(), key = { "f:$it" }, span = { StaggeredGridItemSpan.FullLine }) { f ->
+                                FolderRow(f.substringAfterLast('/'), countIn(state.notes, f)) { vm.setFolder(f) }
+                            }
+                            item(key = "folders-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                        }
                         if (showRecent) {
                             item(key = "recent", span = StaggeredGridItemSpan.FullLine) {
                                 RecentStrip(recent, recentShut, onToggle = { recentShut = !recentShut }, onOpen = onOpen)
@@ -247,19 +248,20 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                             }
                         }
                         if (pinned.isNotEmpty()) {
-                            item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.padding(start = 6.dp, top = 4.dp)) }
                             items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen) }
-                            if (others.isNotEmpty()) {
-                                item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.padding(start = 6.dp, top = 8.dp)) }
-                            }
+                            item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.padding(start = 6.dp, top = 8.dp)) }
                         }
                         items(others, key = { it.path }) { NoteCard(it, onOpen) }
+                        if (pinned.isNotEmpty() && others.isNotEmpty()) {
+                            item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                        }
                     }
                 }
             }
         }
 
-        // Search sits at the bottom, beside the + button, where a thumb reaches it; it rides up with the keyboard.
+        // Search sits at the bottom where a thumb reaches it.
+        val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
         TextField(
             value = state.query,
             onValueChange = vm::setQuery,
@@ -274,15 +276,26 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
                 focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                 unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             ),
+            // Full width just above the floating tabs; with the keyboard up it sits right on top of it instead.
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .imePadding()
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 96.dp, bottom = 24.dp)
+                .then(if (keyboardUp) Modifier.imePadding().padding(bottom = 8.dp) else Modifier.navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 12.dp))
+                .padding(horizontal = 16.dp)
                 .shadow(6.dp, CircleShape),
         )
-        NewMenuFab(vm, state.folder, snackbar, onNewNote = onNew, onOpen = onOpen, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp))
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+        // Beside the floating tabs, level with them.
+        if (!keyboardUp) {
+            NewMenuFab(
+                vm,
+                state.folder,
+                snackbar,
+                onNewNote = onNew,
+                onOpen = onOpen,
+                modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM - 16.dp + 4.dp),
+            )
+        }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = toolbarClearance(extra = 68.dp)))
     }
 
     if (naming) {
