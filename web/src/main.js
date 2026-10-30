@@ -234,6 +234,12 @@ document.querySelector('m3e-search-bar').addEventListener('clear', () => {
 // ---------- keyboard ----------
 
 document.addEventListener('keydown', (e) => {
+  // Cmd/Ctrl+K (or +O, as in Obsidian): the quick switcher, from anywhere, even mid-note.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'o') && !$('app').hidden) {
+    e.preventDefault();
+    notes.openSwitcher();
+    return;
+  }
   if ($('app').hidden || notes.noteIsOpen() || e.target.closest('input, textarea, [contenteditable]')) return;
   if (e.key === 'n' && !e.metaKey && !e.ctrlKey && !e.altKey && state.view !== 'settings') {
     e.preventDefault();

@@ -371,6 +371,8 @@ private val QUOTE = Regex("""^>\s?(.*)$""")
 private val BULLET = Regex("""^[-*+]\s+(.*)$""")
 private val NUMBERED = Regex("""^(\d+[.)])\s+(.*)$""")
 private val RULE = Regex("""^\s*([-*_])(\s*\1){2,}\s*$""")
+private val TABLE_ROW = Regex("""^\|.*\|\s*$""")
+private val TABLE_RULE = Regex("""^\|[\s:|-]+\|\s*$""")
 private val FENCE = Regex("""^\s*(```|~~~)""")
 
 /** One line of a card: what kind it is, how deep it's nested, and its text (marker removed). */
@@ -382,6 +384,7 @@ private sealed interface CardLine {
     data class Heading(val level: Int, val text: String) : CardLine { override val depth = 0 }
     data class Quote(val text: String, override val depth: Int) : CardLine
     data class Code(val text: String) : CardLine { override val depth = 0 }
+    data class Row(val cells: List<String>) : CardLine { override val depth = 0 }
 }
 
 /** A note's first lines, read the way the web card reads them. */
@@ -397,6 +400,11 @@ private fun cardLines(text: String): List<CardLine> {
         val lead = raw.takeWhile { it == ' ' || it == '\t' }
         val depth = (lead.fold(0) { d, c -> d + if (c == '\t') 2 else 1 } / 2).coerceAtMost(4)
         val l = raw.substring(lead.length)
+        // Table rows as their cells; the |---| line under the header is dropped.
+        if (TABLE_ROW.matches(l)) {
+            if (!TABLE_RULE.matches(l)) out += CardLine.Row(l.trim().removePrefix("|").removeSuffix("|").split(Regex("""(?<!\\)\|""")).map { it.trim() })
+            continue
+        }
         TASK.find(l)?.let { out += CardLine.Task(it.groupValues[1] != " ", it.groupValues[2], depth); continue }
         HEADING.find(l)?.let { out += CardLine.Heading(it.groupValues[1].length, it.groupValues[2]); continue }
         QUOTE.find(l)?.let { m ->
@@ -471,6 +479,9 @@ fun Excerpt(text: String, small: Boolean = false) {
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth().background(codeBg, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp),
                 )
+                is CardLine.Row -> androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (c in line.cells) Text(inline(c), style = style, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                }
                 is CardLine.Plain -> Text(inline(line.text), style = style, maxLines = oneLine, overflow = TextOverflow.Ellipsis, modifier = indent)
             }
         }

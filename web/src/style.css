@@ -965,6 +965,21 @@ m3e-theme {
   color: var(--md-sys-color-on-surface-variant);
 }
 
+.ln.tr {
+  display: flex;
+  gap: 4px;
+}
+
+.ln.tr span {
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  border-left: 2px solid color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .ln.h {
   font-weight: 700;
 }
@@ -1851,4 +1866,115 @@ body.dragging-note [data-drop-folder] {
 
 .new-item m3e-icon {
   color: var(--md-sys-color-primary);
+}
+
+/* ---------- quick switcher (Cmd/Ctrl+K) ---------- */
+.sink-dialog.switcher {
+  width: min(600px, calc(100vw - 32px));
+  margin-top: 12vh;
+}
+
+.switcher-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+}
+
+.switcher-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.switcher-input input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 18px;
+}
+
+.switcher-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.switcher-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  --m3e-icon-size: 20px;
+}
+
+.switcher-row m3e-icon {
+  flex: none;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.switcher-row.on,
+.switcher-row:hover {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.switcher-title {
+  overflow: hidden;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.switcher-path {
+  flex: none;
+  margin-left: auto;
+  max-width: 40%;
+  overflow: hidden;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.switcher-empty {
+  margin: 10px 12px;
+}
+
+.switcher-hint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding: 6px 12px 2px;
+}
+
+.switcher-hint kbd {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--md-sys-color-surface-container-highest);
+  font: 12px ui-monospace, Menlo, monospace;
+}
+
+@media (max-width: 839px) {
+  .switcher-hint {
+    display: none;
+  }
 }

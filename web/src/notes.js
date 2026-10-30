@@ -119,6 +119,13 @@ function excerptHtml(text) {
     const depth = Math.min(4, [...lead].reduce((d, c) => d + (c === '\t' ? 2 : 1), 0) >> 1);
     const indent = depth ? ` style="--depth:${depth}"` : '';
     const l = raw.slice(lead.length);
+    // Table rows as their cells, spaced out; the |---| line under the header is dropped.
+    if (/^\|.*\|\s*$/.test(l)) {
+      if (/^\|[\s:|-]+\|\s*$/.test(l)) continue;
+      const cells = l.trim().slice(1, -1).split(/(?<!\\)\|/).map((c) => `<span>${inlineHtml(c.trim())}</span>`);
+      out.push(`<span class="ln tr">${cells.join('')}</span>`);
+      continue;
+    }
     const task = /^[-*+]\s+\[(.)\]\s+(.*)$/.exec(l);
     if (task) {
       out.push(`<span class="ln task${task[1] === ' ' ? '' : ' done'}"${indent}>${ic(task[1] === ' ' ? 'check_box_outline_blank' : 'check_box')}<span>${inlineHtml(task[2])}</span></span>`);
@@ -805,6 +812,112 @@ export async function openNote(path, { line } = {}) {
 
 /** A new note that becomes a file on its first save, so an abandoned "new note" leaves nothing behind. */
 /** The "new note" button: a fresh draft that Back closes. */
+// ---------- quick switcher ----------
+
+/**
+ * How well `q` matches a note, or 0: the title starting with it beats a word in it starting with it, beats it anywhere
+ * in the title or path, beats its letters in order (so "mtg nts" finds "Meeting notes").
+ */
+function matchScore(q, n) {
+  const title = n.title.toLowerCase();
+  const path = n.path.toLowerCase();
+  if (title.startsWith(q)) return 100;
+  if (new RegExp(`(^|[\\s/_-])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(title)) return 80;
+  if (title.includes(q)) return 60;
+  if (path.includes(q)) return 40;
+  const letters = q.replace(/\s/g, '');
+  let i = 0;
+  for (const ch of title) if (ch === letters[i]) i++;
+  return i === letters.length ? 20 : 0;
+}
+
+/** Cmd/Ctrl+K: jump to any note by typing part of its name (Obsidian's quick switcher). Enter opens; Shift+Enter makes a new note with that name. */
+export async function openSwitcher() {
+  if (document.querySelector('.switcher')) return;
+  if (!state.loaded) await loadNotes();
+  const host = document.getElementById('theme') ?? document.body;
+  const dlg = document.createElement('dialog');
+  dlg.className = 'sink-dialog switcher';
+  dlg.innerHTML = `<div class="switcher-body">
+  <div class="switcher-input">${ic('search')}<input type="text" placeholder="Find a note" aria-label="Find a note" autocomplete="off" spellcheck="false" /></div>
+  <div class="switcher-list" role="listbox"></div>
+  <div class="switcher-hint muted small"><kbd>↑</kbd><kbd>↓</kbd> to pick · <kbd>Enter</kbd> to open · <kbd>Shift</kbd>+<kbd>Enter</kbd> new note</div>
+</div>`;
+  host.append(dlg);
+  const input = dlg.querySelector('input');
+  const list = dlg.querySelector('.switcher-list');
+  let items = [];
+  let at = 0;
+  const close = () => {
+    dlg.close();
+    dlg.remove();
+  };
+  const go = (n) => {
+    close();
+    if (n) location.hash = noteHash(n.path);
+  };
+  const create = async (title) => {
+    close();
+    if (!title.trim()) return;
+    try {
+      const created = await api.createNote({ folder: state.folder, title: title.trim(), content: `# ${title.trim()}\n\n` });
+      await loadNotes();
+      location.hash = noteHash(created.path);
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+  const render = () => {
+    const q = input.value.trim().toLowerCase();
+    const opens = opened.read();
+    const recency = (n) => Math.max(opens[n.path] ?? 0, n.mtime);
+    items = q
+      ? state.notes
+          .map((n) => ({ n, s: matchScore(q, n) }))
+          .filter((x) => x.s)
+          .sort((a, b) => b.s - a.s || recency(b.n) - recency(a.n))
+          .slice(0, 30)
+          .map((x) => x.n)
+      : [...state.notes].sort((a, b) => recency(b) - recency(a)).slice(0, 12);
+    at = Math.min(at, Math.max(0, items.length - 1));
+    list.innerHTML =
+      items
+        .map(
+          (n, i) => `<button type="button" class="switcher-row${i === at ? ' on' : ''}" data-i="${i}" role="option" aria-selected="${i === at}">
+  ${ic(isBoardPath(n.path) ? 'draw' : 'description')}<span class="switcher-title">${esc(n.title)}</span><span class="switcher-path">${esc(folderOf(n.path))}</span></button>`,
+        )
+        .join('') || `<p class="muted small switcher-empty">No note called that. Shift+Enter makes one.</p>`;
+    list.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+  };
+  input.addEventListener('input', () => {
+    at = 0;
+    render();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      at = (at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % Math.max(1, items.length);
+      render();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey || !items.length) create(input.value);
+      else go(items[at]);
+    }
+  });
+  list.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-i]');
+    if (row) go(items[Number(row.dataset.i)]);
+  });
+  dlg.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    close();
+  });
+  dlg.addEventListener('mousedown', (e) => e.target === dlg && close());
+  render();
+  dlg.showModal();
+  input.focus();
+}
+
 export function newNote() {
   openFromApp('#/new');
 }
