@@ -95,6 +95,10 @@ data class Todo(
     @SerialName("remind_at") val remindAt: Long? = null,
     @SerialName("done_on") val doneOn: String? = null,
     @SerialName("note_title") val noteTitle: String = "",
+    /** Tasks priority: 0 highest .. 3 none .. 5 lowest. */
+    val priority: Int = 3,
+    /** 🛫 start date: kept out of the way until then. */
+    val start: String? = null,
 ) {
     val open get() = status == "open"
     /** Stable across line moves: same note, same text. */
@@ -273,6 +277,11 @@ suspend fun Api.backlinksJson(path: String): String =
         json.parseToJsonElement(it).jsonObject["items"]?.toString() ?: "[]"
     }
 
+@Serializable
+data class TodoCount(val overdue: Int = 0, val today: Int = 0)
+
+suspend fun Api.todoCount(): TodoCount = call(request("/api/todos/count").build()) { json.decodeFromString(it) }
+
 suspend fun Api.todos(view: String = "open"): TodoList = call(request("/api/todos?view=$view").build()) { json.decodeFromString(it) }
 
 suspend fun Api.toggleTodo(t: Todo, done: Boolean, next: String? = null): Toggled {
@@ -287,15 +296,23 @@ suspend fun Api.toggleTodo(t: Todo, done: Boolean, next: String? = null): Toggle
 }
 
 /**
- * Changes a todo's text and/or its date. With [setDate], [due] and [time] are written as given (null clears);
- * without, the date and reminder stay as they are.
+ * Changes a todo's text and/or its date, or its [status] ("cancelled" to cancel it). With [setDate], [due] and [time]
+ * are written as given (null clears); without, the date and reminder stay as they are.
  */
-suspend fun Api.editTodo(t: Todo, text: String? = null, setDate: Boolean = false, due: String? = null, time: String? = null) {
+suspend fun Api.editTodo(
+    t: Todo,
+    text: String? = null,
+    setDate: Boolean = false,
+    due: String? = null,
+    time: String? = null,
+    status: String? = null,
+) {
     val body = buildJsonObject {
         put("path", t.path)
         put("line", t.line)
         put("raw", t.raw)
         text?.let { put("text", it) }
+        status?.let { put("status", it) }
         if (setDate) {
             put("due", due)
             put("time", if (due == null) null else time)
@@ -304,13 +321,18 @@ suspend fun Api.editTodo(t: Todo, text: String? = null, setDate: Boolean = false
     call(request("/api/todos/edit").post(jsonBody(body)).build()) { }
 }
 
-suspend fun Api.addTodo(text: String, due: String?, time: String?) {
+/** Where a quick todo went, and the date and time the server read off its text ("call mum tomorrow 6pm"). */
+@Serializable
+data class Added(val path: String = TODO_NOTE, val due: String? = null, val time: String? = null)
+
+suspend fun Api.addTodo(text: String, due: String?, time: String?): Added {
     val body = buildJsonObject {
         put("text", text)
         due?.let { put("due", it) }
         if (due != null) time?.let { put("time", it) }
+        put("natural", true)
     }
-    call(request("/api/todos").post(jsonBody(body)).build()) { }
+    return call(request("/api/todos").post(jsonBody(body)).build()) { json.decodeFromString<Added>(it) }
 }
 
 // ---------- local copy ----------

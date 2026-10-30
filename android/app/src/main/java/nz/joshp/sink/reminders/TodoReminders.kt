@@ -16,6 +16,10 @@ import nz.joshp.sink.data.Settings
 import nz.joshp.sink.data.Todo
 import nz.joshp.sink.data.todos
 import nz.joshp.sink.data.toggleTodo
+import nz.joshp.sink.data.editTodo
+import nz.joshp.sink.data.reminderTime
+import java.time.LocalDate
+import java.time.LocalDateTime
 import nz.joshp.sink.ui.MainActivity
 
 /**
@@ -86,6 +90,15 @@ object TodoReminders {
             Intent(intent).setClass(context, TodoReminderReceiver::class.java).setAction(TodoReminderReceiver.ACTION_DONE),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        // Snoozing rewrites the todo's date and reminder in the note, so every device agrees on when it's next due.
+        fun snooze(until: String, request: Int) = PendingIntent.getBroadcast(
+            context,
+            id + request,
+            Intent(intent).setClass(context, TodoReminderReceiver::class.java)
+                .setAction(TodoReminderReceiver.ACTION_SNOOZE)
+                .putExtra(TodoReminderReceiver.EXTRA_UNTIL, until),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         val n = NotificationCompat.Builder(context, Reminders.CHANNEL_DUE)
             .setSmallIcon(R.drawable.ic_tile)
             .setContentTitle(text)
@@ -95,6 +108,8 @@ object TodoReminders {
             .setContentIntent(open)
             .setAutoCancel(true)
             .addAction(0, "Done", done)
+            .addAction(0, "1 hour", snooze(TodoReminderReceiver.UNTIL_HOUR, 2))
+            .addAction(0, "Tomorrow", snooze(TodoReminderReceiver.UNTIL_TOMORROW, 3))
             .build()
         NotificationManagerCompat.from(context).notify(id, n)
     }
@@ -104,6 +119,29 @@ class TodoReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ACTION_FIRE -> TodoReminders.fire(context, intent)
+            ACTION_SNOOZE -> {
+                val path = intent.getStringExtra(EXTRA_PATH) ?: return
+                val raw = intent.getStringExtra(EXTRA_RAW) ?: return
+                NotificationManagerCompat.from(context).cancel((path + raw).hashCode())
+                // In an hour: that day and time. Tomorrow: same reminder time (or the 9am default) a day later.
+                val (due, time) = if (intent.getStringExtra(EXTRA_UNTIL) == UNTIL_HOUR) {
+                    val at = LocalDateTime.now().plusHours(1)
+                    at.toLocalDate().toString() to "%02d:%02d".format(at.hour, at.minute)
+                } else {
+                    LocalDate.now().plusDays(1).toString() to reminderTime(raw)
+                }
+                val pending = goAsync()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val api = Settings(context).session()?.let(::Api) ?: return@launch
+                        val todo = Todo(path, intent.getIntExtra(EXTRA_LINE, 0), raw, intent.getStringExtra(EXTRA_TEXT) ?: "", "open")
+                        runCatching { api.editTodo(todo, setDate = true, due = due, time = time) }
+                        ReminderSync.now(context)
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
             ACTION_DONE -> {
                 val path = intent.getStringExtra(EXTRA_PATH) ?: return
                 val raw = intent.getStringExtra(EXTRA_RAW) ?: return
@@ -125,6 +163,10 @@ class TodoReminderReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_FIRE = "nz.joshp.sink.todo.FIRE"
         const val ACTION_DONE = "nz.joshp.sink.todo.DONE"
+        const val ACTION_SNOOZE = "nz.joshp.sink.todo.SNOOZE"
+        const val EXTRA_UNTIL = "until"
+        const val UNTIL_HOUR = "hour"
+        const val UNTIL_TOMORROW = "tomorrow"
         const val EXTRA_PATH = "path"
         const val EXTRA_LINE = "line"
         const val EXTRA_RAW = "raw"

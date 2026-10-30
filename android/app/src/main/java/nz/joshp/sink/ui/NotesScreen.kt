@@ -662,12 +662,12 @@ private fun inlineMarkdown(s: String, codeBg: Color, markBg: Color): AnnotatedSt
     }
 }
 
-/** Links and embeds as their text, Tasks dates and reminders dropped. Formatting marks stay for [inlineMarkdown]. */
+/** Links and embeds as their text, Tasks fields (dates, reminders, priority, repeat) dropped. Formatting marks stay for [inlineMarkdown]. */
 private fun clean(s: String) = s
     .replace(Regex("""!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\)"""), "🖼")
     .replace(Regex("""\[\[([^\]|]+)\|?([^\]]*)]]""")) { it.groupValues[2].ifEmpty { it.groupValues[1] } }
     .replace(Regex("""\[([^\]]+)]\([^)]*\)"""), "$1")
-    .replace(Regex("""[📅⏳🛫✅]\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)"""), "")
+    .replace(Regex("""[📅⏳🛫✅➕❌]\uFE0F?\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)|(?:⏫|🔼|🔽|🔺|⏬)\uFE0F?|🔁\uFE0F?\s*every[^📅⏳🛫✅➕❌\n]*"""), "")
     .trim()
 
 @Composable

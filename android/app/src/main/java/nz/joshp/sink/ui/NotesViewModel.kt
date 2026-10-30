@@ -39,6 +39,7 @@ import nz.joshp.sink.data.toggleTodo
 import nz.joshp.sink.data.Toggled
 import nz.joshp.sink.data.editTodo
 import nz.joshp.sink.data.reminderTime
+import nz.joshp.sink.data.todoCount
 import nz.joshp.sink.reminders.ReminderSync
 
 data class NotesState(
@@ -74,6 +75,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<NotesState> = _state.asStateFlow()
     private val _todos = MutableStateFlow(TodosState())
     val todos: StateFlow<TodosState> = _todos.asStateFlow()
+
+    /** Overdue plus today's todos, for the Todos tab's badge. */
+    private val _todoBadge = MutableStateFlow(0)
+    val todoBadge: StateFlow<Int> = _todoBadge.asStateFlow()
     val loggedOut = MutableStateFlow(false)
     val trashed = MutableStateFlow<TrashedNote?>(null)
 
@@ -100,7 +105,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                         refresh = viewModelScope.launch {
                             delay(400)
                             refresh()
-                            if (c.type.startsWith("todo.") || _todos.value.loaded) loadTodos()
+                            if (c.type.startsWith("todo.") || _todos.value.loaded) loadTodos() else loadTodoBadge()
                         }
                     }
                 }
@@ -317,12 +322,20 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 val open = api.todos("open")
                 val done = if (_todos.value.done != null) api.todos("done").todos else null
                 _todos.update { it.copy(open = open.todos, done = done, today = open.today, loaded = true, error = null) }
+                loadTodoBadge()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 _todos.update { it.copy(error = e.message ?: "Can't reach the server", loaded = true) }
             } finally {
                 _todos.update { it.copy(refreshing = false) }
             }
+        }
+    }
+
+    fun loadTodoBadge() {
+        viewModelScope.launch {
+            val api = api() ?: return@launch
+            runCatching { api.todoCount() }.onSuccess { _todoBadge.value = it.overdue + it.today }
         }
     }
 
@@ -369,7 +382,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun moveOverdueToToday(): String {
         val api = api() ?: return "Signed out"
         val today = _todos.value.today
-        val overdue = _todos.value.open.filter { it.due != null && it.due < today }
+        val overdue = _todos.value.open.filter { it.due != null && it.due < today && !(it.start != null && it.start > today) }
         val failed = overdue.count { t -> runCatching { api.editTodo(t, setDate = true, due = today, time = reminderTime(t.raw)) }.isFailure }
         loadTodos()
         ReminderSync.now(getApplication())
@@ -379,12 +392,33 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     private fun todoError(e: Throwable) =
         if (e is ApiException && e.code == 409) "That todo changed; reloaded" else e.message ?: "Couldn't save"
 
+    /**
+     * Adds a todo; the server reads a date off the end of the text when none is picked ("call mum tomorrow 6pm").
+     * Returns what to tell the user: an error, "Added for Sat 31 Oct, 18:00" when a date was read, else null.
+     */
     suspend fun addTodo(text: String, due: String?, time: String?): String? {
         val api = api() ?: return "Signed out"
-        val error = runCatching { api.addTodo(text, due, time) }.exceptionOrNull()
+        val added = runCatching { api.addTodo(text, due, time) }
         loadTodos()
-        if (due != null) ReminderSync.now(getApplication())
-        return error?.let { it.message ?: "Couldn't add" }
+        if (added.getOrNull()?.due != null) ReminderSync.now(getApplication())
+        return added.fold(
+            { a ->
+                a.due?.takeIf { due == null }?.let { d ->
+                    val day = runCatching { java.time.LocalDate.parse(d).format(java.time.format.DateTimeFormatter.ofPattern("EEE d MMM")) }.getOrDefault(d)
+                    "Added for $day" + (a.time?.let { ", $it" } ?: "")
+                }
+            },
+            { it.message ?: "Couldn't add" },
+        )
+    }
+
+    /** Cancels a todo (Tasks' `[-]`): it goes to the done list, struck out, rather than being deleted. */
+    suspend fun cancelTodo(t: Todo): String {
+        val api = api() ?: return "Signed out"
+        val error = runCatching { api.editTodo(t, status = "cancelled") }.exceptionOrNull()
+        loadTodos()
+        ReminderSync.now(getApplication())
+        return error?.let(::todoError) ?: "Cancelled"
     }
 
     /**

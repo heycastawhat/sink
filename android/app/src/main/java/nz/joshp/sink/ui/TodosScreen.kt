@@ -76,6 +76,12 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.outlined.EditCalendar
 import androidx.compose.material.icons.outlined.Update
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.DragHandle
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.KeyboardDoubleArrowDown
+import androidx.compose.material.icons.outlined.KeyboardDoubleArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -100,11 +106,14 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
     LaunchedEffect(Unit) { vm.loadTodos() }
 
     val today = state.today
+    // Not started yet (🛫 later): out of the way until their start date.
+    val (later, open) = state.open.partition { it.start != null && it.start > today }
     val groups = listOf(
-        "Overdue" to state.open.filter { it.due != null && it.due < today },
-        "Today" to state.open.filter { it.due == today },
-        "Upcoming" to state.open.filter { it.due != null && it.due > today },
-        "Someday" to state.open.filter { it.due == null },
+        "Overdue" to open.filter { it.due != null && it.due < today },
+        "Today" to open.filter { it.due == today },
+        "Upcoming" to open.filter { it.due != null && it.due > today },
+        "Someday" to open.filter { it.due == null },
+        "Starts later" to later.sortedBy { it.start },
     ).filter { it.second.isNotEmpty() }
 
     var editing by remember { mutableStateOf<Todo?>(null) }
@@ -208,6 +217,10 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                     }
                 }
             },
+            onCancelTodo = {
+                editing = null
+                scope.launch { snackbar.showSnackbar(vm.cancelTodo(t)) }
+            },
             onDismiss = { editing = null },
         )
     }
@@ -249,6 +262,15 @@ private class TodoActions(
     val onEdit: (Todo) -> Unit,
     val onReschedule: (Todo, LocalDate?) -> Unit,
     val onOpenNote: (String, Int) -> Unit,
+)
+
+/** Tasks priorities other than none (3): label and icon. */
+private val PRIORITY = mapOf(
+    0 to ("Highest" to Icons.Outlined.KeyboardDoubleArrowUp),
+    1 to ("High" to Icons.Outlined.KeyboardArrowUp),
+    2 to ("Medium" to Icons.Outlined.DragHandle),
+    4 to ("Low" to Icons.Outlined.KeyboardArrowDown),
+    5 to ("Lowest" to Icons.Outlined.KeyboardDoubleArrowDown),
 )
 
 private val DUE = Regex("""📅\uFE0F?\s*(\d{4}-\d{2}-\d{2})""")
@@ -328,6 +350,21 @@ private fun TodoRow(t: Todo, today: String, actions: TodoActions) {
                     color = if (done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 2.dp)) {
+                    PRIORITY[t.priority]?.let { (label, icon) ->
+                        val color = if (t.priority <= 1) MaterialTheme.colorScheme.error else if (t.priority == 2) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(icon, null, Modifier.size(15.dp), tint = color)
+                            Spacer(Modifier.width(3.dp))
+                            Text(label, style = MaterialTheme.typography.labelMedium, color = color)
+                        }
+                    }
+                    if (t.start != null && t.start > today) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.Flag, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(3.dp))
+                            Text("Starts " + dayLabel(LocalDate.parse(t.start), today), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                     if (t.due != null) {
                         val color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                         Row(Modifier.then(if (done) Modifier else Modifier.clickable { menu = true }), verticalAlignment = Alignment.CenterVertically) {
@@ -361,7 +398,13 @@ private fun TodoRow(t: Todo, today: String, actions: TodoActions) {
 /** Text, date and reminder time for one todo, with the quick dates as chips. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EditTodoDialog(t: Todo, today: String, onSave: (String, LocalDate?, String?) -> Unit, onDismiss: () -> Unit) {
+private fun EditTodoDialog(
+    t: Todo,
+    today: String,
+    onSave: (String, LocalDate?, String?) -> Unit,
+    onCancelTodo: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val context = LocalContext.current
     var text by remember { mutableStateOf(t.text) }
     var due by remember { mutableStateOf(t.due?.let { runCatching { LocalDate.parse(it) }.getOrNull() }) }
@@ -411,22 +454,28 @@ private fun EditTodoDialog(t: Todo, today: String, onSave: (String, LocalDate?, 
                 enabled = text.isNotBlank(),
             ) { Text("Save") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onCancelTodo) { Text("Cancel todo", color = MaterialTheme.colorScheme.error) }
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+        },
     )
 }
 
 private val HAS_TIME = Regex("""\(@\d{4}-\d{2}-\d{2}[ T]\d""")
 
-private fun dueLabel(t: Todo, today: String): String {
-    val due = LocalDate.parse(t.due)
-    val days = runCatching { ChronoUnit.DAYS.between(LocalDate.parse(today), due) }.getOrDefault(99)
-    val day = when (days) {
-        0L -> "Today"
-        1L -> "Tomorrow"
-        -1L -> "Yesterday"
-        in 2..6 -> due.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
-        else -> due.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
+private fun dayLabel(date: LocalDate, today: String): String =
+    when (runCatching { ChronoUnit.DAYS.between(LocalDate.parse(today), date) }.getOrDefault(99)) {
+        0L -> "today"
+        1L -> "tomorrow"
+        -1L -> "yesterday"
+        in 2..6 -> date.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
+        else -> date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
     }
+
+private fun dueLabel(t: Todo, today: String): String {
+    val day = dayLabel(LocalDate.parse(t.due), today).replaceFirstChar { it.uppercase() }
     val time = t.remindAt?.takeIf { HAS_TIME.containsMatchIn(t.raw) }?.let {
         java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
             .format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))

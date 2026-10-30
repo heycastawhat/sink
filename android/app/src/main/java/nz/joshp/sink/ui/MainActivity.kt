@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.width
@@ -293,9 +295,12 @@ class MainActivity : ComponentActivity() {
                 composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onCheckForUpdates = checkForUpdates) }
             }
             if (showBar) {
+                val badge by notesVm.todoBadge.collectAsState()
+                LaunchedEffect(Unit) { notesVm.loadTodoBadge() }
                 FloatingTabs(
                     nav,
                     route,
+                    mapOf("todos" to badge),
                     Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(start = 16.dp, bottom = TOOLBAR_BOTTOM),
                 )
             }
@@ -340,7 +345,7 @@ class MainActivity : ComponentActivity() {
  * beside it on the right. The open tab shows its name; the others are icons.
  */
 @Composable
-private fun FloatingTabs(nav: NavHostController, selected: String?, modifier: Modifier = Modifier) {
+private fun FloatingTabs(nav: NavHostController, selected: String?, badges: Map<String, Int>, modifier: Modifier = Modifier) {
     Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -366,11 +371,15 @@ private fun FloatingTabs(nav: NavHostController, selected: String?, modifier: Mo
                         .padding(horizontal = if (on) 16.dp else 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        if (on) t.selectedIcon else t.icon,
-                        if (on) null else t.label,
-                        tint = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    // Todos: how many are overdue or due today.
+                    val count = badges[t.route] ?: 0
+                    BadgedBox(badge = { if (count > 0) Badge { Text(if (count > 99) "99+" else "$count") } }) {
+                        Icon(
+                            if (on) t.selectedIcon else t.icon,
+                            if (on) null else t.label,
+                            tint = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (on) {
                         Spacer(Modifier.width(8.dp))
                         Text(t.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSecondaryContainer)
