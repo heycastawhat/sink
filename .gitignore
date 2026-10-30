@@ -10,3 +10,5 @@ dist/
 /web/public/excalidraw/
 # Your own deployment tweaks (e.g. build from source, mount a NAS share).
 docker-compose.override.yml
+# Private handoff notes (hosts, deploy details).
+HANDOFF.local.md
