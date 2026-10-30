@@ -131,6 +131,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     val hideFoldered: StateFlow<Boolean> = sinkApp.settings.hideFoldered.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    fun setHideFoldered(on: Boolean) {
+        viewModelScope.launch { sinkApp.settings.setHideFoldered(on) }
+    }
+
     /** Enabled plugins for the editor page; the cached list until the server answers. */
     fun pluginsJson(): String = store.plugins()
 

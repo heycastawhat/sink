@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Close
@@ -43,11 +44,13 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Draw
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
@@ -71,6 +74,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.AnnotatedString
@@ -122,6 +126,9 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     var naming by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
+    var filterMenu by remember { mutableStateOf(false) }
+    var byTitle by rememberSaveable { mutableStateOf(false) }
+    val pullUp = rememberPullUpToCreate { onNew("") }
     // Runs a folder action and shows its error, if any.
     fun act(block: suspend () -> String?) {
         scope.launch { block()?.let { snackbar.showSnackbar(it) } }
@@ -147,16 +154,30 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     }
     val list = (state.results ?: state.notes).filter(inFolder)
     val searching = state.results != null
-    val pinned = if (searching) emptyList() else list.filter { it.pinned }
-    val others = if (searching) list else list.filterNot { it.pinned }
+    // The server sends newest first; search keeps its own order (best match first).
+    val ordered = if (byTitle && !searching) list.sortedBy { it.title.lowercase() } else list
+    val pinned = if (searching) emptyList() else ordered.filter { it.pinned }
+    val others = if (searching) ordered else ordered.filterNot { it.pinned }
     val inside = state.folder.isNotEmpty()
     // Subfolders right here, unless searching (results span every folder).
     val subfolders = remember(state.folders, state.folder) { childFolders(state.folders, state.folder) }
+    val unfiledHome = hideFoldered && !inside && !searching
+    val subtitle = when {
+        !state.loaded -> null
+        searching -> "${list.size} ${if (list.size == 1) "result" else "results"}"
+        else -> listOfNotNull(
+            if (unfiledHome) "${list.size} unfiled" else "${list.size} ${if (list.size == 1) "note" else "notes"}",
+            subfolders.size.takeIf { it > 0 }?.let { "$it ${if (it == 1) "folder" else "folders"}" },
+        ).joinToString(" · ")
+    }
     // Home's Recent row (not in folders or search).
     val opened by vm.opened.collectAsStateWithLifecycle()
-    val recent = remember(state.notes, opened) { recentNotes(state.notes, opened) }
+    // With filed notes kept off home, the row is just the ones in folders (the rest are already on the page).
+    val recent = remember(state.notes, opened, hideFoldered) {
+        recentNotes(if (hideFoldered) state.notes.filter { '/' in it.path } else state.notes, opened, count = if (hideFoldered) 6 else 8)
+    }
     // Once there are enough notes for it to save scrolling, or whenever home leaves some out (filed in folders).
-    val showRecent = !inside && !searching && (state.notes.size > 6 || (hideFoldered && state.notes.any { '/' in it.path }))
+    val showRecent = !inside && !searching && (if (hideFoldered) recent.isNotEmpty() else state.notes.size > 6)
     var recentShut by rememberSaveable { mutableStateOf(false) }
     // Back climbs out of a folder before it leaves the tab.
     BackHandler(enabled = inside) { vm.folderUp() }
@@ -165,6 +186,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             ScreenTitle(
                 state.folder.substringAfterLast('/').ifEmpty { "Notes" },
+                sub = subtitle,
                 onBack = if (inside) ({ vm.folderUp(); Unit }) else null,
                 trailing = {
                     if (state.offline) Icon(Icons.Outlined.CloudOff, "Offline", Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -220,21 +242,25 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                     // newest notes, with older ones further up (scroll up for them). Each section's label comes after
                     // its items here, which puts it above them on screen.
                     else -> LazyVerticalStaggeredGrid(
-                        columns = StaggeredGridCells.Adaptive(160.dp),
+                        columns = StaggeredGridCells.Adaptive(300.dp),
                         reverseLayout = true,
                         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = toolbarClearance(extra = 68.dp)),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalItemSpacing = 10.dp,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().pullUpToCreate(pullUp),
                     ) {
-                        if (subfolders.isNotEmpty() && !searching) {
-                            items(subfolders.reversed(), key = { "f:$it" }, span = { StaggeredGridItemSpan.FullLine }) { f ->
-                                FolderRow(f.substringAfterLast('/'), countIn(state.notes, f)) { vm.setFolder(f) }
+                        // Folders sit as chips in a row; with none yet, home still offers "New folder".
+                        if (!searching && (subfolders.isNotEmpty() || !inside)) {
+                            item(key = "folders", span = StaggeredGridItemSpan.FullLine) {
+                                FolderChips(subfolders, { countIn(state.notes, it) }, onOpen = vm::setFolder, onNew = { naming = true })
                             }
                             item(key = "folders-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.padding(start = 6.dp, top = 8.dp)) }
                         }
                         if (showRecent) {
-                            item(key = "recent", span = StaggeredGridItemSpan.FullLine) {
+                            if (hideFoldered) {
+                                item(key = "recent", span = StaggeredGridItemSpan.FullLine) { RecentFiledRow(recent, onOpen) }
+                                item(key = "recent-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Recent in folders", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                            } else item(key = "recent", span = StaggeredGridItemSpan.FullLine) {
                                 RecentStrip(recent, recentShut, onToggle = { recentShut = !recentShut }, onOpen = onOpen)
                             }
                             // Home with everything filed away: say where the notes are.
@@ -254,36 +280,82 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                         items(others, key = { it.path }) { NoteCard(it, onOpen) }
                         if (pinned.isNotEmpty() && others.isNotEmpty()) {
                             item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                        } else if (unfiledHome && others.isNotEmpty() && (subfolders.isNotEmpty() || showRecent)) {
+                            item(key = "unfiled-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Unfiled", Modifier.padding(start = 6.dp, top = 8.dp)) }
                         }
                     }
                 }
+                // Cards slide under the title rather than butting into it.
+                Box(
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth().height(20.dp)
+                        .background(Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surfaceContainerLowest, Color.Transparent))),
+                )
             }
         }
 
         // Search sits at the bottom where a thumb reaches it.
         val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-        TextField(
-            value = state.query,
-            onValueChange = vm::setQuery,
-            placeholder = { Text("Search notes") },
-            leadingIcon = { Icon(Icons.Outlined.Search, null) },
-            trailingIcon = { if (state.query.isNotEmpty()) IconButton(onClick = { vm.setQuery("") }) { Icon(Icons.Outlined.Close, "Clear") } },
-            singleLine = true,
-            shape = CircleShape,
-            colors = TextFieldDefaults.colors(
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            ),
-            // Full width just above the floating tabs; with the keyboard up it sits right on top of it instead.
-            modifier = Modifier
+        // Notes fade out behind the search and toolbar instead of being cut off.
+        if (!keyboardUp) {
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(toolbarClearance(extra = 68.dp))
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f)))),
+            )
+        }
+        // Full width just above the floating tabs; with the keyboard up it sits right on top of it instead.
+        Row(
+            Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .then(if (keyboardUp) Modifier.imePadding().padding(bottom = 8.dp) else Modifier.navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 12.dp))
-                .padding(horizontal = 16.dp)
-                .shadow(6.dp, CircleShape),
-        )
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            TextField(
+                value = state.query,
+                onValueChange = vm::setQuery,
+                placeholder = { Text("Search notes") },
+                leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                trailingIcon = { if (state.query.isNotEmpty()) IconButton(onClick = { vm.setQuery("") }) { Icon(Icons.Outlined.Close, "Clear") } },
+                singleLine = true,
+                shape = CircleShape,
+                colors = TextFieldDefaults.colors(
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                ),
+                modifier = Modifier.weight(1f).shadow(6.dp, CircleShape),
+            )
+            // How the notes are ordered, and whether home keeps filed notes to their folders.
+            Box {
+                Box(
+                    Modifier.size(56.dp).shadow(6.dp, CircleShape).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .clickable { filterMenu = true },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Outlined.FilterList, "Sort and filter") }
+                DropdownMenu(expanded = filterMenu, onDismissRequest = { filterMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Newest first") },
+                        leadingIcon = { Icon(Icons.Outlined.Check, null, tint = if (byTitle) Color.Transparent else MaterialTheme.colorScheme.primary) },
+                        onClick = { filterMenu = false; byTitle = false },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Title A to Z") },
+                        leadingIcon = { Icon(Icons.Outlined.Check, null, tint = if (byTitle) MaterialTheme.colorScheme.primary else Color.Transparent) },
+                        onClick = { filterMenu = false; byTitle = true },
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Keep filed notes in folders") },
+                        leadingIcon = { Icon(Icons.Outlined.Check, null, tint = if (hideFoldered) MaterialTheme.colorScheme.primary else Color.Transparent) },
+                        onClick = { filterMenu = false; vm.setHideFoldered(!hideFoldered) },
+                    )
+                }
+            }
+        }
         // Beside the floating tabs, level with them.
         if (!keyboardUp) {
             NewMenuFab(
@@ -296,6 +368,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
             )
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = toolbarClearance(extra = 68.dp)))
+        PullUpDrawer(pullUp)
     }
 
     if (naming) {
@@ -350,35 +423,34 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit) {
             .padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (showTitle || n.pinned) {
-            Row(verticalAlignment = Alignment.Top) {
-                if (n.isBoard) {
-                    Icon(Icons.Outlined.Draw, null, Modifier.size(18.dp).padding(top = 2.dp))
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(
-                    if (showTitle) n.title else "",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    modifier = Modifier.weight(1f),
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (n.pinned) Icon(Icons.Filled.PushPin, "Pinned", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.Top) {
+            if (n.isBoard) {
+                Icon(Icons.Outlined.Draw, null, Modifier.size(18.dp).padding(top = 2.dp))
+                Spacer(Modifier.width(6.dp))
             }
+            Text(
+                if (showTitle) n.title else "",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                modifier = Modifier.weight(1f),
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (n.pinned) {
+                Icon(Icons.Filled.PushPin, "Pinned", Modifier.size(16.dp).padding(top = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(cardDate(n.mtime), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
         }
         if (n.snippet != null) {
             Text(highlight(n.snippet), style = MaterialTheme.typography.bodyMedium, maxLines = 6, overflow = TextOverflow.Ellipsis)
         } else if (!n.isBoard) {
-            Excerpt(n.excerpt.orEmpty())
+            ExcerptFlow(n.excerpt.orEmpty())
         }
-        // The time always fits; folder and tags take what's left.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (n.folder.isNotEmpty() || n.tags.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (n.folder.isNotEmpty()) Pill(n.folder)
                 n.tags.take(2).forEach { Pill("#$it") }
             }
-            Spacer(Modifier.width(6.dp))
-            Text(relativeTime(n.mtime), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
         }
     }
 }
@@ -518,6 +590,49 @@ fun Excerpt(text: String, small: Boolean = false) {
                 }
                 is CardLine.Plain -> Text(inline(line.text), style = style, maxLines = oneLine, overflow = TextOverflow.Ellipsis, modifier = indent)
             }
+        }
+    }
+}
+
+/** A card's preview as running text: bullets and tasks inline, two lines at most. Search hits and boards don't use it. */
+@Composable
+private fun ExcerptFlow(text: String) {
+    val lines = remember(text) { cardLines(text) }
+    if (lines.isEmpty()) return
+    val codeBg = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val markBg = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+    val flowed = remember(lines, codeBg, markBg) {
+        buildAnnotatedString {
+            lines.forEachIndexed { i, line ->
+                if (i > 0) append(" ")
+                when (line) {
+                    is CardLine.Plain -> append(inlineMarkdown(line.text, codeBg, markBg))
+                    is CardLine.Item -> { append(if (line.marker == "•") "• " else line.marker + " "); append(inlineMarkdown(line.text, codeBg, markBg)) }
+                    is CardLine.Task -> { append(if (line.done) "☑ " else "☐ "); append(inlineMarkdown(line.text, codeBg, markBg)) }
+                    is CardLine.Heading -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(inlineMarkdown(line.text, codeBg, markBg)) }
+                    is CardLine.Quote -> append(inlineMarkdown(line.text, codeBg, markBg))
+                    is CardLine.Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg)) { append(line.text.trim()) }
+                    is CardLine.Row -> append(line.cells.joinToString(" | ") { inlineMarkdown(it, codeBg, markBg).text })
+                }
+            }
+        }
+    }
+    Text(flowed, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+}
+
+/** A card's date: the time today, "Yesterday", the weekday within the last week, else "12 Oct" (with the year when it isn't this one). */
+private fun cardDate(ms: Long): String {
+    val days = ((System.currentTimeMillis() - ms) / 86_400_000L).toInt()
+    val locale = java.util.Locale.getDefault()
+    fun fmt(skeleton: String) = android.text.format.DateFormat.format(android.text.format.DateFormat.getBestDateTimePattern(locale, skeleton), ms).toString()
+    return when {
+        android.text.format.DateUtils.isToday(ms) -> DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(ms))
+        android.text.format.DateUtils.isToday(ms + 86_400_000L) -> "Yesterday"
+        days in 0..5 -> fmt("EEE")
+        else -> {
+            val thisYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+            val year = java.util.Calendar.getInstance().apply { timeInMillis = ms }.get(java.util.Calendar.YEAR)
+            if (year == thisYear) fmt("d MMM") else DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(ms))
         }
     }
 }

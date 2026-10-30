@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -76,6 +77,51 @@ fun RecentStrip(items: List<Recent>, shut: Boolean, onToggle: () -> Unit, onOpen
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(items, key = { it.note.path }) { RecentCard(it, onOpen) }
+            }
+        }
+    }
+}
+
+/**
+ * Home's Recent row when filed notes are kept off it: small tiles for the notes most lately touched inside folders,
+ * each with its folder, so they're one tap away without opening the folder.
+ */
+@Composable
+fun RecentFiledRow(items: List<Recent>, onOpen: (String) -> Unit) {
+    LazyRow(
+        contentPadding = PaddingValues(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(items, key = { it.note.path }) { r ->
+            val n = r.note
+            val outline = NOTE_HUES[n.color]?.copy(alpha = 0.45f) ?: MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+            Row(
+                Modifier
+                    .widthIn(max = 220.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(noteTint(n.color))
+                    .border(1.dp, outline, RoundedCornerShape(18.dp))
+                    .clickable { onOpen(n.path) }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    if (n.isBoard) Icons.Outlined.Draw else Icons.AutoMirrored.Outlined.StickyNote2,
+                    null,
+                    Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Column {
+                    Text(n.title, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        "${n.folder.substringAfterLast('/')} · ${shortTime(r.at)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
