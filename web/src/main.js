@@ -226,6 +226,16 @@ $('search').addEventListener('input', () => {
     notes.setQuery(state.q);
   }, 220);
 });
+// A tag in the sidebar: search for it from the top of Notes.
+$('nav-tags').addEventListener('click', (e) => {
+  const a = e.target.closest('[data-tag]');
+  if (!a) return;
+  e.preventDefault();
+  const q = `#${a.dataset.tag}`;
+  $('search').value = state.q = q;
+  location.hash = '#/notes';
+  notes.setQuery(q);
+});
 document.querySelector('m3e-search-bar').addEventListener('clear', () => {
   state.q = '';
   notes.setQuery('');

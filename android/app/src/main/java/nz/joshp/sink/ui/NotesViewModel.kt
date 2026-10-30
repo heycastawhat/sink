@@ -207,6 +207,13 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun search() {
         val q = _state.value.query
+        // "#tag" alone: exactly the notes tagged that (or a nested tag under it), as on the web.
+        Regex("""^#([\p{L}\p{N}_/-]+)$""").find(q.trim())?.let { m ->
+            val tag = m.groupValues[1].lowercase()
+            val hits = _state.value.notes.filter { n -> n.tags.any { it.lowercase() == tag || it.lowercase().startsWith("$tag/") } }
+            if (_state.value.query == q) _state.update { it.copy(results = hits) }
+            return
+        }
         val api = api() ?: return
         // Offline: match titles and the cached excerpts instead.
         val hits = runCatching { api.searchNotes(q) }.getOrElse {

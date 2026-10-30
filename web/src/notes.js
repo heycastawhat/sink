@@ -79,11 +79,25 @@ export function setFolder(folder) {
 }
 
 let searchSeq = 0;
+/** Notes with this tag, or a nested one under it (#school also finds #school/maths). */
+const tagged = (tag) => {
+  const t = tag.toLowerCase();
+  return state.notes.filter((n) => (n.tags ?? []).some((x) => x.toLowerCase() === t || x.toLowerCase().startsWith(t + '/')));
+};
+
 export async function setQuery(q) {
   state.q = q;
   const seq = ++searchSeq;
   if (!q) {
     state.results = null;
+    return renderGrid();
+  }
+  // "#tag" alone: exactly the notes tagged that, not every note that mentions the word.
+  const tag = /^#([\p{L}\p{N}_/-]+)$/u.exec(q);
+  if (tag) {
+    if (!state.loaded) await loadNotes();
+    if (seq !== searchSeq) return;
+    state.results = tagged(tag[1]);
     return renderGrid();
   }
   try {
@@ -187,6 +201,7 @@ function renderGrid() {
 
   renderFolderBar();
   renderFolderTree();
+  renderTagList();
   renderRecentStrip();
 
   const pinned = state.results ? [] : list.filter((n) => n.pinned);
@@ -378,6 +393,23 @@ const saveOpen = () => {
 };
 
 /** The sidebar's folder tree (desktop). Folders open to show their children; the current one's parents stay open. */
+/** The sidebar's tags, most used first; clicking one searches for it (#tag). */
+function renderTagList() {
+  const box = $('nav-tags');
+  if (!box) return;
+  const counts = new Map();
+  for (const n of state.notes) for (const t of n.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+  const top = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 20);
+  box.hidden = $('nav-tags-head').hidden = !top.length;
+  const current = /^#(.+)$/.exec(state.q ?? '')?.[1]?.toLowerCase();
+  box.innerHTML = top
+    .map(
+      ([t, n]) =>
+        `<a class="nav-item tag-item${current === t.toLowerCase() ? ' active' : ''}" href="#/notes" data-tag="${esc(t)}">${ic('tag')}<span>${esc(t)}</span><b class="count">${n}</b></a>`,
+    )
+    .join('');
+}
+
 export function renderFolderTree() {
   const box = $('nav-folders');
   if (!box) return;
