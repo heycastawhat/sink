@@ -441,8 +441,7 @@ export async function quickTodo() {
   const text = await askText({ title: 'New todo', label: 'Todo', action: 'Add' });
   if (!text) return;
   try {
-    await api.addTodo({ text });
-    toast('Added to Todo.md');
+    toast(addedMessage(await api.addTodo({ text, natural: true })));
     if (!$('todos').hidden) loadTodos();
   } catch (err) {
     toast(err.message);
@@ -1150,6 +1149,7 @@ export function listenForChanges() {
     changeTimer = setTimeout(async () => {
       await loadNotes();
       if (!$('todos')?.hidden) loadTodos();
+      else loadTodoBadge();
     }, 400);
   });
 }
@@ -1480,11 +1480,47 @@ export async function loadTodos() {
     todoState.open = todos;
     todoState.today = today;
     if (todoState.done) todoState.done = (await api.todos('done')).todos;
+    loadTodoBadge();
   } catch (err) {
     if (err instanceof Unauthorized) throw err;
     toast(`Can't load todos: ${err.message}`);
   }
   renderTodos();
+}
+
+let todoBadge = 0;
+
+/** Overdue plus today's count on the Todos tab, so it shows from anywhere. */
+export async function loadTodoBadge() {
+  try {
+    const { overdue, today } = await api.todoCount();
+    todoBadge = overdue + today;
+  } catch {
+    return;
+  }
+  paintTodoBadge();
+}
+
+export function paintTodoBadge() {
+  for (const a of document.querySelectorAll('a[href="#/todos"]')) {
+    let badge = a.querySelector('.tab-badge');
+    if (!todoBadge) {
+      badge?.remove();
+      continue;
+    }
+    if (!badge) a.append((badge = Object.assign(document.createElement('span'), { className: 'tab-badge' })));
+    badge.textContent = todoBadge > 99 ? '99+' : String(todoBadge);
+  }
+}
+
+const shortDate = (iso) => new Date(`${iso}T12:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+
+/** "Added for Tue 3 Nov, 6 pm" when quick add read a date off the text. */
+function addedMessage({ path, due, time }) {
+  const where = path === 'Todo.md' ? '' : ` to ${fileName(path)}`;
+  if (!due) return `Added${where || ' to Todo.md'}`;
+  const at = time ? `, ${new Date(`${due}T${time.padStart(5, '0')}`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` : '';
+  return `Added${where} for ${dueLabel(due) === 'Today' ? 'today' : shortDate(due)}${at}`;
 }
 
 function dueLabel(due) {
@@ -1519,6 +1555,15 @@ function reminderTime(raw) {
   return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null;
 }
 
+/** Tasks priorities other than none (3). */
+const PRIORITY = {
+  0: { label: 'Highest', icon: 'keyboard_double_arrow_up' },
+  1: { label: 'High', icon: 'keyboard_arrow_up' },
+  2: { label: 'Medium', icon: 'drag_handle' },
+  4: { label: 'Low', icon: 'keyboard_arrow_down' },
+  5: { label: 'Lowest', icon: 'keyboard_double_arrow_down' },
+};
+
 function todoRow(t) {
   const done = t.status !== 'open';
   const overdue = !done && t.due && t.due < todoState.today;
@@ -1530,6 +1575,8 @@ function todoRow(t) {
   <div class="todo-main">
     ${done ? `<span class="todo-text">${esc(t.text || '(empty)')}</span>` : `<button type="button" class="todo-text" data-edit title="Edit">${esc(t.text || '(empty)')}</button>`}
     <span class="todo-meta">
+      ${PRIORITY[t.priority] ? `<span class="priority p${t.priority}">${ic(PRIORITY[t.priority].icon)}${PRIORITY[t.priority].label}</span>` : ''}
+      ${t.start && t.start > todoState.today ? `<span class="starts">${ic('flag')}Starts ${esc(dueLabel(t.start))}</span>` : ''}
       ${t.due ? (done ? `<span class="due">${when}</span>` : `<button type="button" class="due${overdue ? ' overdue' : ''}" data-when title="Reschedule">${when}</button>`) : ''}
       ${t.path === 'Todo.md' ? '' : `<a class="todo-note" href="${noteHash(t.path, t.line)}">${ic('description')}${esc(t.note_title)}</a>`}
     </span>
@@ -1542,11 +1589,15 @@ function renderTodos() {
   const root = $('todos');
   if (!root || root.hidden) return;
   const today = todoState.today;
+  // Not started yet (🛫 later): out of the way at the bottom until their start date.
+  const later = todoState.open.filter((t) => t.start && t.start > today);
+  const open = todoState.open.filter((t) => !later.includes(t));
   const groups = [
-    ['Overdue', todoState.open.filter((t) => t.due && t.due < today)],
-    ['Today', todoState.open.filter((t) => t.due === today)],
-    ['Upcoming', todoState.open.filter((t) => t.due && t.due > today)],
-    ['Someday', todoState.open.filter((t) => !t.due)],
+    ['Overdue', open.filter((t) => t.due && t.due < today)],
+    ['Today', open.filter((t) => t.due === today)],
+    ['Upcoming', open.filter((t) => t.due && t.due > today)],
+    ['Someday', open.filter((t) => !t.due)],
+    ['Starts later', later.sort((a, b) => a.start.localeCompare(b.start))],
   ].filter(([, items]) => items.length);
   $('todo-list').innerHTML = groups.length
     ? groups
@@ -1587,6 +1638,10 @@ async function editTodoAt(t) {
   const time = reminderTime(t.raw);
   const out = await editTodo({ text: t.text, due: t.due, time, dates: quickDates() });
   if (!out) return;
+  if (out.cancel) {
+    await saveTodo(t, { status: 'cancelled' });
+    return toast('Cancelled');
+  }
   const change = {};
   if (out.text !== t.text) change.text = out.text;
   if (out.due !== t.due) change.due = out.due;
@@ -1601,7 +1656,7 @@ async function rescheduleTodo(t) {
       .map((d) => ({
         id: d.due ?? 'none',
         label: d.label,
-        detail: d.due ? new Date(`${d.due}T12:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) : '',
+        detail: d.due ? shortDate(d.due) : '',
         icon: d.icon,
       })),
     { id: 'pick', label: 'Pick a date…', icon: 'edit_calendar' },
@@ -1625,7 +1680,7 @@ function wireTodos() {
       if (done) {
         // A recurring todo's next copy goes in above it; Undo takes that back out too.
         const next = out.next && /📅️?\s*(\d{4}-\d{2}-\d{2})/u.exec(out.next)?.[1];
-        toast(next ? `Done. Next: ${new Date(`${next}T12:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}` : 'Done', {
+        toast(next ? `Done. Next: ${shortDate(next)}` : 'Done', {
           action: 'Undo',
           onAction: async () => {
             await api.toggleTodo({ path: t.path, line: out.line, raw: out.raw }, false, out.next).catch(todoError);
@@ -1642,7 +1697,7 @@ function wireTodos() {
   });
   $('todos').addEventListener('click', async (e) => {
     if (e.target.closest('#todo-overdue-today')) {
-      const overdue = todoState.open.filter((t) => t.due && t.due < todoState.today);
+      const overdue = todoState.open.filter((t) => t.due && t.due < todoState.today && !(t.start > todoState.today));
       // One at a time: several can be in the same note, and each save needs the note's latest hash.
       for (const t of overdue) await api.editTodo(t, { due: todoState.today }).catch(todoError);
       toast(`Moved ${overdue.length} to today`);
@@ -1661,7 +1716,8 @@ function wireTodos() {
     const due = $('todo-date').value || undefined;
     const time = (due && $('todo-time').value) || undefined;
     try {
-      await api.addTodo({ text, due, time });
+      const added = await api.addTodo({ text, due, time, natural: true });
+      if (added.due && !due) toast(addedMessage(added));
       $('todo-text').value = '';
       $('todo-date').value = $('todo-time').value = '';
       loadTodos();

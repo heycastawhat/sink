@@ -108,6 +108,7 @@ async function showApp() {
   $('login').hidden = true;
   $('app').hidden = false;
   notes.loadNotes().catch(() => {});
+  notes.loadTodoBadge();
   notes.listenForChanges();
   // Before the first note opens, so its diagrams and commands are there.
   await loadPlugins(
@@ -213,6 +214,7 @@ function renderChrome() {
   $('settings').hidden = state.view !== 'settings';
   closeNewMenus();
   notes.renderFolderTree();
+  notes.paintTodoBadge();
   if (state.view === 'notes') notes.notesRendered();
   if (state.view === 'todos') notes.todosRendered();
 }

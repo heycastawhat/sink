@@ -95,7 +95,8 @@ export function pickFromList({ title, items, empty = 'Nothing here yet.' }) {
 
 /**
  * Editing a todo: its text, due date and reminder time. `dates` ({ label, due }) are one-tap date buttons (Today,
- * Tomorrow...). Resolves to { text, due, time } with empty fields as null, or null if cancelled.
+ * Tomorrow...). Resolves to { text, due, time } with empty fields as null, { cancel: true } to cancel the todo
+ * (Tasks' `[-]`), or null if closed.
  */
 export function editTodo({ text, due, time, dates }) {
   return open(
@@ -108,11 +109,13 @@ export function editTodo({ text, due, time, dates }) {
     <label class="dialog-field"><span>Remind at</span><input name="time" type="time" value="${esc(time ?? '')}" /></label>
   </div>
   <div class="dialog-actions">
-    <m3e-button data-cancel variant="text">Cancel</m3e-button>
+    <m3e-button data-drop variant="text" class="dialog-start">Cancel todo</m3e-button>
+    <m3e-button data-cancel variant="text">Close</m3e-button>
     <m3e-button data-ok variant="filled">Save</m3e-button>
   </div>
 </form>`,
     (dlg, done) => {
+      dlg.querySelector('[data-drop]').addEventListener('click', () => done({ cancel: true }));
       const [textIn, dueIn, timeIn] = ['text', 'due', 'time'].map((n) => dlg.querySelector(`[name="${n}"]`));
       const submit = () => {
         const value = textIn.value.trim();
