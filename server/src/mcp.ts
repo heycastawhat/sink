@@ -11,8 +11,8 @@ export type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>;
  * MCP over Streamable HTTP, stateless: a fresh server per request (no sessions to keep),
  * JSON responses instead of SSE since no tool streams.
  */
-export async function handleMcp(req: Request, api: ApiFetch, timeZone: string, extra: PluginTool[] = []): Promise<Response> {
-  const server = buildServer(api, timeZone, extra);
+export async function handleMcp(req: Request, api: ApiFetch, timeZone: string, extra: PluginTool[] = [], origin = ""): Promise<Response> {
+  const server = buildServer(api, timeZone, extra, origin);
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   await server.connect(transport);
   try {
@@ -35,9 +35,22 @@ const text = (value: unknown) => ({ content: [{ type: "text" as const, text: JSO
 
 type PluginTool = { name: string; def: McpToolDef; handler: McpToolHandler };
 
-function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[]) {
+function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origin: string) {
   const server = new McpServer(
-    { name: "sink", version: "2.1.0" },
+    {
+      name: "sink",
+      title: "Sink",
+      version: "2.1.0",
+      // Sink's own logo for connector screens (they'd otherwise guess at a favicon).
+      ...(origin && {
+        websiteUrl: origin,
+        icons: [
+          { src: `${origin}/favicon.svg`, mimeType: "image/svg+xml", sizes: ["any"] },
+          { src: `${origin}/icon-192.png`, mimeType: "image/png", sizes: ["192x192"] },
+          { src: `${origin}/icon-512.png`, mimeType: "image/png", sizes: ["512x512"] },
+        ],
+      }),
+    },
     {
       instructions:
         "Sink is the user's notes app: markdown files in their vault (Obsidian-compatible, organised in folders), plus " +

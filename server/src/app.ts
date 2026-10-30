@@ -105,7 +105,8 @@ export function createApp(deps: {
     }
     const api: ApiFetch = (path, init) =>
       Promise.resolve(app.request(path, { ...init, headers: { ...(init?.headers as Record<string, string>), authorization: header } }));
-    return handleMcp(c.req.raw, api, config.timeZone ?? "UTC", plugins?.tools ?? []);
+    const origin = config.publicUrls.includes(requestOrigin(c)) ? requestOrigin(c) : config.publicUrls[0]!;
+    return handleMcp(c.req.raw, api, config.timeZone ?? "UTC", plugins?.tools ?? [], origin);
   });
 
   if (config.webDir) {
@@ -114,6 +115,10 @@ export function createApp(deps: {
     // hashed files they load never change, so those can be kept for good.
     app.use("/*", async (c, next) => {
       await next();
+      // The logo is shown by other sites (connector screens in Claude and others), so it may be loaded cross-origin.
+      if (/^\/(favicon\.(ico|svg)|icon-\d+\.png|icon-maskable-\d+\.png|apple-touch-icon\.png)$/.test(c.req.path)) {
+        c.header("cross-origin-resource-policy", "cross-origin");
+      }
       if (c.req.path.startsWith("/api/") || c.res.headers.has("cache-control")) return;
       const type = c.res.headers.get("content-type") ?? "";
       if (c.req.path.startsWith("/assets/")) c.header("cache-control", "public, max-age=31536000, immutable");
