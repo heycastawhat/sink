@@ -105,11 +105,20 @@
           <!-- Todos: every checkbox in every note. -->
           <section id="todos" class="todos" hidden>
             <form id="todo-form" class="todo-form">
-              <m3e-icon name="add_task"></m3e-icon>
-              <input id="todo-text" placeholder="Add a todo" aria-label="New todo" autocomplete="off" />
-              <input id="todo-date" type="date" aria-label="Due date" />
-              <input id="todo-time" type="time" aria-label="Remind at" />
-              <m3e-button type="submit" variant="tonal" size="small" id="todo-add">Add</m3e-button>
+              <m3e-form-field variant="outlined" class="todo-field todo-field-text" hide-subscript>
+                <m3e-icon slot="prefix" name="add_task"></m3e-icon>
+                <label slot="label" for="todo-text">Add a todo</label>
+                <input id="todo-text" autocomplete="off" />
+              </m3e-form-field>
+              <m3e-form-field variant="outlined" class="todo-field" float-label="always" hide-subscript>
+                <label slot="label" for="todo-date">Due</label>
+                <input id="todo-date" type="date" />
+              </m3e-form-field>
+              <m3e-form-field variant="outlined" class="todo-field" float-label="always" hide-subscript>
+                <label slot="label" for="todo-time">Remind at</label>
+                <input id="todo-time" type="time" />
+              </m3e-form-field>
+              <m3e-button type="submit" variant="filled" id="todo-add">Add</m3e-button>
             </form>
             <div id="todo-list"></div>
             <m3e-button id="todo-done-toggle" variant="text" size="small">Show done</m3e-button>

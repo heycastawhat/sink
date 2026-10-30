@@ -13,11 +13,14 @@ import '@m3e/web/fab-menu';
 import '@m3e/web/breadcrumb';
 import '@m3e/web/expansion-panel';
 import '@m3e/web/switch';
+import '@m3e/web/checkbox';
 import { M3eSnackbar } from '@m3e/web/snackbar';
 import { api, Unauthorized } from './api.js';
 import * as notes from './notes.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
+import { askConfirm } from './dialogs.js';
+import { hapticsEnabled, setHaptics } from './haptics.js';
 import { esc } from './util.js';
 
 // ---------- helpers ----------
@@ -287,6 +290,13 @@ async function renderSettings() {
       ${ACCENTS.map((a) => `<button class="swatch${a.color === accent ? ' on' : ''}" data-accent="${a.color}" style="--c:${a.color}" role="radio" aria-checked="${a.color === accent}" aria-label="${a.name}" title="${a.name}"></button>`).join('')}
     </div>
   </div>
+  <div class="setting-row">
+    <div class="grow">
+      <label class="setting-title" for="haptics">Vibration</label>
+      <div class="muted small">A short buzz on taps, toggles and ticks. This browser only.</div>
+    </div>
+    <m3e-switch id="haptics"${hapticsEnabled() ? ' checked' : ''}></m3e-switch>
+  </div>
 </section>
 
 <section class="setting-card">
@@ -405,6 +415,7 @@ async function renderTokens() {
 }
 
 $('settings').addEventListener('change', (e) => {
+  if (e.target.id === 'haptics') setHaptics(e.target.checked);
   if (e.target.id === 'hide-foldered') notes.prefs.hideFoldered = e.target.checked;
   if (e.target.id === 'keep-file') runKeepImport(e.target);
 });
@@ -454,7 +465,7 @@ $('settings').addEventListener('click', async (e) => {
   }
   const revoke = e.target.closest('[data-revoke]');
   if (revoke) {
-    if (!confirm('Revoke this? That device or assistant gets signed out.')) return;
+    if (!(await askConfirm({ title: 'Revoke this?', body: 'That device or assistant gets signed out.', action: 'Revoke', danger: true }))) return;
     await api.revokeToken(revoke.dataset.revoke).catch((err) => toast(err.message));
     return renderTokens();
   }

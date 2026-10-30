@@ -12,13 +12,20 @@ function open(html, wire) {
   host.append(dlg);
   return new Promise((resolve) => {
     const done = (value) => {
-      dlg.close();
-      dlg.remove();
+      if (dlg.classList.contains('closing')) return;
       resolve(value);
+      // Let the exit animation play (it's a CSS transition on [open]); reduced motion skips it.
+      dlg.classList.add('closing');
+      const finish = () => {
+        dlg.close();
+        dlg.remove();
+      };
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) finish();
+      else setTimeout(finish, 180);
     };
     dlg.addEventListener('cancel', (e) => {
       e.preventDefault();
-      done(null);
+      if (!dlg.classList.contains('closing')) done(null);
     });
     // A click on the backdrop (the dialog element itself, outside its content) cancels.
     dlg.addEventListener('mousedown', (e) => e.target === dlg && done(null));
@@ -33,7 +40,7 @@ export function askText({ title, label = 'Name', value = '', action = 'Save' }) 
   return open(
     `<form method="dialog" class="sink-dialog-body">
   <h2>${esc(title)}</h2>
-  <label class="dialog-field"><span>${esc(label)}</span><input name="text" value="${esc(value)}" autocomplete="off" required /></label>
+  <m3e-form-field variant="outlined" class="dialog-field" hide-subscript><label slot="label" for="dlg-text">${esc(label)}</label><input id="dlg-text" name="text" value="${esc(value)}" autocomplete="off" required /></m3e-form-field>
   <p class="dialog-error" hidden></p>
   <div class="dialog-actions">
     <m3e-button data-cancel variant="text">Cancel</m3e-button>
@@ -60,6 +67,24 @@ export function askText({ title, label = 'Name', value = '', action = 'Save' }) 
       };
     },
   );
+}
+
+/** A yes/no question in an M3 dialog (instead of the browser's confirm()). Resolves to true or false. */
+export function askConfirm({ title, body = '', action = 'OK', danger = false }) {
+  return open(
+    `<div class="sink-dialog-body" role="alertdialog">
+  <h2>${esc(title)}</h2>
+  ${body ? `<p class="muted dialog-text">${esc(body)}</p>` : ''}
+  <div class="dialog-actions">
+    <m3e-button data-cancel variant="text">Cancel</m3e-button>
+    <m3e-button data-ok variant="filled"${danger ? ' data-confirm-danger class="danger"' : ''}>${esc(action)}</m3e-button>
+  </div>
+</div>`,
+    (dlg, done) => {
+      dlg.querySelector('[data-ok]').addEventListener('click', () => done(true));
+      dlg.querySelector('[data-cancel]').addEventListener('click', () => done(false));
+    },
+  ).then(Boolean);
 }
 
 /**
@@ -102,11 +127,11 @@ export function editTodo({ text, due, time, dates }) {
   return open(
     `<form method="dialog" class="sink-dialog-body">
   <h2>Edit todo</h2>
-  <label class="dialog-field"><span>Todo</span><input name="text" value="${esc(text)}" autocomplete="off" required /></label>
+  <m3e-form-field variant="outlined" class="dialog-field" hide-subscript><label slot="label" for="dlg-todo">Todo</label><input id="dlg-todo" name="text" value="${esc(text)}" autocomplete="off" required /></m3e-form-field>
   <div class="date-chips">${dates.map((d) => `<m3e-button type="button" variant="tonal" size="small" data-due="${esc(d.due ?? '')}">${esc(d.label)}</m3e-button>`).join('')}</div>
   <div class="dialog-row">
-    <label class="dialog-field"><span>Due</span><input name="due" type="date" value="${esc(due ?? '')}" /></label>
-    <label class="dialog-field"><span>Remind at</span><input name="time" type="time" value="${esc(time ?? '')}" /></label>
+    <m3e-form-field variant="outlined" class="dialog-field" float-label="always" hide-subscript><label slot="label" for="dlg-due">Due</label><input id="dlg-due" name="due" type="date" value="${esc(due ?? '')}" /></m3e-form-field>
+    <m3e-form-field variant="outlined" class="dialog-field" float-label="always" hide-subscript><label slot="label" for="dlg-time">Remind at</label><input id="dlg-time" name="time" type="time" value="${esc(time ?? '')}" /></m3e-form-field>
   </div>
   <div class="dialog-actions">
     <m3e-button data-drop variant="text" class="dialog-start">Cancel todo</m3e-button>

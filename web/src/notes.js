@@ -7,7 +7,8 @@ import { backlinksHtml } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
-import { askText, editTodo, pickFolder, pickFromList, pickVersion, shareNote } from './dialogs.js';
+import { buzz } from './haptics.js';
+import { askConfirm, askText, editTodo, pickFolder, pickFromList, pickVersion, shareNote } from './dialogs.js';
 import { fillTemplate, templatesIn } from './templates.js';
 
 const $ = (id) => document.getElementById(id);
@@ -188,6 +189,21 @@ function cardHtml(n) {
 </article>`;
 }
 
+// Cards that weren't on screen before pop in, one after another; the ones already there stay put, so a live change
+// or a keystroke in search doesn't make the whole grid flash.
+let shownCards = new Set();
+function popInNewCards() {
+  const now = new Set();
+  let i = 0;
+  for (const card of document.querySelectorAll('#notes-pinned .note-card, #notes-grid .note-card')) {
+    now.add(card.dataset.path);
+    if (shownCards.has(card.dataset.path)) continue;
+    card.style.setProperty('--i', Math.min(i++, 14));
+    card.classList.add('enter');
+  }
+  shownCards = now;
+}
+
 function renderGrid() {
   const root = $('notes');
   if (!root || root.hidden) return;
@@ -212,6 +228,7 @@ function renderGrid() {
   $('notes-others-head').hidden = !pinned.length || !others.length;
   $('notes-pinned').innerHTML = pinned.map(cardHtml).join('');
   $('notes-grid').innerHTML = others.map(cardHtml).join('');
+  popInNewCards();
 
   const empty = state.loaded && !list.length;
   $('notes-empty').hidden = !empty;
@@ -1448,7 +1465,7 @@ function wireTrash() {
     if (e.target.closest('[data-restore]')) return restore(path);
     if (e.target.closest('[data-forever]')) {
       const item = trashState.items.find((t) => t.path === path);
-      if (!confirm(`Delete “${item?.title ?? fileName(path)}” for good? This can't be undone.`)) return;
+      if (!(await askConfirm({ title: `Delete “${item?.title ?? fileName(path)}” for good?`, body: "This can't be undone.", action: 'Delete', danger: true }))) return;
       try {
         await api.deleteForever(path);
         loadTrash();
@@ -1459,7 +1476,7 @@ function wireTrash() {
   });
   $('trash-empty').addEventListener('click', async () => {
     const n = trashState.items.length;
-    if (!confirm(`Delete ${n === 1 ? 'this note' : `all ${n} notes`} in the trash for good? This can't be undone.`)) return;
+    if (!(await askConfirm({ title: `Delete ${n === 1 ? 'this note' : `all ${n} notes`} in the trash for good?`, body: "This can't be undone.", action: 'Delete', danger: true }))) return;
     try {
       await api.emptyTrash();
       toast('Trash emptied');
@@ -1571,7 +1588,7 @@ function todoRow(t) {
   const when = t.due ? `${ic('event')}${esc(dueLabel(t.due))}${time ? ` ${esc(time)}` : ''}` : '';
   return `
 <li class="todo${done ? ' done' : ''}" data-key="${esc(t.path)}:${t.line}">
-  <input type="checkbox" class="todo-box" ${done ? 'checked' : ''} aria-label="${esc(t.text)}" />
+  <m3e-checkbox class="todo-box" ${done ? 'checked' : ''} aria-label="${esc(t.text)}"></m3e-checkbox>
   <div class="todo-main">
     ${done ? `<span class="todo-text">${esc(t.text || '(empty)')}</span>` : `<button type="button" class="todo-text" data-edit title="Edit">${esc(t.text || '(empty)')}</button>`}
     <span class="todo-meta">
@@ -1669,15 +1686,17 @@ async function rescheduleTodo(t) {
 
 function wireTodos() {
   $('todos').addEventListener('change', async (e) => {
-    if (!e.target.classList.contains('todo-box')) return;
+    if (!e.target.classList?.contains('todo-box')) return;
     const li = e.target.closest('.todo');
     const t = findTodo(li.dataset.key);
     if (!t) return;
     const done = e.target.checked;
     li.classList.toggle('done', done);
+    li.classList.toggle('leaving', done && !todoState.done);
     try {
       const out = await api.toggleTodo(t, done);
       if (done) {
+        buzz('confirm');
         // A recurring todo's next copy goes in above it; Undo takes that back out too.
         const next = out.next && /📅️?\s*(\d{4}-\d{2}-\d{2})/u.exec(out.next)?.[1];
         toast(next ? `Done. Next: ${shortDate(next)}` : 'Done', {

@@ -1284,36 +1284,29 @@ body.note-open {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 14px;
-  border-radius: 14px;
-  background: var(--md-sys-color-surface-container-low);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent);
+  padding-top: 8px;
 }
 
-.todo-form > m3e-icon {
-  color: var(--md-sys-color-on-surface-variant);
+.todo-field {
+  --m3e-form-field-font-size: 14px;
+  color-scheme: light dark;
+}
+
+.todo-field:not(.todo-field-text) {
+  flex: none;
+  width: 150px;
+}
+
+.todo-field-text {
+  flex: 1;
+  min-width: 0;
+  --m3e-form-field-font-size: 15px;
 }
 
 .todo-form input {
   min-width: 0;
-  border: 0;
-  outline: 0;
-  background: none;
   color: inherit;
   font: inherit;
-}
-
-#todo-text {
-  flex: 1;
-  padding: 8px 0;
-  font-size: 15px;
-}
-
-#todo-date,
-#todo-time {
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 13px;
-  color-scheme: light dark;
 }
 
 .todo-group ul,
@@ -1333,11 +1326,7 @@ body.note-open {
 
 .todo-box {
   flex: none;
-  width: 20px;
-  height: 20px;
-  margin: 2px 0 0;
-  accent-color: var(--md-sys-color-primary);
-  cursor: pointer;
+  margin: -6px -6px -6px -8px;
 }
 
 .todo-main {
@@ -1356,7 +1345,7 @@ body.note-open {
 button.todo-text {
   padding: 0;
   border: 0;
-  background: none;
+  background-color: transparent;
   color: inherit;
   font: inherit;
   font-size: 15px;
@@ -1430,11 +1419,8 @@ button.due:hover {
 
 .dialog-row .dialog-field {
   flex: 1;
+  width: auto;
   min-width: 0;
-}
-
-.dialog-row input {
-  color-scheme: light dark;
 }
 
 .todo-meta .due,
@@ -1493,8 +1479,13 @@ button.due:hover {
     flex-wrap: wrap;
   }
 
-  #todo-text {
+  .todo-field-text {
     flex-basis: 100%;
+  }
+
+  .todo-field:not(.todo-field-text) {
+    flex: 1;
+    width: auto;
   }
 }
 
@@ -1658,27 +1649,8 @@ body.dragging-note [data-drop-folder] {
 }
 
 .dialog-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 13px;
-}
-
-.dialog-field input {
-  padding: 12px 14px;
-  border: 1px solid var(--md-sys-color-outline);
-  border-radius: 10px;
-  outline: 0;
-  background: none;
-  color: var(--md-sys-color-on-surface);
-  font: inherit;
-  font-size: 16px;
-}
-
-.dialog-field input:focus {
-  border-color: var(--md-sys-color-primary);
-  box-shadow: inset 0 0 0 1px var(--md-sys-color-primary);
+  width: 100%;
+  color-scheme: light dark;
 }
 
 .dialog-error {
@@ -2104,4 +2076,199 @@ body.dragging-note [data-drop-folder] {
 
 .note-screen.board #note-share {
   display: none;
+}
+
+
+/* ---------- motion ----------
+   Spring-ish easing for things that arrive, a quicker ease for things that leave. Reduced motion turns it all off
+   at the bottom. */
+:root,
+m3e-theme {
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out-quick: cubic-bezier(0.3, 0, 0.8, 0.15);
+}
+
+/* A section sliding in when you switch between Notes, Todos, Trash and Settings. */
+.main > section:not([hidden]) {
+  animation: view-in 320ms var(--ease-emphasized);
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+.note-card.enter {
+  animation: card-in 380ms var(--ease-spring) backwards;
+  animation-delay: calc(var(--i, 0) * 34ms);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.96);
+  }
+}
+
+/* Press feedback: things dip under a finger and spring back. */
+.note-card:active {
+  transform: scale(0.975);
+  transition-duration: 80ms;
+}
+
+.folder-tile,
+.picker-row,
+.new-item,
+.nav-item,
+.tabbar a,
+.recent-card {
+  transition:
+    transform 200ms var(--ease-spring),
+    background-color 160ms ease;
+}
+
+.folder-tile:active,
+.picker-row:active,
+.new-item:active,
+.nav-item:active,
+.tabbar a:active,
+.recent-card:active {
+  transform: scale(0.96);
+  transition-duration: 70ms;
+}
+
+.swatch:active {
+  transform: scale(0.88);
+}
+
+/* Todos: a ticked row fades and shrinks away before the list reloads. */
+.todo {
+  transition: opacity 260ms ease, transform 300ms var(--ease-emphasized), background-color 160ms ease;
+}
+
+.todo.leaving {
+  opacity: 0.35;
+  transform: translateX(14px);
+}
+
+.todo-text {
+  background-image: linear-gradient(currentColor, currentColor);
+  background-position: 0 55%;
+  background-repeat: no-repeat;
+  background-size: 0 1.5px;
+  transition: background-size 260ms var(--ease-emphasized), color 200ms ease;
+}
+
+.todo.done .todo-text {
+  text-decoration: none;
+  background-size: 100% 1.5px;
+}
+
+/* Dialogs scale up from slightly small and the scrim fades; closing plays the reverse, quicker. */
+.sink-dialog[open] {
+  animation: dialog-in 320ms var(--ease-spring);
+}
+
+.sink-dialog[open]::backdrop {
+  animation: fade-in 220ms ease;
+}
+
+.sink-dialog.closing {
+  animation: dialog-out 170ms var(--ease-out-quick) forwards;
+}
+
+.sink-dialog.closing::backdrop {
+  animation: fade-out 170ms ease forwards;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.9);
+  }
+}
+
+@keyframes dialog-out {
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.95);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* The destructive confirm button. */
+m3e-button.danger {
+  --m3e-button-container-color: var(--md-sys-color-error);
+  --m3e-button-label-text-color: var(--md-sys-color-on-error);
+  color: var(--md-sys-color-on-error);
+}
+
+.dialog-text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* The "New" menu opens from its corner. */
+.new-menu:not([hidden]) {
+  animation: menu-in 220ms var(--ease-spring);
+  transform-origin: top left;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.88);
+  }
+}
+
+/* Empty-state shapes breathe. */
+.empty-shape {
+  animation: shape-in 600ms var(--ease-spring) backwards;
+}
+
+@keyframes shape-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6) rotate(-20deg);
+  }
+}
+
+.setting-card {
+  animation: view-in 340ms var(--ease-emphasized) backwards;
+}
+
+.setting-card:nth-child(2) {
+  animation-delay: 40ms;
+}
+
+.setting-card:nth-child(3) {
+  animation-delay: 80ms;
+}
+
+.setting-card:nth-child(n + 4) {
+  animation-delay: 120ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }
