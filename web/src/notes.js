@@ -807,6 +807,10 @@ function applyLook() {
   el.className = `note-screen${screen.color ? ` c-${screen.color}` : ''}${isBoardPath(screen.path) ? ' board' : ''}`;
   $('note-pin').innerHTML = ic('push_pin', '', screen.pinned ? ' filled' : '');
   $('note-pin').setAttribute('aria-label', screen.pinned ? 'Unpin' : 'Pin');
+  const archived = /^archive\//i.test(screen.path ?? '');
+  $('note-archive').querySelector('m3e-icon').setAttribute('name', archived ? 'unarchive' : 'archive');
+  $('note-archive').setAttribute('aria-label', archived ? 'Unarchive' : 'Archive');
+  $('note-archive').title = archived ? 'Unarchive' : 'Archive';
   $('note-crumb').textContent = screen.path ? folderOf(screen.path) || 'Notes' : 'New note';
   for (const b of $('note-colors').querySelectorAll('[data-color]')) b.classList.toggle('on', (b.dataset.color || null) === screen.color);
 }
@@ -1213,6 +1217,29 @@ function wireScreen() {
     history.replaceState(history.state, '', noteHash(path));
     applyLook();
   };
+  // Keep's Archive: one tap moves the note into Archive/ and goes back to the grid, with Undo. In Archive, it
+  // moves the note back to the top level.
+  $('note-archive').addEventListener('click', async () => {
+    await flush();
+    if (!screen.path) return toast('Write something first');
+    const from = screen.path;
+    const archived = /^archive\//i.test(from);
+    const moved = await moveNoteTo(from, archived ? '' : 'Archive');
+    if (!moved) return;
+    relocate(moved);
+    // Back to the grid it came from, not into Archive.
+    screen.folder = folderOf(from);
+    back();
+    await loadNotes();
+    toast(archived ? 'Unarchived' : 'Archived', {
+      action: 'Undo',
+      onAction: async () => {
+        await moveNoteTo(moved, folderOf(from));
+        await loadNotes();
+      },
+    });
+  });
+
   $('note-move').addEventListener('click', async () => {
     await flush();
     if (!screen.path) return toast('Write something first');

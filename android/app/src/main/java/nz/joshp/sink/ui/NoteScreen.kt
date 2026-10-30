@@ -40,6 +40,8 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Unarchive
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
@@ -547,6 +549,37 @@ fun NoteScreen(
         }
     }
 
+    /** Keep's Archive: moves the note into Archive/ (or, from there, back to the top level) and leaves the note. */
+    fun archive() {
+        saveJob?.cancel()
+        val p = ed.path ?: return
+        val name = p.substringAfterLast('/')
+        val archived = p.startsWith("Archive/", ignoreCase = true)
+        val dest = if (archived) name else "Archive/$name"
+        flush {
+            scope.launch {
+                save()
+                runCatching { api()!!.moveNote(p, dest) }
+                    .onSuccess {
+                        store.forget(p)
+                        vm.renameOpened(p, dest)
+                        ed.saved = ed.current
+                        vm.refresh()
+                        onBack()
+                    }
+                    .onFailure {
+                        snackbar.showSnackbar(
+                            when {
+                                it is ApiException && it.code == 409 -> "There's already a note called “${name.removeSuffix(".md")}” there"
+                                it is ApiException -> it.message ?: "Couldn't archive"
+                                else -> "You're offline. Archiving needs the server."
+                            },
+                        )
+                    }
+            }
+        }
+    }
+
     /** No "are you sure?": the notes list offers Undo, and the web's Trash page has it after that. */
     fun trash() {
         saveJob?.cancel()
@@ -658,6 +691,17 @@ fun NoteScreen(
                                 renaming = true
                             },
                         )
+                        if (ed.path != null) {
+                            val archived = ed.path?.startsWith("Archive/", ignoreCase = true) == true
+                            DropdownMenuItem(
+                                text = { Text(if (archived) "Unarchive" else "Archive") },
+                                leadingIcon = { Icon(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
+                                onClick = {
+                                    menu = false
+                                    archive()
+                                },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Delete") },
                             leadingIcon = { Icon(Icons.Outlined.Delete, null) },
