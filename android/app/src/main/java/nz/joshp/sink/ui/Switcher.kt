@@ -119,6 +119,7 @@ fun QuickSwitcherSheet(
                         if (n.isBoard) Icons.Outlined.Draw else Icons.AutoMirrored.Outlined.StickyNote2,
                         n.title,
                         n.folder.ifEmpty { null },
+                        Modifier.animateItem(),
                     ) { onOpen(n.path) }
                 }
                 // Typing a name that isn't there yet: offer to make it (Shift+Enter on the web).
@@ -158,9 +159,9 @@ fun TemplatePickerSheet(templates: List<NoteMeta>, onPick: (String) -> Unit, onD
 }
 
 @Composable
-private fun PickerRow(icon: ImageVector, title: String, detail: String?, onClick: () -> Unit) {
+private fun PickerRow(icon: ImageVector, title: String, detail: String?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 12.dp),
+        modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {

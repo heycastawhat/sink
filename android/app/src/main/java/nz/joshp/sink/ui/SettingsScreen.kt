@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.BrightnessAuto
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.FolderOff
@@ -39,6 +40,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -70,6 +72,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
     val dynamicColor by settings.dynamicColor.collectAsState(initial = false)
     val hideFoldered by settings.hideFoldered.collectAsState(initial = false)
     val themeMode by settings.themeMode.collectAsState(initial = "auto")
@@ -97,7 +100,10 @@ fun SettingsScreen(
                     modes.forEachIndexed { i, (mode, label, icon) ->
                         SegmentedButton(
                             selected = themeMode == mode,
-                            onClick = { scope.launch { settings.setThemeMode(mode) } },
+                            onClick = {
+                                if (themeMode != mode) haptics.tick()
+                                scope.launch { settings.setThemeMode(mode) }
+                            },
                             shape = SegmentedButtonDefaults.itemShape(i, modes.size),
                             icon = { Icon(icon, null, Modifier.size(SegmentedButtonDefaults.IconSize)) },
                         ) { Text(label) }
@@ -139,6 +145,7 @@ fun SettingsScreen(
                     Spacer(Modifier.width(10.dp))
                     Text(url, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace), modifier = Modifier.weight(1f))
                     IconButton(onClick = {
+                        haptics.confirm()
                         context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Sink MCP", url))
                         Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
                     }) { Icon(Icons.Outlined.ContentCopy, "Copy connector URL") }
@@ -162,6 +169,7 @@ fun SettingsScreen(
                 OutlinedButton(
                     enabled = !checking,
                     onClick = {
+                        haptics.tick()
                         checking = true
                         scope.launch {
                             onCheckForUpdates()?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
@@ -180,7 +188,7 @@ fun SettingsScreen(
                         Text(serverUrl, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                OutlinedButton(onClick = { scope.launch { vm.logout() } }) {
+                OutlinedButton(onClick = { haptics.reject(); scope.launch { vm.logout() } }) {
                     Icon(Icons.AutoMirrored.Outlined.Logout, null)
                     Spacer(Modifier.width(8.dp))
                     Text("Sign out")
@@ -214,7 +222,17 @@ private fun ToggleRow(icon: ImageVector?, title: String, sub: String, checked: B
             Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+        val haptics = rememberHaptics()
+        Switch(
+            checked = checked,
+            onCheckedChange = {
+                haptics.toggle(it)
+                onChange(it)
+            },
+            // The check in the thumb is Material 3's cue for "on" without relying on colour.
+            thumbContent = if (checked) ({ Icon(Icons.Outlined.Check, null, Modifier.size(SwitchDefaults.IconSize)) }) else null,
+            enabled = enabled,
+        )
     }
 }
 

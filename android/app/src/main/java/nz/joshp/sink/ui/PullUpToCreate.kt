@@ -1,7 +1,5 @@
 package nz.joshp.sink.ui
 
-import android.os.Build
-import android.view.HapticFeedbackConstants
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
@@ -42,7 +40,6 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -125,21 +122,17 @@ class PullUpToCreate internal constructor(
 @Composable
 fun rememberPullUpToCreate(onCreate: () -> Unit): PullUpToCreate {
     val scope = rememberCoroutineScope()
-    val view = LocalView.current
+    val haptics = rememberHaptics()
     val density = LocalDensity.current
     val height = LocalConfiguration.current.screenHeightDp.dp
     val create by rememberUpdatedState(onCreate)
-    return remember(scope, density, height) {
+    return remember(scope, density, height, haptics) {
         PullUpToCreate(
             scope,
             threshold = with(density) { THRESHOLD.toPx() },
             fullHeight = with(density) { height.toPx() },
             onCreate = { create() },
-            tick = {
-                view.performHapticFeedback(
-                    if (Build.VERSION.SDK_INT >= 34) HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE else HapticFeedbackConstants.CONTEXT_CLICK,
-                )
-            },
+            tick = { haptics.threshold() },
         )
     }
 }

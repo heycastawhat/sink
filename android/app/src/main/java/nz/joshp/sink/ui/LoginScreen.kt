@@ -27,7 +27,10 @@ import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,10 +56,16 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
     var server by rememberSaveable(initialServer) { mutableStateOf(initialServer ?: "") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
+    val haptics = rememberHaptics()
+    // The icon springs in when the screen opens.
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val iconScale by animateFloatAsState(if (shown) 1f else 0.6f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "icon")
+    val iconAlpha by animateFloatAsState(if (shown) 1f else 0f, MaterialTheme.motionScheme.defaultEffectsSpec(), label = "icon-alpha")
 
     fun submit() {
         if (busy || server.isBlank()) return
+        haptics.confirm()
         scope.launch { SignIn.start(context, settings, normalizeServerUrl(server)) }
     }
 
@@ -80,6 +89,11 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
             Box(
                 Modifier
                     .size(104.dp)
+                    .graphicsLayer {
+                        scaleX = iconScale
+                        scaleY = iconScale
+                        alpha = iconAlpha
+                    }
                     .clip(RoundedCornerShape(28))
                     .background(Color(0xFF4F378B)),
             ) {

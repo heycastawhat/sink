@@ -1,12 +1,26 @@
 package nz.joshp.sink.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.IntSize
+import kotlinx.coroutines.delay
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.WindowInsets
-import android.app.DatePickerDialog
-import android.app.TimePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -58,10 +72,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
@@ -101,6 +113,8 @@ import java.time.temporal.TemporalAdjusters
 fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
     val state by vm.todos.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
+    val motion = MaterialTheme.motionScheme
     val snackbar = remember { SnackbarHostState() }
     var adding by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { vm.loadTodos() }
@@ -118,6 +132,8 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
 
     var editing by remember { mutableStateOf<Todo?>(null) }
     val toggle = { t: Todo, done: Boolean ->
+        // A tick is a small win; un-ticking is just a switch flipping back.
+        if (done) haptics.confirm() else haptics.toggle(false)
         scope.launch {
             vm.toggle(t, done).fold(
                 { ticked ->
@@ -137,6 +153,7 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
     }
     // A new date keeps the reminder's time of day.
     val reschedule = { t: Todo, due: LocalDate?, msg: String? ->
+        haptics.confirm()
         scope.launch {
             val error = vm.editTodo(t, setDate = true, due = due?.toString(), time = reminderTime(t.raw))
             (error ?: msg)?.let { snackbar.showSnackbar(it) }
@@ -159,25 +176,25 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                         for ((name, items) in groups) {
                             items(items, key = { "o:${it.path}:${it.line}" }) { t ->
                                 // Swipe left: tomorrow.
-                                SwipeToTomorrow(onSwiped = { reschedule(t, quickDates(today)[1].second, "Moved to tomorrow") }) {
+                                SwipeToTomorrow(Modifier.animateItem(), onSwiped = { reschedule(t, quickDates(today)[1].second, "Moved to tomorrow") }) {
                                     TodoRow(t, today, actions)
                                 }
                             }
                             item(key = "h:$name") {
-                                GroupHead(name, items.size) {
+                                GroupHead(name, items.size, Modifier.animateItem()) {
                                     if (name == "Overdue") {
-                                        TextButton(onClick = { scope.launch { snackbar.showSnackbar(vm.moveOverdueToToday()) } }) { Text("Move all to today") }
+                                        TextButton(onClick = { haptics.confirm(); scope.launch { snackbar.showSnackbar(vm.moveOverdueToToday()) } }) { Text("Move all to today") }
                                     }
                                 }
                             }
                         }
                         item(key = "done-toggle") {
-                            TextButton(onClick = vm::toggleDone, modifier = Modifier.padding(start = 8.dp, top = 8.dp)) {
+                            TextButton(onClick = { haptics.tick(); vm.toggleDone() }, modifier = Modifier.animateItem().padding(start = 8.dp, top = 8.dp)) {
                                 Text(if (state.done == null) "Show done" else "Hide done")
                             }
                         }
                         state.done?.let { done ->
-                            items(done.take(100), key = { "d:${it.path}:${it.line}" }) { t -> TodoRow(t, today, actions) }
+                            items(done.take(100), key = { "d:${it.path}:${it.line}" }) { t -> TodoRow(t, today, actions, Modifier.animateItem()) }
                         }
                     }
                 }
@@ -192,13 +209,24 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                 .then(if (keyboardUp) Modifier.imePadding() else Modifier.navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 4.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerLowest),
         ) {
-            AddTodo { text, due, time -> vm.addTodo(text, due, time)?.let { snackbar.showSnackbar(it) } }
+            AddTodo { text, due, time ->
+                haptics.confirm()
+                vm.addTodo(text, due, time)?.let { snackbar.showSnackbar(it) }
+            }
         }
-        if (!keyboardUp) {
+        // Pops in and out as the keyboard goes and comes.
+        AnimatedVisibility(
+            visible = !keyboardUp,
+            enter = scaleIn(motion.defaultSpatialSpec(), initialScale = 0.6f) + fadeIn(motion.defaultEffectsSpec()),
+            exit = scaleOut(motion.defaultSpatialSpec(), targetScale = 0.6f) + fadeOut(motion.defaultEffectsSpec()),
+            modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 16.dp, bottom = TOOLBAR_BOTTOM + 4.dp),
+        ) {
             FloatingActionButton(
-                onClick = { adding = true },
+                onClick = {
+                    haptics.tick()
+                    adding = true
+                },
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 16.dp, bottom = TOOLBAR_BOTTOM + 4.dp),
             ) { Icon(Icons.Outlined.AddTask, "New todo") }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = toolbarClearance(extra = 76.dp)))
@@ -209,6 +237,7 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
             t,
             today,
             onSave = { text, due, time ->
+                haptics.confirm()
                 editing = null
                 val dateChanged = due?.toString() != t.due || time != reminderTime(t.raw)
                 if (text != t.text || dateChanged) {
@@ -218,6 +247,7 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                 }
             },
             onCancelTodo = {
+                haptics.reject()
                 editing = null
                 scope.launch { snackbar.showSnackbar(vm.cancelTodo(t)) }
             },
@@ -246,8 +276,8 @@ private fun EmptyHint() {
 }
 
 @Composable
-private fun GroupHead(name: String, count: Int, action: @Composable () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun GroupHead(name: String, count: Int, modifier: Modifier = Modifier, action: @Composable () -> Unit = {}) {
+    Row(modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(name, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
         Spacer(Modifier.width(8.dp))
         Text("$count", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -282,10 +312,16 @@ private fun quickDates(today: String): List<Pair<String, LocalDate?>> {
 }
 
 @Composable
-private fun SwipeToTomorrow(onSwiped: () -> Unit, content: @Composable () -> Unit) {
+private fun SwipeToTomorrow(modifier: Modifier = Modifier, onSwiped: () -> Unit, content: @Composable () -> Unit) {
     val state = rememberSwipeToDismissBoxState()
     val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
+    // A buzz when the drag reaches the point where letting go will act, like pulling up to create a note.
+    LaunchedEffect(state.targetValue) {
+        if (state.targetValue != SwipeToDismissBoxValue.Settled) haptics.threshold()
+    }
     SwipeToDismissBox(
+        modifier = modifier,
         state = state,
         enableDismissFromStartToEnd = false,
         onDismiss = {
@@ -336,19 +372,30 @@ private fun RescheduleMenu(t: Todo, today: String, actions: TodoActions, expande
 }
 
 @Composable
-private fun TodoRow(t: Todo, today: String, actions: TodoActions) {
+private fun TodoRow(t: Todo, today: String, actions: TodoActions, modifier: Modifier = Modifier) {
     val done = !t.open
     val overdue = t.open && t.due != null && t.due < today
     var menu by remember { mutableStateOf(false) }
-    Column {
+    // Ticks show at once (the strike-through draws itself) while the server catches up and the row moves away; if
+    // that fails the row stays as it was, so the tick is taken back after a moment.
+    var ticked by remember(done) { mutableStateOf(done) }
+    LaunchedEffect(ticked, done) {
+        if (ticked != done) {
+            delay(1500)
+            ticked = done
+        }
+    }
+    Column(modifier) {
         Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.Top) {
-            Checkbox(checked = done, onCheckedChange = { actions.toggle(t, it) })
+            Checkbox(
+                checked = ticked,
+                onCheckedChange = {
+                    ticked = it
+                    actions.toggle(t, it)
+                },
+            )
             Column(Modifier.weight(1f).padding(top = 12.dp).then(if (done) Modifier else Modifier.clickable { actions.onEdit(t) })) {
-                Text(
-                    t.text.ifEmpty { "(empty)" },
-                    style = MaterialTheme.typography.bodyLarge.copy(textDecoration = if (done) TextDecoration.LineThrough else null),
-                    color = if (done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                )
+                StrikeText(t.text.ifEmpty { "(empty)" }, ticked, MaterialTheme.typography.bodyLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 2.dp)) {
                     PRIORITY[t.priority]?.let { (label, icon) ->
                         val color = if (t.priority <= 1) MaterialTheme.colorScheme.error else if (t.priority == 2) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
@@ -395,6 +442,37 @@ private fun TodoRow(t: Todo, today: String, actions: TodoActions) {
     }
 }
 
+/** A todo's text: when [struck], it fades to the muted colour and a line draws itself across each line of text. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun StrikeText(text: String, struck: Boolean, style: TextStyle) {
+    val motion = MaterialTheme.motionScheme
+    val color by animateColorAsState(
+        if (struck) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+        motion.defaultEffectsSpec(),
+        label = "todo-colour",
+    )
+    val progress by animateFloatAsState(if (struck) 1f else 0f, motion.slowEffectsSpec(), label = "todo-strike")
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    Text(
+        text,
+        style = style,
+        color = color,
+        onTextLayout = { layout = it },
+        modifier = Modifier.drawWithContent {
+            drawContent()
+            val l = layout ?: return@drawWithContent
+            if (progress <= 0f) return@drawWithContent
+            for (i in 0 until l.lineCount) {
+                val y = (l.getLineTop(i) + l.getLineBottom(i)) / 2
+                val from = l.getLineLeft(i)
+                val to = l.getLineRight(i)
+                drawLine(color, Offset(from, y), Offset(from + (to - from) * progress, y), strokeWidth = 1.5.dp.toPx())
+            }
+        },
+    )
+}
+
 /** Text, date and reminder time for one todo, with the quick dates as chips. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -405,7 +483,8 @@ private fun EditTodoDialog(
     onCancelTodo: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
+    var pickDate by remember { mutableStateOf(false) }
+    var pickTime by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf(t.text) }
     var due by remember { mutableStateOf(t.due?.let { runCatching { LocalDate.parse(it) }.getOrNull() }) }
     var time by remember { mutableStateOf(reminderTime(t.raw)?.let { LocalTime.parse(it) }) }
@@ -428,20 +507,11 @@ private fun EditTodoDialog(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = {
-                        val now = due ?: LocalDate.now()
-                        DatePickerDialog(context, { _, y, m, d -> due = LocalDate.of(y, m + 1, d) }, now.year, now.monthValue - 1, now.dayOfMonth).show()
-                    }) {
+                    TextButton(onClick = { pickDate = true }) {
                         Icon(Icons.Outlined.Event, null)
                         Text("  " + (due?.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)) ?: "No date"))
                     }
-                    TextButton(onClick = {
-                        val now = time ?: LocalTime.of(9, 0)
-                        TimePickerDialog(context, { _, h, min ->
-                            time = LocalTime.of(h, min)
-                            if (due == null) due = quickDates(today)[0].second
-                        }, now.hour, now.minute, android.text.format.DateFormat.is24HourFormat(context)).show()
-                    }) {
+                    TextButton(onClick = { pickTime = true }) {
                         Icon(Icons.Outlined.Alarm, null)
                         Text("  " + (time?.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)) ?: "No reminder"))
                     }
@@ -461,6 +531,20 @@ private fun EditTodoDialog(
             }
         },
     )
+    if (pickDate) {
+        SinkDatePickerDialog(due ?: LocalDate.now(), onPick = { due = it; pickDate = false }, onDismiss = { pickDate = false })
+    }
+    if (pickTime) {
+        SinkTimePickerDialog(
+            time ?: LocalTime.of(9, 0),
+            onPick = {
+                time = it
+                if (due == null) due = quickDates(today)[0].second
+                pickTime = false
+            },
+            onDismiss = { pickTime = false },
+        )
+    }
 }
 
 private val HAS_TIME = Regex("""\(@\d{4}-\d{2}-\d{2}[ T]\d""")
@@ -484,10 +568,13 @@ private fun dueLabel(t: Todo, today: String): String {
 }
 
 /** Text, and optionally a date and a reminder time. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun AddTodo(onAdd: suspend (String, String?, String?) -> Unit) {
-    val context = LocalContext.current
+    val motion = MaterialTheme.motionScheme
     val scope = rememberCoroutineScope()
+    var pickDate by remember { mutableStateOf(false) }
+    var pickTime by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf("") }
     var due by remember { mutableStateOf<LocalDate?>(null) }
     var time by remember { mutableStateOf<LocalTime?>(null) }
@@ -512,17 +599,8 @@ private fun AddTodo(onAdd: suspend (String, String?, String?) -> Unit) {
             leadingIcon = { Icon(Icons.Outlined.AddTask, null) },
             trailingIcon = {
                 Row {
-                    IconButton(onClick = {
-                        val now = due ?: LocalDate.now()
-                        DatePickerDialog(context, { _, y, m, d -> due = LocalDate.of(y, m + 1, d) }, now.year, now.monthValue - 1, now.dayOfMonth).show()
-                    }) { Icon(Icons.Outlined.Event, "Due date") }
-                    IconButton(onClick = {
-                        val now = time ?: LocalTime.of(9, 0)
-                        TimePickerDialog(context, { _, h, min ->
-                            time = LocalTime.of(h, min)
-                            if (due == null) due = LocalDate.now()
-                        }, now.hour, now.minute, android.text.format.DateFormat.is24HourFormat(context)).show()
-                    }) { Icon(Icons.Outlined.Alarm, "Remind at") }
+                    IconButton(onClick = { pickDate = true }) { Icon(Icons.Outlined.Event, "Due date") }
+                    IconButton(onClick = { pickTime = true }) { Icon(Icons.Outlined.Alarm, "Remind at") }
                 }
             },
             singleLine = true,
@@ -537,7 +615,30 @@ private fun AddTodo(onAdd: suspend (String, String?, String?) -> Unit) {
             ),
             modifier = Modifier.fillMaxWidth(),
         )
-        if (due != null) {
+        if (pickDate) SinkDatePickerDialog(due ?: LocalDate.now(), onPick = { due = it; pickDate = false }, onDismiss = { pickDate = false })
+        if (pickTime) {
+            SinkTimePickerDialog(
+                time ?: LocalTime.of(9, 0),
+                onPick = {
+                    time = it
+                    if (due == null) due = LocalDate.now()
+                    pickTime = false
+                },
+                onDismiss = { pickTime = false },
+            )
+        }
+        // The chip keeps its last text while it animates away, after the date is cleared.
+        val chipText = due?.let { d ->
+            d.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)) +
+                (time?.let { " " + it.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)) } ?: "")
+        }
+        val lastChipText = remember { arrayOf("") }
+        if (chipText != null) lastChipText[0] = chipText
+        AnimatedVisibility(
+            visible = due != null,
+            enter = expandVertically(motion.defaultEffectsSpec<IntSize>()) + fadeIn(motion.defaultEffectsSpec()),
+            exit = shrinkVertically(motion.defaultEffectsSpec<IntSize>()) + fadeOut(motion.defaultEffectsSpec()),
+        ) {
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 InputChip(
                     selected = true,
@@ -545,12 +646,7 @@ private fun AddTodo(onAdd: suspend (String, String?, String?) -> Unit) {
                         due = null
                         time = null
                     },
-                    label = {
-                        Text(
-                            due!!.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)) +
-                                (time?.let { " " + it.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)) } ?: ""),
-                        )
-                    },
+                    label = { Text(lastChipText[0]) },
                     leadingIcon = { Icon(Icons.Outlined.Event, null, Modifier.size(16.dp)) },
                 )
                 TextButton(onClick = submit) { Text("Add") }

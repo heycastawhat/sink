@@ -59,6 +59,7 @@ import java.util.Date
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun VersionHistorySheet(api: suspend () -> Api?, path: String, onRestore: (String) -> Unit, onDismiss: () -> Unit) {
+    val haptics = rememberHaptics()
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var versions by remember { mutableStateOf<List<Version>?>(null) }
@@ -112,7 +113,7 @@ fun VersionHistorySheet(api: suspend () -> Api?, path: String, onRestore: (Strin
                             Text("All versions")
                         }
                         Spacer(Modifier.weight(1f))
-                        Button(onClick = { onRestore(open.second) }) { Text("Restore") }
+                        Button(onClick = { haptics.confirm(); onRestore(open.second) }) { Text("Restore") }
                     }
                 }
                 versions!!.isEmpty() -> Text(

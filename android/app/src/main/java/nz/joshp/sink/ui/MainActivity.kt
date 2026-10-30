@@ -22,7 +22,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import android.net.Uri
@@ -194,6 +208,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3ExpressiveApi::class)
     @Composable
     private fun LoggedIn(session: Session, openSettings: Boolean) {
         val settings = (application as SinkApp).settings
@@ -220,6 +235,10 @@ class MainActivity : ComponentActivity() {
         // A note is its own full-screen page; the tabs keep the bar.
         val showBar = route != null && !route.startsWith("note?")
         val openNoteAt = { path: String, line: Int? -> nav.navigate(noteRoute(path, line)) }
+        // Screen changes use the theme's expressive motion (read here: the transition lambdas aren't composable).
+        // Fades use the effects spec (no overshoot); movement and scale the spatial one (a little spring).
+        val motion = MaterialTheme.motionScheme
+        val isNote = { e: androidx.navigation.NavBackStackEntry -> e.destination.route?.startsWith("note?") == true }
 
         // A newer APK on GitHub: asked about once a day, or from Settings.
         var update by remember { mutableStateOf<Update?>(null) }
@@ -263,6 +282,20 @@ class MainActivity : ComponentActivity() {
                 nav,
                 startDestination = start,
                 modifier = Modifier.fillMaxSize(),
+                // A note rises over the screen it came from, which settles back a little; tabs fade through.
+                enterTransition = {
+                    if (isNote(targetState)) slideInVertically(motion.defaultSpatialSpec()) { it / 10 } + fadeIn(motion.defaultEffectsSpec())
+                    else fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f)
+                },
+                exitTransition = {
+                    if (isNote(targetState)) fadeOut(motion.defaultEffectsSpec()) + scaleOut(motion.defaultSpatialSpec(), targetScale = 0.96f)
+                    else fadeOut(motion.fastEffectsSpec())
+                },
+                popEnterTransition = { fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f) },
+                popExitTransition = {
+                    if (isNote(initialState)) slideOutVertically(motion.defaultSpatialSpec()) { it / 10 } + fadeOut(motion.fastEffectsSpec())
+                    else fadeOut(motion.fastEffectsSpec())
+                },
             ) {
                 composable("notes") {
                     NotesScreen(notesVm, onOpen = { openNoteAt(it, null) }, onNew = { text -> nav.navigate(noteRoute(null, folder = notesVm.state.value.folder, text = text)) })
@@ -294,14 +327,20 @@ class MainActivity : ComponentActivity() {
                 }
                 composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onCheckForUpdates = checkForUpdates) }
             }
-            if (showBar) {
+            // The tabs slide away when a note opens over them and come back with the list.
+            AnimatedVisibility(
+                visible = showBar,
+                enter = slideInVertically(motion.defaultSpatialSpec()) { it } + fadeIn(motion.defaultEffectsSpec()),
+                exit = slideOutVertically(motion.fastSpatialSpec()) { it } + fadeOut(motion.fastEffectsSpec()),
+                modifier = Modifier.align(Alignment.BottomStart),
+            ) {
                 val badge by notesVm.todoBadge.collectAsState()
                 LaunchedEffect(Unit) { notesVm.loadTodoBadge() }
                 FloatingTabs(
                     nav,
                     route,
                     mapOf("todos" to badge),
-                    Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(start = 16.dp, bottom = TOOLBAR_BOTTOM),
+                    Modifier.navigationBarsPadding().padding(start = 16.dp, bottom = TOOLBAR_BOTTOM),
                 )
             }
           }
@@ -344,8 +383,11 @@ class MainActivity : ComponentActivity() {
  * The tabs as a floating toolbar (Material 3 Expressive), bottom left where a thumb rests, with each screen's + button
  * beside it on the right. The open tab shows its name; the others are icons.
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FloatingTabs(nav: NavHostController, selected: String?, badges: Map<String, Int>, modifier: Modifier = Modifier) {
+    val motion = MaterialTheme.motionScheme
+    val haptics = rememberHaptics()
     Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -355,12 +397,21 @@ private fun FloatingTabs(nav: NavHostController, selected: String?, badges: Map<
         Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             for (t in TABS) {
                 val on = selected == t.route
+                val press = remember { MutableInteractionSource() }
+                // The open tab's pill fills in and its name slides out; the one you leave folds back to an icon.
+                val pill by animateColorAsState(
+                    if (on) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                    motion.defaultEffectsSpec(),
+                    label = "tab-pill",
+                )
                 Row(
                     Modifier
                         .height(48.dp)
+                        .pressScale(press, 0.94f)
                         .clip(CircleShape)
-                        .background(if (on) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                        .clickable {
+                        .background(pill)
+                        .clickable(interactionSource = press, indication = LocalIndication.current) {
+                            if (!on) haptics.tick()
                             nav.navigate(t.route) {
                                 // Tabs keep one copy each and remember where you were in them.
                                 popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -368,7 +419,7 @@ private fun FloatingTabs(nav: NavHostController, selected: String?, badges: Map<
                                 restoreState = true
                             }
                         }
-                        .padding(horizontal = if (on) 16.dp else 14.dp),
+                        .padding(horizontal = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // Todos: how many are overdue or due today.
@@ -380,9 +431,15 @@ private fun FloatingTabs(nav: NavHostController, selected: String?, badges: Map<
                             tint = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (on) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(t.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    AnimatedVisibility(
+                        visible = on,
+                        enter = expandHorizontally(motion.defaultEffectsSpec<IntSize>()) + fadeIn(motion.defaultEffectsSpec()),
+                        exit = shrinkHorizontally(motion.defaultEffectsSpec<IntSize>()) + fadeOut(motion.fastEffectsSpec()),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(Modifier.width(10.dp))
+                            Text(t.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSecondaryContainer, maxLines = 1)
+                        }
                     }
                 }
             }

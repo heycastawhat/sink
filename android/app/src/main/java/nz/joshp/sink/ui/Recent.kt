@@ -1,6 +1,16 @@
 package nz.joshp.sink.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.runtime.remember
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -56,14 +66,20 @@ fun recentNotes(notes: List<NoteMeta>, opened: Map<String, Long>, count: Int = 8
  * Home's Recent row, like Drive's suggested files: a label that folds it away, then preview cards that scroll
  * sideways. Mirrors the web's.
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun RecentStrip(items: List<Recent>, shut: Boolean, onToggle: () -> Unit, onOpen: (String) -> Unit) {
-    val turn by animateFloatAsState(if (shut) -90f else 0f, label = "chevron")
+    val motion = MaterialTheme.motionScheme
+    val haptics = rememberHaptics()
+    val turn by animateFloatAsState(if (shut) -90f else 0f, motion.defaultSpatialSpec(), label = "chevron")
     Column {
         Row(
             Modifier
                 .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onToggle)
+                .clickable {
+                    haptics.tick()
+                    onToggle()
+                }
                 .padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -71,12 +87,17 @@ fun RecentStrip(items: List<Recent>, shut: Boolean, onToggle: () -> Unit, onOpen
             Icon(Icons.Outlined.ExpandMore, if (shut) "Show recent" else "Hide recent", Modifier.size(20.dp).rotate(turn), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             SectionLabel("Recent")
         }
-        if (!shut) {
+        // Folds away rather than vanishing: sizes use the effects spec (no overshoot), the fade the same.
+        AnimatedVisibility(
+            visible = !shut,
+            enter = expandVertically(motion.defaultEffectsSpec<IntSize>()) + fadeIn(motion.defaultEffectsSpec()),
+            exit = shrinkVertically(motion.defaultEffectsSpec<IntSize>()) + fadeOut(motion.defaultEffectsSpec()),
+        ) {
             LazyRow(
                 contentPadding = PaddingValues(top = 6.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(items, key = { it.note.path }) { RecentCard(it, onOpen) }
+                items(items, key = { it.note.path }) { RecentCard(it, onOpen, Modifier.animateItem()) }
             }
         }
     }
@@ -95,13 +116,16 @@ fun RecentFiledRow(items: List<Recent>, onOpen: (String) -> Unit) {
         items(items, key = { it.note.path }) { r ->
             val n = r.note
             val outline = NOTE_HUES[n.color]?.copy(alpha = 0.45f) ?: MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+            val press = remember { MutableInteractionSource() }
             Row(
                 Modifier
+                    .animateItem()
                     .widthIn(max = 220.dp)
+                    .pressScale(press)
                     .clip(RoundedCornerShape(18.dp))
                     .background(noteTint(n.color))
                     .border(1.dp, outline, RoundedCornerShape(18.dp))
-                    .clickable { onOpen(n.path) }
+                    .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(n.path) }
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -128,16 +152,18 @@ fun RecentFiledRow(items: List<Recent>, onOpen: (String) -> Unit) {
 }
 
 @Composable
-private fun RecentCard(r: Recent, onOpen: (String) -> Unit) {
+private fun RecentCard(r: Recent, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     val n = r.note
+    val press = remember { MutableInteractionSource() }
     val outline = NOTE_HUES[n.color]?.copy(alpha = 0.45f) ?: MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
     Column(
-        Modifier
+        modifier
             .width(200.dp)
+            .pressScale(press)
             .clip(RoundedCornerShape(16.dp))
             .background(noteTint(n.color))
             .border(1.dp, outline, RoundedCornerShape(16.dp))
-            .clickable { onOpen(n.path) }
+            .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(n.path) }
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

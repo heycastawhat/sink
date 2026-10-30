@@ -3,7 +3,9 @@ package nz.joshp.sink.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -129,6 +131,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     var filterMenu by remember { mutableStateOf(false) }
     var byTitle by rememberSaveable { mutableStateOf(false) }
     val pullUp = rememberPullUpToCreate { onNew("") }
+    val haptics = rememberHaptics()
     // Runs a folder action and shows its error, if any.
     fun act(block: suspend () -> String?) {
         scope.launch { block()?.let { snackbar.showSnackbar(it) } }
@@ -192,29 +195,29 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                 trailing = {
                     if (state.offline) Icon(Icons.Outlined.CloudOff, "Offline", Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Box {
-                        IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Folder actions") }
+                        IconButton(onClick = { haptics.tick(); menu = true }) { Icon(Icons.Outlined.MoreVert, "Folder actions") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(
                                 text = { Text(if (inside) "New folder here" else "New folder") },
                                 leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, null) },
-                                onClick = { menu = false; naming = true },
+                                onClick = { menu = false; haptics.tick(); naming = true },
                             )
                             if (inside) {
                                 DropdownMenuItem(
                                     text = { Text("Rename folder") },
                                     leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null) },
-                                    onClick = { menu = false; renaming = true },
+                                    onClick = { menu = false; haptics.tick(); renaming = true },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Move folder to…") },
                                     leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) },
-                                    onClick = { menu = false; moving = true },
+                                    onClick = { menu = false; haptics.tick(); moving = true },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Delete folder") },
                                     leadingIcon = { Icon(Icons.Outlined.Delete, null) },
                                     // No "are you sure?": the snackbar's Undo puts the whole folder back.
-                                    onClick = { menu = false; act { vm.trashFolder(state.folder) } },
+                                    onClick = { menu = false; haptics.reject(); act { vm.trashFolder(state.folder) } },
                                 )
                             }
                         }
@@ -253,14 +256,14 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                         // Folders sit as chips in a row; with none yet, home still offers "New folder".
                         if (!searching && (subfolders.isNotEmpty() || !inside)) {
                             item(key = "folders", span = StaggeredGridItemSpan.FullLine) {
-                                FolderChips(subfolders, { countIn(state.notes, it) }, onOpen = vm::setFolder, onNew = { naming = true })
+                                FolderChips(subfolders, { countIn(state.notes, it) }, onOpen = { haptics.tick(); vm.setFolder(it) }, onNew = { haptics.tick(); naming = true })
                             }
-                            item(key = "folders-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                            item(key = "folders-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
                         if (showRecent) {
                             if (hideFoldered) {
                                 item(key = "recent", span = StaggeredGridItemSpan.FullLine) { RecentFiledRow(recent, onOpen) }
-                                item(key = "recent-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Recent in folders", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                                item(key = "recent-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Recent in folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                             } else item(key = "recent", span = StaggeredGridItemSpan.FullLine) {
                                 RecentStrip(recent, recentShut, onToggle = { recentShut = !recentShut }, onOpen = onOpen)
                             }
@@ -275,14 +278,14 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                             }
                         }
                         if (pinned.isNotEmpty()) {
-                            items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen) }
-                            item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                            items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen, Modifier.animateItem()) }
+                            item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
-                        items(others, key = { it.path }) { NoteCard(it, onOpen) }
+                        items(others, key = { it.path }) { NoteCard(it, onOpen, Modifier.animateItem()) }
                         if (pinned.isNotEmpty() && others.isNotEmpty()) {
-                            item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                            item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         } else if (unfiledHome && others.isNotEmpty() && (subfolders.isNotEmpty() || showRecent)) {
-                            item(key = "unfiled-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Unfiled", Modifier.padding(start = 6.dp, top = 8.dp)) }
+                            item(key = "unfiled-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Unfiled", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
                     }
                 }
@@ -334,25 +337,25 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                 Box(
                     Modifier.size(56.dp).shadow(6.dp, CircleShape).clip(CircleShape)
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .clickable { filterMenu = true },
+                        .clickable { haptics.tick(); filterMenu = true },
                     contentAlignment = Alignment.Center,
                 ) { Icon(Icons.Outlined.FilterList, "Sort and filter") }
                 DropdownMenu(expanded = filterMenu, onDismissRequest = { filterMenu = false }) {
                     DropdownMenuItem(
                         text = { Text("Newest first") },
                         leadingIcon = { Icon(Icons.Outlined.Check, null, tint = if (byTitle) Color.Transparent else MaterialTheme.colorScheme.primary) },
-                        onClick = { filterMenu = false; byTitle = false },
+                        onClick = { filterMenu = false; haptics.tick(); byTitle = false },
                     )
                     DropdownMenuItem(
                         text = { Text("Title A to Z") },
                         leadingIcon = { Icon(Icons.Outlined.Check, null, tint = if (byTitle) MaterialTheme.colorScheme.primary else Color.Transparent) },
-                        onClick = { filterMenu = false; byTitle = true },
+                        onClick = { filterMenu = false; haptics.tick(); byTitle = true },
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
                         text = { Text("Keep filed notes in folders") },
                         leadingIcon = { Icon(Icons.Outlined.Check, null, tint = if (hideFoldered) MaterialTheme.colorScheme.primary else Color.Transparent) },
-                        onClick = { filterMenu = false; vm.setHideFoldered(!hideFoldered) },
+                        onClick = { filterMenu = false; haptics.toggle(!hideFoldered); vm.setHideFoldered(!hideFoldered) },
                     )
                 }
             }
@@ -409,18 +412,20 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
 }
 
 @Composable
-private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit) {
+private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+    val press = remember { MutableInteractionSource() }
     val firstLine = n.excerpt.orEmpty().trimStart().lineSequence().firstOrNull().orEmpty()
     // A note with no heading is named after its first line (Keep-style); showing both would repeat it.
     val showTitle = n.isBoard || n.snippet != null || n.title != n.fileName || !firstLine.startsWith(n.title)
     val outline = NOTE_HUES[n.color]?.copy(alpha = 0.45f) ?: MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
+            .pressScale(press)
             .clip(RoundedCornerShape(16.dp))
             .background(noteTint(n.color))
             .border(1.dp, outline, RoundedCornerShape(16.dp))
-            .clickable { onOpen(n.path) }
+            .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(n.path) }
             .padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {

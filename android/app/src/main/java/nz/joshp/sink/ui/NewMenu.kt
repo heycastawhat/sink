@@ -1,6 +1,5 @@
 package nz.joshp.sink.ui
 
-import android.app.DatePickerDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,7 +30,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import nz.joshp.sink.data.templatesIn
@@ -57,16 +55,24 @@ fun NewMenuFab(
     var todo by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf(false) }
     var templating by remember { mutableStateOf(false) }
+    val haptics = rememberHaptics()
     BackHandler(enabled = expanded) { expanded = false }
     fun pick(action: () -> Unit) {
         expanded = false
+        haptics.confirm()
         action()
     }
 
     FloatingActionButtonMenu(
         expanded = expanded,
         button = {
-            ToggleFloatingActionButton(checked = expanded, onCheckedChange = { expanded = it }) {
+            ToggleFloatingActionButton(
+                checked = expanded,
+                onCheckedChange = {
+                    haptics.toggle(it)
+                    expanded = it
+                },
+            ) {
                 Icon(if (expanded) Icons.Outlined.Close else Icons.Outlined.Add, if (expanded) "Close" else "New")
             }
         },
@@ -146,7 +152,8 @@ fun NewMenuFab(
 /** A quick todo: its text and an optional due date. It goes to Todo.md. */
 @Composable
 fun TodoDialog(onAdd: (text: String, due: String?) -> Unit, onDismiss: () -> Unit) {
-    val context = LocalContext.current
+    val haptics = rememberHaptics()
+    var pickDate by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf("") }
     var due by remember { mutableStateOf<LocalDate?>(null) }
     AlertDialog(
@@ -155,16 +162,14 @@ fun TodoDialog(onAdd: (text: String, due: String?) -> Unit, onDismiss: () -> Uni
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(text, { text = it }, label = { Text("Todo") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                TextButton(onClick = {
-                    val now = due ?: LocalDate.now()
-                    DatePickerDialog(context, { _, y, m, d -> due = LocalDate.of(y, m + 1, d) }, now.year, now.monthValue - 1, now.dayOfMonth).show()
-                }) {
+                TextButton(onClick = { pickDate = true }) {
                     Icon(Icons.Outlined.Event, null)
                     Text(due?.let { "  Due $it" } ?: "  Add a due date")
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onAdd(text.trim(), due?.toString()) }, enabled = text.isNotBlank()) { Text("Add") } },
+        confirmButton = { TextButton(onClick = { haptics.confirm(); onAdd(text.trim(), due?.toString()) }, enabled = text.isNotBlank()) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+    if (pickDate) SinkDatePickerDialog(due ?: LocalDate.now(), onPick = { due = it; pickDate = false }, onDismiss = { pickDate = false })
 }

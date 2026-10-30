@@ -36,6 +36,7 @@ import nz.joshp.sink.data.unshare
 fun ShareDialog(api: suspend () -> Api?, path: String, title: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
     var loading by remember { mutableStateOf(true) }
     var link by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -74,11 +75,11 @@ fun ShareDialog(api: suspend () -> Api?, path: String, title: String, onDismiss:
         },
         confirmButton = {
             val url = link
-            if (url == null) TextButton(enabled = !loading, onClick = { run { a -> a.share(path).also { link = it; send(it) } } }) { Text("Create link") }
+            if (url == null) TextButton(enabled = !loading, onClick = { haptics.confirm(); run { a -> a.share(path).also { link = it; send(it) } } }) { Text("Create link") }
             else TextButton(onClick = { send(url) }) { Text("Send link") }
         },
         dismissButton = {
-            if (link != null) TextButton(enabled = !loading, onClick = { run { a -> a.unshare(path); link = null } }) { Text("Stop sharing") }
+            if (link != null) TextButton(enabled = !loading, onClick = { haptics.reject(); run { a -> a.unshare(path); link = null } }) { Text("Stop sharing") }
             else TextButton(onClick = onDismiss) { Text("Close") }
         },
     )

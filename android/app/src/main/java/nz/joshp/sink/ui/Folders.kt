@@ -3,7 +3,9 @@ package nz.joshp.sink.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -72,12 +74,14 @@ fun countIn(notes: List<NoteMeta>, folder: String) = notes.count { it.path.start
 /** A subfolder to drill into: icon, name and how many notes are inside. */
 @Composable
 fun FolderTile(name: String, count: Int, onClick: () -> Unit) {
+    val press = remember { MutableInteractionSource() }
     Row(
         Modifier
+            .pressScale(press)
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = press, indication = LocalIndication.current, onClick = onClick)
             .padding(start = 12.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)
             .widthIn(max = 220.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -103,11 +107,14 @@ fun FolderChips(folders: List<String>, count: (String) -> Int, onOpen: (String) 
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(folders, key = { "f:$it" }) { f ->
+            val press = remember { MutableInteractionSource() }
             Row(
                 Modifier
+                    .animateItem()
+                    .pressScale(press)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .clickable { onOpen(f) }
+                    .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(f) }
                     .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -124,11 +131,14 @@ fun FolderChips(folders: List<String>, count: (String) -> Int, onOpen: (String) 
             }
         }
         item(key = "new") {
+            val press = remember { MutableInteractionSource() }
             Row(
                 Modifier
+                    .animateItem()
+                    .pressScale(press)
                     .clip(CircleShape)
                     .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                    .clickable(onClick = onNew)
+                    .clickable(interactionSource = press, indication = LocalIndication.current, onClick = onNew)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -179,6 +189,7 @@ private fun Crumb(text: String, last: Boolean, onClick: () -> Unit) {
 /** One line of text: a new folder's name, or a note's or folder's new name. */
 @Composable
 fun NameDialog(title: String, initial: String, confirm: String, label: String = "Name", onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    val haptics = rememberHaptics()
     var name by remember { mutableStateOf(initial) }
     val ok = name.isNotBlank() && !name.contains('/') && !name.startsWith(".")
     AlertDialog(
@@ -194,7 +205,7 @@ fun NameDialog(title: String, initial: String, confirm: String, label: String = 
                 supportingText = if (name.isNotEmpty() && !ok) ({ Text("No slashes, and not starting with a dot") }) else null,
             )
         },
-        confirmButton = { TextButton(onClick = { onConfirm(name.trim()) }, enabled = ok) { Text(confirm) } },
+        confirmButton = { TextButton(onClick = { haptics.confirm(); onConfirm(name.trim()) }, enabled = ok) { Text(confirm) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

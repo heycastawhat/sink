@@ -1,5 +1,12 @@
 package nz.joshp.sink.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.ui.unit.IntSize
 import android.annotation.SuppressLint
 import android.content.Context
 import android.view.inputmethod.InputMethodManager
@@ -199,6 +206,7 @@ private class Editing(var path: String?, val draftKey: String, var folder: Strin
  * One note, fullscreen. The text editor is the web app's CodeMirror page in a WebView (bundled in the APK, so it
  * works offline); this screen owns loading, saving and the network. Boards open in the browser instead.
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun NoteScreen(
@@ -223,6 +231,8 @@ fun NoteScreen(
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
+    val motion = MaterialTheme.motionScheme
     val snackbar = remember { SnackbarHostState() }
     val store = remember { NoteStore(context) }
     val draftKey = rememberSaveable { NoteSaver.newDraftKey() }
@@ -690,17 +700,24 @@ fun NoteScreen(
                 )).also { web = it } },
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
-            if (palette) {
+            // The colour row unfolds above the toolbar instead of popping in.
+            AnimatedVisibility(
+                visible = palette,
+                enter = expandVertically(motion.defaultEffectsSpec<IntSize>()) + fadeIn(motion.defaultEffectsSpec()),
+                exit = shrinkVertically(motion.defaultEffectsSpec<IntSize>()) + fadeOut(motion.fastEffectsSpec()),
+            ) {
                 FlowRow(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Swatch(null, color == null) {
+                        haptics.confirm()
                         palette = false
                         scope.launch { setMeta(clearColor = true) }
                     }
                     for (c in NOTE_COLORS) Swatch(c, color == c) {
+                        haptics.confirm()
                         palette = false
                         scope.launch { setMeta(newColor = c) }
                     }
@@ -735,12 +752,15 @@ fun NoteScreen(
                         color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
-                    IconButton(onClick = { scope.launch { setMeta(pin = !pinned) } }) {
+                    IconButton(onClick = {
+                        haptics.toggle(!pinned)
+                        scope.launch { setMeta(pin = !pinned) }
+                    }) {
                         Icon(if (pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (pinned) "Unpin" else "Pin")
                     }
-                    IconButton(onClick = { palette = !palette }) { Icon(Icons.Outlined.Palette, "Colour") }
+                    IconButton(onClick = { haptics.tick(); palette = !palette }) { Icon(Icons.Outlined.Palette, "Colour") }
                     Box {
-                        IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
+                        IconButton(onClick = { haptics.tick(); menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(
                                 text = { Text("Add image") },
@@ -779,6 +799,7 @@ fun NoteScreen(
                                 leadingIcon = { Icon(Icons.Outlined.Share, null) },
                                 onClick = {
                                     menu = false
+                                    haptics.tick()
                                     // Saved first, so the link shows what's on screen.
                                     flush { sharing = true }
                                 },
@@ -806,6 +827,7 @@ fun NoteScreen(
                                     leadingIcon = { Icon(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
                                     onClick = {
                                         menu = false
+                                        haptics.confirm()
                                         archive()
                                     },
                                 )
@@ -815,6 +837,7 @@ fun NoteScreen(
                                 leadingIcon = { Icon(Icons.Outlined.Delete, null) },
                                 onClick = {
                                     menu = false
+                                    haptics.reject()
                                     trash()
                                 },
                             )
