@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { newId, now } from "./db";
 import type { Oidc } from "./oidc";
+import { clientIp, rateLimit } from "./ratelimit";
 
 export const SESSION_COOKIE = "sink_session";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
@@ -30,19 +31,22 @@ export function s256(verifier: string): string {
 export class Auth {
   constructor(private db: Database) {}
 
-  issueToken(deviceName: string, subject: string, scope: Scope = "full"): string {
+  /** A new token; with `ttlMs` it stops working after that long (OAuth access tokens), else it lasts until revoked. */
+  issueToken(deviceName: string, subject: string, scope: Scope = "full", ttlMs?: number): string {
     const token = "sink_" + randomString();
     this.db
-      .query("INSERT INTO tokens (id, name, token_hash, created_at, subject, scope) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(newId(), deviceName, sha256(token), now(), subject, scope);
+      .query("INSERT INTO tokens (id, name, token_hash, created_at, subject, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(newId(), deviceName, sha256(token), now(), subject, scope, ttlMs ? now() + ttlMs : null);
     return token;
   }
 
   /** The token's id and scope, or null if it isn't one of ours. */
   check(token: string): { id: string; scope: Scope } | null {
     const row = this.db
-      .query<{ id: string; scope: Scope }, [string]>("SELECT id, scope FROM tokens WHERE token_hash = ?")
-      .get(sha256(token));
+      .query<{ id: string; scope: Scope }, [string, number]>(
+        "SELECT id, scope FROM tokens WHERE token_hash = ? AND (expires_at IS NULL OR expires_at > ?)",
+      )
+      .get(sha256(token), now());
     if (!row) return null;
     this.db.query("UPDATE tokens SET last_used_at = ? WHERE id = ?").run(now(), row.id);
     return row;
@@ -158,7 +162,11 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     return opts.publicUrls.includes(origin) ? origin : opts.publicUrls[0]!;
   };
 
+  // Anyone can start a login; a cap per caller keeps one client from crowding out real sign-ins.
+  const logins = rateLimit(30, 10 * 60_000);
+
   app.get("/oidc/start", async (c) => {
+    if (!logins(clientIp(c))) return c.text("Too many sign-in attempts. Try again in a few minutes.", 429);
     sweep();
     const q = startQuery.safeParse(c.req.query());
     if (!q.success) return c.json({ error: "invalid query" }, 400);

@@ -141,7 +141,7 @@ accepted; everything else is moved to a "Rejected" folder.
 - Tokens for AI assistants can read and write notes and todos but can't see or create other sign-ins. Revoke them
   in Settings.
 - Sink won't follow symlinks out of the notes folder, so a link synced into it can't expose the server's files.
-- For email in, set `SINK_IMAP_AUTHSERV_ID` so only your mail provider's verdict on a message is trusted.
+- Email in needs `SINK_IMAP_AUTHSERV_ID` (your mail provider's name in `Authentication-Results`, e.g. `mx.google.com`), so only its verdict on a message is trusted. Sink won't start email in without it.
 
 ## Backups
 

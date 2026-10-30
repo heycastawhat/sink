@@ -429,6 +429,27 @@ describe("oauth for mcp connectors", () => {
     return new URL(res.headers.get("location")!);
   }
 
+  test("hardening: no redirect before consent, access tokens expire, registration can't be used up", async () => {
+    // A registered client with an attacker's redirect URI: bad requests show a page, never bounce there.
+    const reg = (await (await register({ redirect_uris: ["https://evil.example/phish"] })).json()) as any;
+    const bad = await setup.app.request(`/oauth/authorize?client_id=${reg.client_id}&response_type=x`);
+    expect(bad.status).toBe(400);
+    expect(bad.headers.get("location")).toBeNull();
+
+    // An access token past its hour no longer works; a device token (no expiry) does.
+    const subject = "sub-1";
+    const mcp = setup.auth.issueToken("Test (MCP)", subject, "mcp", 60 * 60_000);
+    expect(setup.auth.check(mcp)).not.toBeNull();
+    setup.db.query("UPDATE tokens SET expires_at = ? WHERE id = ?").run(Date.now() - 1, setup.auth.verify(mcp)!);
+    expect(setup.auth.check(mcp)).toBeNull();
+    expect(setup.auth.check(setup.auth.issueToken("Phone", subject))).not.toBeNull();
+
+    // One caller can only register a few clients an hour.
+    const statuses = [];
+    for (let i = 0; i < 12; i++) statuses.push((await register({ redirect_uris: ["https://claude.ai/cb"] })).status);
+    expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
+  });
+
   test("discovery, registration, consent, code + PKCE, refresh rotation", async () => {
     const unauth = await setup.app.request("/mcp", { method: "POST" });
     expect(unauth.status).toBe(401);

@@ -5,6 +5,7 @@ import { getCookie } from "hono/cookie";
 import { z } from "zod";
 import { Auth, SESSION_COOKIE, requestOrigin, s256, type AuthEnv } from "./auth";
 import { now } from "./db";
+import { clientIp, rateLimit } from "./ratelimit";
 
 /**
  * OAuth 2.1 authorization server for MCP connectors (claude.ai, ChatGPT, Poke, …): metadata discovery
@@ -13,6 +14,8 @@ import { now } from "./db";
  */
 
 const MAX_CLIENTS = 100;
+/** OAuth access tokens expire after this; refresh tokens (rotated on use) last until revoked. */
+const ACCESS_TTL_MS = 60 * 60_000;
 const CODE_TTL_MS = 5 * 60 * 1000;
 const CONSENT_TTL_MS = 10 * 60 * 1000;
 const SCOPE = "sink";
@@ -96,12 +99,21 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
     });
   }
 
+  const registrations = rateLimit(10, 60 * 60_000);
+
   app.post("/oauth/register", async (c) => {
-    // Registration is open by design (MCP clients self-register), so keep it from piling up: clients that never got
-    // a token go after a day, and there's a ceiling.
-    db.query("DELETE FROM oauth_clients WHERE created_at < ? AND id NOT IN (SELECT client_id FROM oauth_refresh)").run(now() - 86_400_000);
+    // Registration is open by design (MCP clients self-register), so keep it from piling up or being used up:
+    // a few per caller per hour; clients that never got a token go after an hour; at the ceiling the oldest unused
+    // one makes room, so a flood can't lock real connectors out.
+    if (!registrations(clientIp(c))) {
+      return c.json({ error: "temporarily_unavailable", error_description: "too many registrations, try again later" }, 429);
+    }
+    const unused = "id NOT IN (SELECT client_id FROM oauth_refresh)";
+    db.query(`DELETE FROM oauth_clients WHERE created_at < ? AND ${unused}`).run(now() - 60 * 60_000);
     if (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM oauth_clients").get()!.n >= MAX_CLIENTS) {
-      return c.json({ error: "temporarily_unavailable", error_description: "too many registered clients" }, 429);
+      const oldest = db.query<{ id: string }, []>(`SELECT id FROM oauth_clients WHERE ${unused} ORDER BY created_at LIMIT 1`).get();
+      if (!oldest) return c.json({ error: "temporarily_unavailable", error_description: "too many registered clients" }, 429);
+      db.query("DELETE FROM oauth_clients WHERE id = ?").run(oldest.id);
     }
     const parsed = registerBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return tokenError(c, "invalid_client_metadata", "expected redirect_uris");
@@ -166,14 +178,11 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
     const redirectUri = q.redirect_uri ?? (uris.length === 1 ? uris[0]! : "");
     if (!uris.includes(redirectUri)) return page("Bad redirect", "<h1>Bad redirect</h1><p>The app asked to return somewhere it didn't register.</p>", 400);
 
-    const back = (params: Record<string, string>) => {
-      const u = new URL(redirectUri);
-      for (const [k, v] of Object.entries({ ...params, ...(q.state && { state: q.state }) })) u.searchParams.set(k, v);
-      return c.redirect(u.toString(), 302);
-    };
-    if (q.response_type !== "code") return back({ error: "unsupported_response_type" });
+    // Bad requests get a page here, never a redirect: anyone can register a client with any https redirect URI,
+    // so redirecting before consent would make this a trusted link that bounces to anywhere.
+    if (q.response_type !== "code") return page("Can't connect", "<h1>Can't connect</h1><p>This app asked for something Sink doesn't support.</p>", 400);
     if (!q.code_challenge || q.code_challenge_method !== "S256") {
-      return back({ error: "invalid_request", error_description: "PKCE with S256 is required" });
+      return page("Can't connect", "<h1>Can't connect</h1><p>This app needs to use PKCE (S256) to connect to Sink.</p>", 400);
     }
 
     if (!sessionSubject(c)) {
@@ -232,7 +241,8 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
   }
 
   function issue(clientId: string, clientName: string, subject: string) {
-    const access = auth.issueToken(`${clientName} (MCP)`, subject, "mcp");
+    // Short-lived: a leaked access token stops working within the hour; the client refreshes for a new one.
+    const access = auth.issueToken(`${clientName} (MCP)`, subject, "mcp", ACCESS_TTL_MS);
     const tokenId = auth.verify(access)!;
     const refresh = `sinkr_${random()}`;
     db.query("INSERT INTO oauth_refresh (token_hash, token_id, client_id, created_at) VALUES (?, ?, ?, ?)").run(
@@ -241,7 +251,7 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
       clientId,
       now(),
     );
-    return { access_token: access, token_type: "Bearer", refresh_token: refresh, scope: SCOPE };
+    return { access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL_MS / 1000, refresh_token: refresh, scope: SCOPE };
   }
 
   app.post("/oauth/token", async (c) => {

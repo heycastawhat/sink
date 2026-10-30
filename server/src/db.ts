@@ -327,6 +327,10 @@ export const migrations: string[] = [
   ALTER TABLE versions_new RENAME TO versions;
   CREATE INDEX versions_path ON versions(path, at DESC);
   `,
+  // OAuth access tokens expire (an hour; refresh gets a new one). Null: until revoked (devices, hand-made tokens).
+  `
+  ALTER TABLE tokens ADD COLUMN expires_at INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Database {

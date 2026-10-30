@@ -104,7 +104,7 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { submit() }),
                 isError = error != null,
-                supportingText = error?.let { { Text(it) } },
+                supportingText = (error ?: cleartextWarning(server))?.let { { Text(it) } },
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(4.dp))
@@ -120,4 +120,17 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
             }
         }
     }
+}
+
+/**
+ * A warning for an http:// address that isn't on the local network: the sign-in token would cross the internet
+ * unencrypted. Plain http stays allowed for a LAN or Tailscale server before it has a certificate.
+ */
+private fun cleartextWarning(server: String): String? {
+    val url = server.trim().lowercase()
+    if (!url.startsWith("http://")) return null
+    val host = url.removePrefix("http://").substringBefore('/').substringBefore(':')
+    val local = host == "localhost" || host.endsWith(".local") || host.endsWith(".lan") || host.endsWith(".ts.net") ||
+        Regex("""^(127|10)\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.""").containsMatchIn(host)
+    return if (local) null else "Not encrypted: anyone on this network could see your sign-in. Use https:// if you can."
 }

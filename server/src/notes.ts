@@ -655,7 +655,10 @@ export class Vault {
         const ext = extname(path);
         dest = `${TRASH}/${isNote ? path.slice(0, -ext.length) : path} ${n}${isNote ? ext : ""}`;
       }
+      // Inside the vault even if something in .trash is a symlink (a sync tool or another app could have put one there).
+      await this.abs(dirname(dest));
       await mkdir(dirname(join(this.dir, dest)), { recursive: true });
+      await this.abs(dirname(dest));
       await rename(src, join(this.dir, dest));
     } catch (err) {
       fsError(err, isNote ? "note" : "folder");

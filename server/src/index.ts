@@ -21,6 +21,10 @@ if (!config.oidc.allowedUsers.length && !config.oidc.allowedGroups.length && !co
   );
 }
 if (!config.publicUrls.length) throw new Error("Set SINK_PUBLIC_URLS (comma-separated origins Sink is reached on)");
+if (config.imap.host && !config.imap.authservId) {
+  // Without it, a mail host that adds no Authentication-Results of its own would leave a forged one on top.
+  throw new Error("Set SINK_IMAP_AUTHSERV_ID to your mail server's name in Authentication-Results (e.g. mx.google.com)");
+}
 const auth = new Auth(db);
 const oidc = new Oidc(config.oidc);
 
