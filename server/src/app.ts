@@ -50,7 +50,11 @@ export function createApp(deps: {
   const { db, vault, plugins, auth, oidc, config } = deps;
   const app = new Hono<AuthEnv>();
 
-  app.use("*", secureHeaders({ crossOriginResourcePolicy: "same-origin" }));
+  // Same-origin resources, except the logo: other sites show it (connector screens in Claude and others).
+  const sameOrigin = secureHeaders({ crossOriginResourcePolicy: "same-origin" });
+  const shareable = secureHeaders({ crossOriginResourcePolicy: "cross-origin" });
+  const LOGO = /^\/(favicon\.(ico|svg)|icon-\d+\.png|icon-maskable-\d+\.png|apple-touch-icon\.png)$/;
+  app.use("*", (c, next) => (LOGO.test(c.req.path) ? shareable : sameOrigin)(c, next));
 
   app.get("/api/health", (c) => {
     // Public (container health check), so it says nothing about the notes.
@@ -115,10 +119,6 @@ export function createApp(deps: {
     // hashed files they load never change, so those can be kept for good.
     app.use("/*", async (c, next) => {
       await next();
-      // The logo is shown by other sites (connector screens in Claude and others), so it may be loaded cross-origin.
-      if (/^\/(favicon\.(ico|svg)|icon-\d+\.png|icon-maskable-\d+\.png|apple-touch-icon\.png)$/.test(c.req.path)) {
-        c.header("cross-origin-resource-policy", "cross-origin");
-      }
       if (c.req.path.startsWith("/api/") || c.res.headers.has("cache-control")) return;
       const type = c.res.headers.get("content-type") ?? "";
       if (c.req.path.startsWith("/assets/")) c.header("cache-control", "public, max-age=31536000, immutable");
