@@ -133,9 +133,12 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: () -> Unit)
 
     val hideFoldered by vm.hideFoldered.collectAsStateWithLifecycle()
     // Search always covers everything; home can leave filed notes to their folders (Settings).
+    // Search covers everything; browsing can leave filed notes to their own folders (home and every folder alike).
     val inFolder = { n: NoteMeta ->
-        if (state.folder.isNotEmpty()) n.path.startsWith(state.folder + "/")
-        else state.results != null || !hideFoldered || '/' !in n.path
+        when {
+            state.results != null || !hideFoldered -> state.folder.isEmpty() || n.path.startsWith(state.folder + "/")
+            else -> n.path.substringBeforeLast('/', "") == state.folder
+        }
     }
     val list = (state.results ?: state.notes).filter(inFolder)
     val searching = state.results != null

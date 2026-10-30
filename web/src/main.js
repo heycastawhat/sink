@@ -280,8 +280,8 @@ async function renderSettings() {
   <h2>Notes</h2>
   <div class="setting-row">
     <div class="grow">
-      <label class="setting-title" for="hide-foldered">Hide notes in folders from the home page</label>
-      <div class="muted small">Home shows only notes that aren't in a folder. Search still finds everything. This browser only.</div>
+      <label class="setting-title" for="hide-foldered">Keep filed notes in their folders</label>
+      <div class="muted small">Home shows only notes that aren't in a folder, and each folder only its own notes, not its subfolders'. Search still finds everything. This browser only.</div>
     </div>
     <m3e-switch id="hide-foldered"${notes.prefs.hideFoldered ? ' checked' : ''}></m3e-switch>
   </div>

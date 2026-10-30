@@ -110,8 +110,8 @@ fun SettingsScreen(
             Card("Notes") {
                 ToggleRow(
                     Icons.Outlined.FolderOff,
-                    "Hide notes in folders from home",
-                    "Home shows only notes that aren't in a folder. Search still finds everything.",
+                    "Keep filed notes in their folders",
+                    "Home shows only notes that aren't in a folder, and each folder only its own, not its subfolders'. Search still finds everything.",
                     hideFoldered,
                 ) {
                     scope.launch { settings.setHideFoldered(it) }

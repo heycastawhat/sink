@@ -175,9 +175,14 @@ function cardHtml(n) {
 function renderGrid() {
   const root = $('notes');
   if (!root || root.hidden) return;
-  // Search always covers everything; browsing home can leave filed notes to their folders.
+  // Search always covers everything. Browsing can leave filed notes to their own folders: home shows only loose
+  // notes, and a folder only its own (subfolders have their tiles), like Drive.
   const inFolder = (n) =>
-    state.folder ? n.path.startsWith(state.folder + '/') : state.results || !prefs.hideFoldered || !n.path.includes('/');
+    state.results
+      ? !state.folder || n.path.startsWith(state.folder + '/')
+      : prefs.hideFoldered
+        ? folderOf(n.path) === state.folder
+        : !state.folder || n.path.startsWith(state.folder + '/');
   const list = (state.results ?? state.notes).filter(inFolder);
 
   renderFolderBar();
