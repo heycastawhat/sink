@@ -647,7 +647,8 @@ function wireGrid() {
     const b = body.value.replace(/\s+$/, '');
     if (!t && !b.trim()) return reset();
     reset();
-    const content = t ? `# ${t}\n\n${b}${b ? '\n' : ''}` : `${b}\n`;
+    // With no title, the first line is the title, as in the editor (unless it's a list or other markup).
+    const content = t ? `# ${t}\n\n${b}${b ? '\n' : ''}` : /^[^\s#\-*+>|`!\[%=<~_\d]/u.test(b) ? `# ${b.replace(/\n+/, '\n\n')}\n` : `${b}\n`;
     try {
       await api.createNote({ folder: state.folder, title: t || b.split('\n')[0].replace(/^[-*+]\s+(\[.\]\s+)?/, '').slice(0, 60), content });
       await loadNotes();

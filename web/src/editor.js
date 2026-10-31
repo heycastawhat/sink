@@ -486,6 +486,13 @@ const looseTask = EditorView.inputHandler.of((view, from, to, text) => {
   return true;
 });
 
+// A note's first line is its title: typing into an empty note starts a heading, unless what's typed starts
+// other markup (a list, quote, table, embed, slash command…).
+const titleFirst = EditorState.transactionFilter.of((tr) => {
+  if (tr.startState.doc.length || !tr.isUserEvent('input.type') || !/^[^\s#\-*+>|`!\[/%=<~_\d]/u.test(tr.newDoc.sliceString(0, 1))) return tr;
+  return [tr, { changes: { from: 0, insert: '# ' }, sequential: true }];
+});
+
 /** What a slash command gets to work with. */
 function commandContext(view, opts) {
   return {
@@ -818,6 +825,7 @@ export function createEditor(opts) {
         livePreview(opts),
         properties,
         looseTask,
+        titleFirst,
         pluginBlocks,
         tables,
         autocompletion({ override: [completeLinks, completeCommands], icons: false }),
