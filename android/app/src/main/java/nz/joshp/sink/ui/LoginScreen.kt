@@ -95,7 +95,7 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
                         alpha = iconAlpha
                     }
                     .clip(RoundedCornerShape(28))
-                    .background(Color(0xFF4F378B)),
+                    .background(Color(0xFF1E88FF)),
             ) {
                 Image(painterResource(R.drawable.ic_launcher_foreground), null, Modifier.fillMaxSize())
             }
