@@ -52,6 +52,8 @@ data class NoteMeta(
     val excerpt: String? = null,
     /** Search hit with `[match]` brackets, on search results. */
     val snippet: String? = null,
+    /** The first image the note embeds (an attachment name or vault path), on list results. */
+    val image: String? = null,
 ) {
     val isBoard get() = path.endsWith(".excalidraw.md", ignoreCase = true)
     val folder get() = path.substringBeforeLast('/', "")
@@ -253,6 +255,22 @@ fun Api.attachmentBytes(ref: String): Pair<String, ByteArray>? {
         if (!res.isSuccessful) return null
         return (res.header("content-type") ?: "application/octet-stream") to res.body.bytes()
     }
+}
+
+/**
+ * Blocking: an attachment from the on-disk cache in [dir], fetched (and kept) first if it isn't there yet. The file
+ * and its content type, or null if it can't be had.
+ */
+fun Api?.cachedAttachment(dir: File, ref: String): Pair<File, String>? {
+    val id = java.security.MessageDigest.getInstance("SHA-1").digest(ref.toByteArray()).joinToString("") { "%02x".format(it) }
+    val file = File(dir, id)
+    val typeFile = File(dir, "$id.type")
+    if (!file.isFile) {
+        val (type, bytes) = runCatching { this?.attachmentBytes(ref) }.getOrNull() ?: return null
+        file.writeBytes(bytes)
+        typeFile.writeText(type)
+    }
+    return file to (typeFile.takeIf { it.isFile }?.readText()?.substringBefore(';') ?: "application/octet-stream")
 }
 
 /** The server's enabled plugins, as the JSON array the editor page takes (GET /api/plugins -> "plugins"). */

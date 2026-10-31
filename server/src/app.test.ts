@@ -11,7 +11,7 @@ import { pageText } from "./html";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
-import { Vault, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery } from "./notes";
+import { Vault, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery, firstImage } from "./notes";
 import { localIso, localTime, utcOffset } from "./time";
 import { editTodo, nextDate, nextOccurrence, parseQuick, parseTodos, setDone, setStatus, todoLine } from "./todos";
 
@@ -781,6 +781,7 @@ describe("notes", () => {
     expect(list.notes[0].title).toBe("Shopping");
     expect(list.notes.slice(1).map((x: any) => x.title).sort()).toEqual(["Newest", "Old"]);
     expect(list.notes[0].excerpt).toBe("- [ ] eggs\n- [ ] oat milk");
+    expect(list.notes[0].image).toBeNull();
     expect((await send(token, "PATCH", `/api/notes/meta?path=${encodeURIComponent(n.path)}`, { color: "chartreuse" })).status).toBe(400);
 
     await send(token, "PATCH", `/api/notes/meta?path=${encodeURIComponent(n.path)}`, { pinned: false, color: null });
@@ -1162,6 +1163,12 @@ describe("todos", () => {
 });
 
 describe("helpers", () => {
+  test("a card's image is the first image the note embeds", () => {
+    expect(firstImage("text\n![[Doc.pdf]]\n![[Photo 1.JPG|300]] ![[b.png]]")).toBe("Photo 1.JPG");
+    expect(firstImage("![x](https://example.com/a.png) ![y](../Attachments/My%20pic.webp \"t\")")).toBe("Attachments/My pic.webp");
+    expect(firstImage("![[Other note]] [link](a.png)")).toBeNull();
+  });
+
   test("email HTML entities decode once, and bad code points don't throw", () => {
     expect(pageText("<body><p>a &amp;lt;b&amp;gt; &lt;i&gt; &#x41;&#66; &copy;x &#99999999;</p></body>")).toBe("a &lt;b&gt; <i> AB &copy;x");
   });

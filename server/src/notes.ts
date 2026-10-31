@@ -235,6 +235,22 @@ export function rewriteLinks(
   });
 }
 
+/**
+ * The first image a note embeds (`![[photo.jpg|300]]` or `![alt](Attachments/photo.jpg)`), as the name or vault path
+ * the attachment route takes, for the card. Images on the web aren't fetched for cards.
+ */
+export function firstImage(body: string): string | null {
+  for (const m of body.matchAll(/!\[\[([^\]|#]+)[^\]]*\]\]|!\[[^\]]*\]\(<?([^)>]+?)>?(?:\s+"[^"]*")?\)/g)) {
+    let ref = (m[1] ?? m[2]!).trim();
+    if (/^[a-z][a-z0-9+.-]*:/i.test(ref) || !/\.(png|jpe?g|gif|webp|avif|svg|bmp)$/i.test(ref)) continue;
+    try {
+      ref = decodeURIComponent(ref);
+    } catch {}
+    return ref.replace(/^(\.{1,2}\/|\/)+/, "");
+  }
+  return null;
+}
+
 export function cardText(body: string, title: string): string {
   const lines = body.replace(/^\s+/, "").split("\n");
   if (lines[0]?.replace(/^#+\s*/, "").trim() === title) lines.shift();
@@ -406,15 +422,15 @@ export class Vault {
 
   // ---- reading
 
-  /** Every note, pinned first then newest, each with the start of its text for a card preview. */
-  list(): { notes: (NoteMeta & { excerpt: string })[]; folders: string[] } {
+  /** Every note, pinned first then newest, each with the start of its text and its first image for a card preview. */
+  list(): { notes: (NoteMeta & { excerpt: string; image: string | null })[]; folders: string[] } {
     const notes = this.db
-      .query<Row & { excerpt: string }, []>(
-        `SELECT path, title, tags, mtime, size, hash, pinned, color, substr(body, 1, 600) AS excerpt
+      .query<Row & { excerpt: string; head: string }, []>(
+        `SELECT path, title, tags, mtime, size, hash, pinned, color, substr(body, 1, 600) AS excerpt, substr(body, 1, 4000) AS head
          FROM notes ORDER BY pinned DESC, mtime DESC`,
       )
       .all()
-      .map((r) => ({ ...meta(r), excerpt: cardText(r.excerpt, r.title) }));
+      .map(({ head, ...r }) => ({ ...meta(r), excerpt: cardText(r.excerpt, r.title), image: isBoard(r.path) ? null : firstImage(head) }));
     return { notes, folders: [...this.folders].sort((a, b) => a.localeCompare(b)) };
   }
 

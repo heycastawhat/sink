@@ -180,6 +180,7 @@ function cardHtml(n) {
   const showTitle = board || n.snippet || n.title !== fileName(n.path) || !firstLine.startsWith(n.title);
   return `
 <article class="note-card${n.color ? ` c-${n.color}` : ''}" data-path="${esc(n.path)}" tabindex="0" draggable="true">
+  ${n.image && !n.snippet ? `<img class="note-image" src="${esc(api.attachmentUrl(n.image))}" alt="" loading="lazy" draggable="false">` : ''}
   ${n.pinned ? `<span class="pin" title="Pinned">${ic('push_pin', '', ' filled')}</span>` : ''}
   ${showTitle ? `<h3 class="note-title">${board ? ic('draw') : ''}${esc(n.title)}</h3>` : ''}
   ${board ? '' : `<div class="note-body">${body}</div>`}
@@ -190,6 +191,9 @@ function cardHtml(n) {
   </div>
 </article>`;
 }
+
+// An image that's gone (or not an image after all) leaves the card as it would be without one.
+document.addEventListener('error', (e) => e.target.matches?.('.note-image') && e.target.remove(), true);
 
 // Cards that weren't on screen before pop in, one after another; the ones already there stay put, so a live change
 // or a keystroke in search doesn't make the whole grid flash.

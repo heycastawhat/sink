@@ -138,7 +138,7 @@ import nz.joshp.sink.data.NoteStore
 import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.SaveResult
 import nz.joshp.sink.data.attach
-import nz.joshp.sink.data.attachmentBytes
+import nz.joshp.sink.data.cachedAttachment
 import nz.joshp.sink.data.json
 import nz.joshp.sink.data.moveNote
 import nz.joshp.sink.data.note
@@ -147,7 +147,6 @@ import nz.joshp.sink.data.trashNote
 import java.io.ByteArrayInputStream
 import java.io.File
 import nz.joshp.sink.capture.SharedFiles
-import java.security.MessageDigest
 
 private const val SAVE_DELAY_MS = 700L
 // A new note's file is named on its first save, so give the first line time to be written.
@@ -1068,20 +1067,8 @@ private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge):
             }
 
             private fun attachment(ref: String): WebResourceResponse {
-                val id = MessageDigest.getInstance("SHA-1").digest(ref.toByteArray()).joinToString("") { "%02x".format(it) }
-                val file = File(cache, id)
-                val typeFile = File(cache, "$id.type")
-                if (!file.isFile) {
-                    val fetched = runCatching {
-                        kotlinx.coroutines.runBlocking { vm.api() }?.attachmentBytes(ref)
-                    }.getOrNull()
-                    if (fetched != null) {
-                        file.writeBytes(fetched.second)
-                        typeFile.writeText(fetched.first)
-                    }
-                }
-                if (!file.isFile) return WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
-                val type = typeFile.takeIf { it.isFile }?.readText()?.substringBefore(';') ?: "application/octet-stream"
+                val (file, type) = kotlinx.coroutines.runBlocking { vm.api() }.cachedAttachment(cache, ref)
+                    ?: return WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 return WebResourceResponse(type, null, file.inputStream())
             }
 

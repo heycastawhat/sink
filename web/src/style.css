@@ -905,6 +905,22 @@ m3e-theme {
   --m3e-icon-size: 18px;
 }
 
+.note-image {
+  display: block;
+  width: calc(100% + 32px);
+  max-height: 220px;
+  margin: -14px -16px 2px;
+  border-radius: 14px 14px 0 0;
+  object-fit: cover;
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.note-image + .pin {
+  padding: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--md-sys-color-surface) 80%, transparent);
+}
+
 .note-title {
   margin: 0;
   padding-right: 18px;
@@ -989,6 +1005,14 @@ m3e-theme {
 
 .ln.h {
   font-weight: 700;
+}
+
+.note-body .ln.h:not(:first-child) {
+  margin-top: 4px;
+}
+
+.ln-link {
+  color: var(--md-sys-color-primary);
 }
 
 .note-body .ln.h1 {

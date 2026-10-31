@@ -80,6 +80,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.Placeholder
@@ -283,10 +287,10 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                             }
                         }
                         if (pinned.isNotEmpty()) {
-                            items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen, Modifier.animateItem()) }
+                            items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen, vm::cardImage, Modifier.animateItem()) }
                             item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
-                        items(others, key = { it.path }) { NoteCard(it, onOpen, Modifier.animateItem()) }
+                        items(others, key = { it.path }) { NoteCard(it, onOpen, vm::cardImage, Modifier.animateItem()) }
                         if (pinned.isNotEmpty() && others.isNotEmpty()) {
                             item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         } else if (unfiledHome && others.isNotEmpty() && (subfolders.isNotEmpty() || showRecent)) {
@@ -417,7 +421,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
 }
 
 @Composable
-private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, loadImage: suspend (String) -> ImageBitmap?, modifier: Modifier = Modifier) {
     val press = remember { MutableInteractionSource() }
     val firstLine = n.excerpt.orEmpty().trimStart().lineSequence().firstOrNull().orEmpty()
     // A note with no heading is named after its first line (Keep-style); showing both would repeat it.
@@ -430,37 +434,45 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, modifier: Modifier =
             .clip(RoundedCornerShape(16.dp))
             .background(noteTint(n.color))
             .border(1.dp, outline, RoundedCornerShape(16.dp))
-            .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(n.path) }
-            .padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(n.path) },
     ) {
-        Row(verticalAlignment = Alignment.Top) {
-            if (n.isBoard) {
-                Icon(Icons.Outlined.Draw, null, Modifier.size(18.dp).padding(top = 2.dp))
-                Spacer(Modifier.width(6.dp))
-            }
-            Text(
-                if (showTitle) n.title else "",
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                modifier = Modifier.weight(1f),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (n.pinned) {
-                Icon(Icons.Filled.PushPin, "Pinned", Modifier.size(16.dp).padding(top = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(cardDate(n.mtime), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
+        // The note's first image across the top, as Keep does; nothing until (unless) it loads.
+        if (n.image != null && n.snippet == null) {
+            val image by produceState<ImageBitmap?>(null, n.image) { value = loadImage(n.image) }
+            image?.let { Image(it, null, Modifier.fillMaxWidth().heightIn(max = 200.dp), contentScale = ContentScale.Crop) }
         }
-        if (n.snippet != null) {
-            Text(highlight(n.snippet), style = MaterialTheme.typography.bodyMedium, maxLines = 6, overflow = TextOverflow.Ellipsis)
-        } else if (!n.isBoard) {
-            ExcerptFlow(n.excerpt.orEmpty())
-        }
-        if (n.folder.isNotEmpty() || n.tags.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (n.folder.isNotEmpty()) Pill(n.folder)
-                n.tags.take(2).forEach { Pill("#$it") }
+        Column(
+            Modifier.padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.Top) {
+                if (n.isBoard) {
+                    Icon(Icons.Outlined.Draw, null, Modifier.size(18.dp).padding(top = 2.dp))
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(
+                    if (showTitle) n.title else "",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (n.pinned) {
+                    Icon(Icons.Filled.PushPin, "Pinned", Modifier.size(16.dp).padding(top = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(cardDate(n.mtime), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
+            }
+            if (n.snippet != null) {
+                Text(highlight(n.snippet), style = MaterialTheme.typography.bodyMedium, maxLines = 6, overflow = TextOverflow.Ellipsis)
+            } else if (!n.isBoard) {
+                ExcerptFlow(n.excerpt.orEmpty())
+            }
+            if (n.folder.isNotEmpty() || n.tags.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (n.folder.isNotEmpty()) Pill(n.folder)
+                    n.tags.take(2).forEach { Pill("#$it") }
+                }
             }
         }
     }
