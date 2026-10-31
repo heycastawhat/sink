@@ -5,6 +5,19 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.ui.unit.IntSize
 import android.annotation.SuppressLint
@@ -245,7 +258,6 @@ fun NoteScreen(
     var color by remember { mutableStateOf<String?>(null) }
     var crumb by remember { mutableStateOf(path?.substringBeforeLast('/', "")?.ifEmpty { "Notes" } ?: "New note") }
     var menu by remember { mutableStateOf(false) }
-    var palette by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
@@ -677,11 +689,8 @@ fun NoteScreen(
         }.onFailure { snackbar.showSnackbar(it.message ?: "Couldn't change it") }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(noteTint(color, MaterialTheme.colorScheme.surfaceContainerLowest, 0.16f)),
-    ) {
+    val paper = noteTint(color, MaterialTheme.colorScheme.surfaceContainerLowest, 0.16f)
+    Box(Modifier.fillMaxSize().background(paper)) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             AndroidView(
                 factory = { ctx -> editorWebView(ctx, vm, Bridge(
@@ -699,154 +708,94 @@ fun NoteScreen(
                 )).also { web = it } },
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
-            // The colour row unfolds above the toolbar instead of popping in.
-            AnimatedVisibility(
-                visible = palette,
-                enter = expandVertically(motion.defaultEffectsSpec<IntSize>()) + fadeIn(motion.defaultEffectsSpec()),
-                exit = shrinkVertically(motion.defaultEffectsSpec<IntSize>()) + fadeOut(motion.fastEffectsSpec()),
-            ) {
-                FlowRow(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Swatch(null, color == null) {
-                        haptics.confirm()
-                        palette = false
-                        scope.launch { setMeta(clearColor = true) }
-                    }
-                    for (c in NOTE_COLORS) Swatch(c, color == c) {
-                        haptics.confirm()
-                        palette = false
-                        scope.launch { setMeta(newColor = c) }
-                    }
-                }
-            }
             // While typing, the bar above the keyboard is for formatting; the note's toolbar comes back with the keyboard down.
             if (keyboardUp) {
                 FormatBar(onFormat = { js("window.sink.format(${JsonPrimitive(it)})") }, onImage = {
                     picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 }, onDone = ::hideKeyboard)
-            } else {
-                // The toolbar sits at the bottom, under the thumb.
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+            }
+        }
+        // Text scrolls away under a fade instead of being cut off at the status bar.
+        Box(
+            Modifier.align(Alignment.TopCenter).statusBarsPadding().fillMaxWidth().height(14.dp)
+                .background(Brush.verticalGradient(listOf(paper, Color.Transparent))),
+        )
+        // A floating toolbar under the thumb, like the tabs on the other screens; the note scrolls on behind it.
+        AnimatedVisibility(
+            visible = !keyboardUp,
+            enter = slideInVertically(motion.defaultSpatialSpec()) { it } + fadeIn(motion.defaultEffectsSpec()),
+            exit = slideOutVertically(motion.fastSpatialSpec()) { it } + fadeOut(motion.fastEffectsSpec()),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, bottom = TOOLBAR_BOTTOM)
+                    .fillMaxWidth()
+                    .height(TOOLBAR_HEIGHT),
+            ) {
+                Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = ::flushAndLeave) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
-                    Text(
-                        crumb,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        status,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
+                    Column(Modifier.weight(1f).padding(start = 4.dp)) {
+                        Text(crumb, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (status.isNotEmpty()) Text(
+                            status,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
                     IconButton(onClick = {
                         haptics.toggle(!pinned)
                         scope.launch { setMeta(pin = !pinned) }
                     }) {
-                        Icon(if (pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (pinned) "Unpin" else "Pin")
+                        Icon(
+                            if (pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                            if (pinned) "Unpin" else "Pin",
+                            tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    IconButton(onClick = { haptics.tick(); palette = !palette }) { Icon(Icons.Outlined.Palette, "Colour") }
-                    Box {
-                        IconButton(onClick = { haptics.tick(); menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Add image") },
-                                leadingIcon = { Icon(Icons.Outlined.AddPhotoAlternate, null) },
-                                onClick = {
-                                    menu = false
-                                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Insert template") },
-                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
-                                onClick = {
-                                    menu = false
-                                    templating = TemplateAsk.Menu
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Go to note") },
-                                leadingIcon = { Icon(Icons.Outlined.Search, null) },
-                                onClick = {
-                                    menu = false
-                                    onSwitch()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Move to folder") },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) },
-                                onClick = {
-                                    menu = false
-                                    moving = true
-                                },
-                            )
-                            if (ed.path != null && ed.path?.endsWith(".excalidraw.md", ignoreCase = true) != true) DropdownMenuItem(
-                                text = { Text("Share link") },
-                                leadingIcon = { Icon(Icons.Outlined.Share, null) },
-                                onClick = {
-                                    menu = false
-                                    haptics.tick()
-                                    // Saved first, so the link shows what's on screen.
-                                    flush { sharing = true }
-                                },
-                            )
-                            if (ed.path != null) DropdownMenuItem(
-                                text = { Text("Version history") },
-                                leadingIcon = { Icon(Icons.Outlined.History, null) },
-                                onClick = {
-                                    menu = false
-                                    history = true
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Rename") },
-                                leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null) },
-                                onClick = {
-                                    menu = false
-                                    renaming = true
-                                },
-                            )
-                            if (ed.path != null) {
-                                val archived = ed.path?.startsWith("Archive/", ignoreCase = true) == true
-                                DropdownMenuItem(
-                                    text = { Text(if (archived) "Unarchive" else "Archive") },
-                                    leadingIcon = { Icon(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
-                                    onClick = {
-                                        menu = false
-                                        haptics.confirm()
-                                        archive()
-                                    },
-                                )
-                            }
-                            DropdownMenuItem(
-                                text = { Text("Delete") },
-                                leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                                onClick = {
-                                    menu = false
-                                    haptics.reject()
-                                    trash()
-                                },
-                            )
-                        }
-                    }
+                    FilledTonalIconButton(onClick = { haptics.tick(); menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                 }
             }
         }
-        // Above the bottom toolbar.
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().padding(bottom = 64.dp))
+        SnackbarHost(
+            snackbar,
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
+                .padding(bottom = if (keyboardUp) 56.dp else TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 8.dp),
+        )
+    }
+
+    if (menu) {
+        NoteActionsSheet(
+            color = color,
+            saved = ed.path != null,
+            archived = ed.path?.startsWith("Archive/", ignoreCase = true) == true,
+            onColor = { c ->
+                haptics.confirm()
+                menu = false
+                scope.launch { if (c == null) setMeta(clearColor = true) else setMeta(newColor = c) }
+            },
+            onAction = { a ->
+                menu = false
+                when (a) {
+                    NoteAction.Image -> picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    NoteAction.Template -> templating = TemplateAsk.Menu
+                    // Saved first, so the link shows what's on screen.
+                    NoteAction.Share -> { haptics.tick(); flush { sharing = true } }
+                    NoteAction.History -> history = true
+                    NoteAction.GoTo -> onSwitch()
+                    NoteAction.Move -> moving = true
+                    NoteAction.Rename -> renaming = true
+                    NoteAction.Archive -> { haptics.confirm(); archive() }
+                    NoteAction.Delete -> { haptics.reject(); trash() }
+                }
+            },
+            onDismiss = { menu = false },
+        )
     }
 
     DisposableEffect(Unit) { onDispose { web?.destroy() } }
@@ -957,7 +906,7 @@ fun NoteScreen(
 
 /**
  * The bar above the keyboard: headings, todos, lists and marks a tap away (the editor page does the edit, see
- * editor.js format), scrolling sideways, with the keyboard's own close at the end.
+ * editor.js format), scrolling sideways. Undo, redo and closing the keyboard stay put at the end, always in reach.
  */
 @Composable
 private fun FormatBar(onFormat: (String) -> Unit, onImage: () -> Unit, onDone: () -> Unit) {
@@ -978,20 +927,82 @@ private fun FormatBar(onFormat: (String) -> Unit, onImage: () -> Unit, onDone: (
         Pair("code") { Icon(Icons.Outlined.Code, "Code") },
         Pair("outdent") { Icon(Icons.AutoMirrored.Outlined.FormatIndentDecrease, "Outdent") },
         Pair("indent") { Icon(Icons.AutoMirrored.Outlined.FormatIndentIncrease, "Indent") },
-        Pair("undo") { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") },
-        Pair("redo") { Icon(Icons.AutoMirrored.Outlined.Redo, "Redo") },
     )
-    Row(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            for ((kind, content) in tools.take(3)) IconButton(onClick = { onFormat(kind) }) { content() }
-            for ((kind, content) in tools.drop(3).take(3)) IconButton(onClick = { onFormat(kind) }) { content() }
-            IconButton(onClick = onImage) { Icon(Icons.Outlined.AddPhotoAlternate, "Add image") }
-            for ((kind, content) in tools.drop(6)) IconButton(onClick = { onFormat(kind) }) { content() }
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
+        Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                for ((kind, content) in tools.take(6)) IconButton(onClick = { onFormat(kind) }) { content() }
+                IconButton(onClick = onImage) { Icon(Icons.Outlined.AddPhotoAlternate, "Add image") }
+                for ((kind, content) in tools.drop(6)) IconButton(onClick = { onFormat(kind) }) { content() }
+            }
+            VerticalDivider(Modifier.height(28.dp).padding(horizontal = 2.dp))
+            IconButton(onClick = { onFormat("undo") }) { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") }
+            IconButton(onClick = { onFormat("redo") }) { Icon(Icons.AutoMirrored.Outlined.Redo, "Redo") }
+            IconButton(onClick = onDone) { Icon(Icons.Outlined.KeyboardHide, "Hide keyboard") }
         }
-        IconButton(onClick = onDone) { Icon(Icons.Outlined.KeyboardHide, "Hide keyboard") }
+    }
+}
+
+private enum class NoteAction { Image, Template, Share, History, GoTo, Move, Rename, Archive, Delete }
+
+/**
+ * The note's options in a sheet, bottom up where the thumb is: its colour, then the common actions as big tiles,
+ * then the rest as a list with Delete last. [saved] is false for a new note not yet written (no share or history).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NoteActionsSheet(color: String?, saved: Boolean, archived: Boolean, onColor: (String?) -> Unit, onAction: (NoteAction) -> Unit, onDismiss: () -> Unit) {
+    val haptics = rememberHaptics()
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
+            LazyRow(
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(bottom = 16.dp),
+            ) {
+                item { Swatch(null, color == null) { onColor(null) } }
+                items(NOTE_COLORS.size) { i -> Swatch(NOTE_COLORS[i], color == NOTE_COLORS[i]) { onColor(NOTE_COLORS[i]) } }
+            }
+            val tiles = listOfNotNull(
+                Triple(NoteAction.Image, Icons.Outlined.AddPhotoAlternate, "Image"),
+                Triple(NoteAction.Template, Icons.Outlined.ContentCopy, "Template"),
+                if (saved) Triple(NoteAction.Share, Icons.Outlined.Share, "Share") else null,
+                if (saved) Triple(NoteAction.History, Icons.Outlined.History, "History") else null,
+            )
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((action, icon, label) in tiles) {
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.secondaryContainer)
+                            .clickable { haptics.tick(); onAction(action) }
+                            .padding(vertical = 14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(icon, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            @Composable
+            fun Item(action: NoteAction, icon: ImageVector, label: String, danger: Boolean = false) = Row(
+                Modifier.fillMaxWidth().clickable { onAction(action) }.padding(horizontal = 24.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                val error = MaterialTheme.colorScheme.error
+                Icon(icon, null, tint = if (danger) error else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(label, style = MaterialTheme.typography.bodyLarge, color = if (danger) error else MaterialTheme.colorScheme.onSurface)
+            }
+            Item(NoteAction.GoTo, Icons.Outlined.Search, "Go to note")
+            Item(NoteAction.Move, Icons.AutoMirrored.Outlined.DriveFileMove, "Move to folder")
+            Item(NoteAction.Rename, Icons.Outlined.DriveFileRenameOutline, "Rename")
+            if (saved) Item(NoteAction.Archive, if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive")
+            Item(NoteAction.Delete, Icons.Outlined.Delete, "Delete", danger = true)
+        }
     }
 }
 
