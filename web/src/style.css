@@ -2194,6 +2194,71 @@ body.dragging-note [data-drop-folder] {
   overflow-wrap: anywhere;
 }
 
+.version-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.version-diff {
+  max-height: 360px;
+  padding: 8px 0;
+  overflow: auto;
+  border-radius: 12px;
+  background: var(--md-sys-color-surface-container-lowest);
+  font: 13px/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+.diff-line {
+  min-height: 1.5em;
+  padding: 0 14px 0 30px;
+  text-indent: -16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Fixed hues mixed into transparency read as red/green on both the light and dark surfaces. */
+.version-dialog [data-op='-'] {
+  --diff: #e5484d;
+}
+
+.version-dialog [data-op='+'] {
+  --diff: #30a46c;
+}
+
+.diff-line[data-op]::before {
+  display: inline-block;
+  width: 16px;
+  text-indent: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  content: attr(data-op);
+}
+
+.diff-line[data-op='-'],
+.diff-line[data-op='+'],
+.diff-key {
+  background: color-mix(in srgb, var(--diff) 16%, transparent);
+}
+
+.diff-line mark {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--diff) 38%, transparent);
+  color: inherit;
+}
+
+.diff-key {
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.version-diff summary {
+  padding: 2px 14px;
+  color: var(--md-sys-color-on-surface-variant);
+  font: 12px/1.6 'Roboto Flex', system-ui, sans-serif;
+  cursor: pointer;
+}
+
 .picker-row m3e-icon {
   flex: none;
   --m3e-icon-size: 20px;

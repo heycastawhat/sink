@@ -298,10 +298,70 @@ export function shareNote({ title, shared, share, unshare, published, publish })
 }
 
 /**
- * Version history: `versions` (newest first, from GET /api/notes/versions) as a list; picking one loads its text
- * with `load(id)` to read before restoring. `when(at)` formats a time. Resolves to the text to restore, or null.
+ * Longest-common-subsequence diff of two arrays as [op, item] pairs: ' ' in both, '-' only in `a`, '+' only in `b`.
+ * Equal ends are trimmed first so the table only spans the changed middle; past ~4M cells (a long note rewritten
+ * wholesale) the middle is just shown as removed then added rather than allocating a huge table.
  */
-export function pickVersion({ versions, load, when }) {
+function diff(a, b) {
+  let s = 0;
+  let e = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+  const x = a.slice(s, a.length - e);
+  const y = b.slice(s, b.length - e);
+  const [n, w] = [x.length, y.length + 1];
+  const t = new Uint32Array(n * w > 4e6 ? 0 : (n + 1) * w);
+  if (t.length) {
+    for (let i = n - 1; i >= 0; i--)
+      for (let j = w - 2; j >= 0; j--) t[i * w + j] = x[i] === y[j] ? t[(i + 1) * w + j + 1] + 1 : Math.max(t[(i + 1) * w + j], t[i * w + j + 1]);
+  }
+  const out = a.slice(0, s).map((v) => [' ', v]);
+  let [i, j] = [0, 0];
+  while (i < n || j < w - 1) {
+    if (i < n && j < w - 1 && x[i] === y[j]) out.push([' ', x[i++]]), j++;
+    else if (i < n && (j === w - 1 || !t.length || t[(i + 1) * w + j] >= t[i * w + j + 1])) out.push(['-', x[i++]]);
+    else out.push(['+', y[j++]]);
+  }
+  return out.concat(a.slice(a.length - e).map((v) => [' ', v]));
+}
+
+/** HTML for the changes from `from` to `to`: changed lines with two lines of context, other unchanged runs folded. */
+function diffHtml(from, to) {
+  const ops = diff(from.split('\n'), to.split('\n'));
+  if (!ops.some(([op]) => op !== ' ')) return '<p class="muted version-empty">Same as the note now.</p>';
+  // A removed line followed by an added one is usually an edit: mark the words that differ within the pair.
+  const words = (line) => line.match(/[\p{L}\p{N}_]+|\s+|./gu) ?? [];
+  const html = [];
+  for (let k = 0; k < ops.length; k++) {
+    if (ops[k][0] !== '-' || ops[k - 1]?.[0] === '-') continue;
+    let a = k;
+    while (ops[a]?.[0] === '-') a++;
+    for (let p = 0; k + p < a && ops[a + p]?.[0] === '+'; p++) {
+      const parts = diff(words(ops[k + p][1]), words(ops[a + p][1]));
+      const side = (keep) => parts.map(([o, v]) => (o === ' ' ? esc(v) : o === keep ? `<mark>${esc(v)}</mark>` : '')).join('');
+      [html[k + p], html[a + p]] = [side('-'), side('+')];
+    }
+  }
+  const line = (k) => `<div class="diff-line" data-op="${ops[k][0]}">${html[k] ?? esc(ops[k][1])}</div>`;
+  const near = (k) => ops.slice(Math.max(0, k - 2), k + 3).some(([op]) => op !== ' ');
+  let out = '';
+  for (let k = 0; k < ops.length; ) {
+    let end = k;
+    while (end < ops.length && !near(end)) end++;
+    if (end - k > 1) out += `<details><summary>${end - k} unchanged lines</summary>${Array.from({ length: end - k }, (_, d) => line(k + d)).join('')}</details>`;
+    else if (end > k) out += line(k);
+    if (end < ops.length) out += line(end);
+    k = end + 1;
+  }
+  return `<div class="version-diff">${out}</div>`;
+}
+
+/**
+ * Version history: `versions` (newest first, from GET /api/notes/versions) as a list; picking one loads its text
+ * with `load(id)` and shows what changed between it and `current` (the note now), or its plain text one toggle away.
+ * `when(at)` formats a time. Resolves to the text to restore, or null.
+ */
+export function pickVersion({ versions, current, load, when }) {
   return open(
     `<div class="sink-dialog-body version-dialog">
   <h2>Version history</h2>
@@ -316,6 +376,8 @@ export function pickVersion({ versions, load, when }) {
           .join('')
       : '<p class="muted version-empty">No earlier versions yet. They start once you edit this note.</p>'
   }</div>
+  <div class="version-bar" hidden><span class="muted small"></span><m3e-button data-mode variant="text" size="small"></m3e-button></div>
+  <div class="version-changes" hidden></div>
   <pre class="version-text" hidden></pre>
   <p class="dialog-error" hidden></p>
   <div class="dialog-actions">
@@ -328,12 +390,21 @@ export function pickVersion({ versions, load, when }) {
     (dlg, done) => {
       const list = dlg.querySelector('.picker-list');
       const text = dlg.querySelector('.version-text');
+      const changes = dlg.querySelector('.version-changes');
       const error = dlg.querySelector('.dialog-error');
-      const [backBtn, okBtn] = [dlg.querySelector('[data-back]'), dlg.querySelector('[data-ok]')];
+      const bar = dlg.querySelector('.version-bar');
+      const [backBtn, modeBtn, okBtn] = ['back', 'mode', 'ok'].map((d) => dlg.querySelector(`[data-${d}]`));
       let picked = null;
+      let plain = false;
       const show = (reading) => {
         list.hidden = reading;
-        text.hidden = backBtn.hidden = okBtn.hidden = !reading;
+        bar.hidden = backBtn.hidden = okBtn.hidden = !reading;
+        text.hidden = !reading || !plain;
+        changes.hidden = !reading || plain;
+        bar.firstChild.innerHTML = plain
+          ? 'The text of this version.'
+          : 'Changes since this version: <span class="diff-key" data-op="-">removed</span> <span class="diff-key" data-op="+">added</span>';
+        modeBtn.innerHTML = plain ? `${ic('difference', 'icon')}Show changes` : `${ic('notes', 'icon')}Show text`;
         // Back and Restore are the choices then (Escape still closes), so the row fits a phone.
         dlg.querySelector('[data-cancel]').hidden = reading;
       };
@@ -343,6 +414,7 @@ export function pickVersion({ versions, load, when }) {
         try {
           picked = (await load(Number(row.dataset.id))).content;
           text.textContent = picked;
+          changes.innerHTML = diffHtml(picked, current);
           error.hidden = true;
           show(true);
         } catch (err) {
@@ -351,6 +423,10 @@ export function pickVersion({ versions, load, when }) {
         }
       });
       backBtn.addEventListener('click', () => show(false));
+      modeBtn.addEventListener('click', () => {
+        plain = !plain;
+        show(true);
+      });
       okBtn.addEventListener('click', () => done(picked));
       dlg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
     },

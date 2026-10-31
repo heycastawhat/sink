@@ -1898,7 +1898,7 @@ function wireScreen() {
     }
     const when = (at) =>
       new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-    const text = await pickVersion({ versions, load: (id) => api.version(path, id), when });
+    const text = await pickVersion({ versions, current: screen.editor.getText(), load: (id) => api.version(path, id), when });
     if (text == null || screen.path !== path) return;
     try {
       // keep_version: what's here now becomes a version too, so a restore can itself be undone from this list.
