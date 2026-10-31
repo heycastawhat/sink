@@ -48,7 +48,9 @@ database loses nothing a rescan can't rebuild.
   passkey sign-in (`@simplewebauthn/server`) for invited people without a provider account; they're allowed as
   `sub:passkey:…`. The web sign-in screen also handles `?invite=` links and the Android app's `?client=android` sign-in. `push.ts` todo reminders
   for browsers over Web Push (dependency-free; VAPID keys in the main DB, subscriptions and sent reminders in each
-  account's DB, a 30s tick in `index.ts`). `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
+  account's DB, a 30s tick in `index.ts`). `extract.ts` text of PDF/image attachments (`pdftotext`, `tesseract`, skipped when
+  absent); the Vault fills `attachment_text` after each scan/upload in the background, and search adds notes that
+  `![[embed]]` a matching file (via the links table). `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
 
 ### Web (`web/src/`)
 

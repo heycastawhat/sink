@@ -14,6 +14,9 @@ COPY web/ ./
 RUN bun run build
 
 FROM oven/bun:1.3-slim
+# Search reads text out of PDF and image attachments with these (server/src/extract.ts).
+RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/server
 COPY --from=deps /app/server/node_modules ./node_modules
 COPY server/package.json ./

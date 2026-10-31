@@ -398,6 +398,32 @@ export const migrations: string[] = [
   `
   CREATE TABLE prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  // Text read out of PDFs and images (extract.ts), so search finds the notes that embed them. Kept by path and
+  // redone only when size or mtime change. `name` and `lpath` are lower case, to match links.target.
+  `
+  CREATE TABLE attachment_text (
+    path TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    lpath TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    text TEXT NOT NULL
+  );
+  CREATE VIRTUAL TABLE attachment_fts USING fts5(
+    text, content='attachment_text', content_rowid='rowid',
+    tokenize='porter unicode61 remove_diacritics 2'
+  );
+  CREATE TRIGGER attachment_text_ai AFTER INSERT ON attachment_text BEGIN
+    INSERT INTO attachment_fts(rowid, text) VALUES (new.rowid, new.text);
+  END;
+  CREATE TRIGGER attachment_text_ad AFTER DELETE ON attachment_text BEGIN
+    INSERT INTO attachment_fts(attachment_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+  END;
+  CREATE TRIGGER attachment_text_au AFTER UPDATE OF text ON attachment_text BEGIN
+    INSERT INTO attachment_fts(attachment_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+    INSERT INTO attachment_fts(rowid, text) VALUES (new.rowid, new.text);
+  END;
+  `,
 ];
 
 export function openDb(path: string): Database {

@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { now } from "./db";
 import { parseTodos } from "./todos";
+import { EXTRACTABLE, extractText, type Extractor } from "./extract";
 
 /**
  * The notes vault: plain markdown files in a folder (often a NAS share), laid out the way Obsidian expects.
@@ -340,6 +341,10 @@ export class Vault {
   private hashes = new Map<string, FileMeta>();
   /** Emits "event" with a VaultEvent. */
   readonly events = new EventEmitter();
+  /** Reads attachments' text for search (tests swap in a stub). */
+  extractor: Extractor = extractText;
+  private extracting: Promise<void> | null = null;
+  private extractAgain = false;
 
   emit(event: VaultEvent) {
     this.events.emit("event", event);
@@ -480,7 +485,56 @@ export class Vault {
     })();
     this.folders = folders;
     this.files = files;
+    void this.indexAttachments().catch(() => {});
     return result;
+  }
+
+  /**
+   * Brings attachment_text in line with the files the last scan found. One file at a time and never awaited by a
+   * scan or a save: OCR takes seconds a photo. Called again while running, it goes round once more when done.
+   */
+  indexAttachments(): Promise<void> {
+    if (this.extracting) {
+      this.extractAgain = true;
+      return this.extracting;
+    }
+    this.extracting = (async () => {
+      do {
+        this.extractAgain = false;
+        await this.extractPass();
+      } while (this.extractAgain);
+    })().finally(() => (this.extracting = null));
+    return this.extracting;
+  }
+
+  private async extractPass() {
+    const known = new Map(
+      this.db
+        .query<{ path: string; size: number; mtime: number }, []>("SELECT path, size, mtime FROM attachment_text")
+        .all()
+        .map((r) => [r.path, r]),
+    );
+    const paths = [...this.files.values()].flat().filter((p) => EXTRACTABLE.test(p));
+    const live = new Set(paths);
+    for (const path of known.keys()) if (!live.has(path)) this.db.query("DELETE FROM attachment_text WHERE path = ?").run(path);
+    for (const path of paths) {
+      try {
+        const abs = await this.abs(path);
+        const st = await stat(abs);
+        const mtime = Math.floor(st.mtimeMs);
+        const prev = known.get(path);
+        if (prev && prev.size === st.size && prev.mtime === mtime) continue;
+        // A file that fails is stored empty, so it isn't retried every scan until it changes.
+        const text = await this.extractor(abs).catch(() => "");
+        if (text === null) continue;
+        this.db
+          .query(
+            `INSERT INTO attachment_text (path, name, lpath, size, mtime, text) VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime, text = excluded.text`,
+          )
+          .run(path, basename(path).toLowerCase(), path.toLowerCase(), st.size, mtime, text);
+      } catch {}
+    }
   }
 
   start(intervalMs: number) {
@@ -637,8 +691,12 @@ export class Vault {
     return this.write(clean, note.content.slice(0, start) + link + note.content.slice(hit.end), baseHash);
   }
 
+  /**
+   * Notes whose own text matches, then notes embedding (`![[file]]`) a PDF or image whose text matches. Those name
+   * the attachment, and their snippet starts with its file name so every client shows where the words were.
+   */
   search(fts: string, limit: number) {
-    return this.db
+    const items: (NoteMeta & { snippet: string; attachment?: string })[] = this.db
       .query<Row & { snippet: string }, [string, number]>(
         `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color, n.publish, n.searchable,
            snippet(notes_fts, 2, '[', ']', '…', 16) AS snippet
@@ -647,6 +705,22 @@ export class Vault {
       )
       .all(fts, limit)
       .map((r) => ({ ...meta(r), snippet: r.snippet }));
+    const seen = new Set(items.map((i) => i.path));
+    const hits = this.db
+      .query<Row & { snippet: string; attachment: string }, [string, number]>(
+        `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color, a.path AS attachment,
+           snippet(attachment_fts, 0, '[', ']', '…', 16) AS snippet
+         FROM attachment_fts JOIN attachment_text a ON a.rowid = attachment_fts.rowid
+           JOIN links l ON l.target IN (a.name, a.lpath) JOIN notes n ON n.path = l.src
+         WHERE attachment_fts MATCH ? ORDER BY bm25(attachment_fts) LIMIT ?`,
+      )
+      .all(fts, limit);
+    for (const { attachment, snippet, ...r } of hits) {
+      if (items.length >= limit || seen.has(r.path)) continue;
+      seen.add(r.path);
+      items.push({ ...meta(r), snippet: `${basename(attachment)}: ${snippet}`, attachment });
+    }
+    return items;
   }
 
   /** Pin or colour a note by rewriting its frontmatter; same conflict rules as a save. */
@@ -1221,6 +1295,7 @@ export class Vault {
         }
         this.addFile(path);
         this.folders.add(ATTACHMENTS);
+        void this.indexAttachments().catch(() => {});
         return path;
       }
     } catch (err) {

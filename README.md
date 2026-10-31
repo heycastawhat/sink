@@ -13,6 +13,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Share a note:** a link anyone can open, no account needed: read-only, or let people with the link edit after
   giving a name. Stop sharing any time.
 - **Version history:** earlier versions of every note, to read or restore.
+- **Search inside attachments:** words in embedded PDFs and photos (OCR) find their note. Runs in the background;
+  outside Docker it needs `pdftotext` (poppler-utils) and `tesseract` with English data, and skips what's missing.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Leaving Notion:** import its Markdown & CSV export from Settings: the page tree, links between pages, images, and
   databases as tables with each row's properties in its page's frontmatter.

@@ -10,6 +10,7 @@ import { PluginHost } from "./plugins";
 import { builtinPlugins } from "./builtin";
 import { Users } from "./users";
 import { sendReminders, vapidKeys, webPush } from "./push";
+import { extractTools } from "./extract";
 
 const db = openDb(config.dbPath);
 const vault = new Vault(db, config.notesDir, config.timeZone);
@@ -76,7 +77,7 @@ const server = Bun.serve({
 
 console.log(
   `[sink] listening on :${server.port}, data in ${config.dataDir}, notes in ${config.notesDir}, ` +
-    `email ${config.imap.host ? config.imap.user : "off"}`,
+    `email ${config.imap.host ? config.imap.user : "off"}, attachment text ${extractTools.join(" + ") || "off"}`,
 );
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
