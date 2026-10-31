@@ -8,12 +8,12 @@ export const esc = (s) =>
 export const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 
 /**
- * Inline markdown as card HTML: links and embeds as their text, Tasks fields dropped, and bold, italic, strikethrough,
+ * Inline markdown as card HTML: links as their text, embeds and Tasks fields dropped, and bold, italic, strikethrough,
  * `code` and ==highlight== kept as formatting. Escapes first, so the formatting is the only markup.
  */
 export function inlineHtml(s) {
   const plain = s
-    .replace(/!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)/g, '🖼')
+    .replace(/!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[\[([^\]|]+)\|?([^\]]*)\]\]/g, (_, a, b) => b || a)
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/[📅⏳🛫✅➕❌]️?\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)|[⏫🔼🔽🔺⏬]️?|🔁️?\s*every[^📅⏳🛫✅➕❌\n]*/gu, '')

@@ -80,6 +80,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -486,6 +491,7 @@ private val RULE = Regex("""^\s*([-*_])(\s*\1){2,}\s*$""")
 private val TABLE_ROW = Regex("""^\|.*\|\s*$""")
 private val TABLE_RULE = Regex("""^\|[\s:|-]+\|\s*$""")
 private val FENCE = Regex("""^\s*(```|~~~)""")
+private val IMAGE_LINE = Regex("""^\s*(?:(?:!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\))\s*)+$""")
 
 /** One line of a card: what kind it is, how deep it's nested, and its text (marker removed). */
 private sealed interface CardLine {
@@ -507,7 +513,7 @@ private fun cardLines(text: String): List<CardLine> {
         if (out.size == 10) break
         if (FENCE.containsMatchIn(raw)) { fenced = !fenced; continue }
         if (fenced) { if (raw.isNotBlank()) out += CardLine.Code(raw); continue }
-        if (raw.isBlank() || raw.startsWith("%%") || RULE.matches(raw)) continue
+        if (raw.isBlank() || raw.startsWith("%%") || RULE.matches(raw) || IMAGE_LINE.matches(raw)) continue
         // Tabs, or every two spaces, are one level of nesting.
         val lead = raw.takeWhile { it == ' ' || it == '\t' }
         val depth = (lead.fold(0) { d, c -> d + if (c == '\t') 2 else 1 } / 2).coerceAtMost(4)
@@ -614,7 +620,7 @@ private fun ExcerptFlow(text: String) {
                 when (line) {
                     is CardLine.Plain -> append(inlineMarkdown(line.text, codeBg, markBg))
                     is CardLine.Item -> { append(if (line.marker == "•") "• " else line.marker + " "); append(inlineMarkdown(line.text, codeBg, markBg)) }
-                    is CardLine.Task -> { append(if (line.done) "☑ " else "☐ "); append(inlineMarkdown(line.text, codeBg, markBg)) }
+                    is CardLine.Task -> { appendInlineContent(if (line.done) "done" else "open", "[ ]"); append(" "); append(inlineMarkdown(line.text, codeBg, markBg)) }
                     is CardLine.Heading -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(inlineMarkdown(line.text, codeBg, markBg)) }
                     is CardLine.Quote -> append(inlineMarkdown(line.text, codeBg, markBg))
                     is CardLine.Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg)) { append(line.text.trim()) }
@@ -623,7 +629,12 @@ private fun ExcerptFlow(text: String) {
             }
         }
     }
-    Text(flowed, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    fun box(icon: androidx.compose.ui.graphics.vector.ImageVector) = InlineTextContent(Placeholder(1.1.em, 1.1.em, PlaceholderVerticalAlign.TextCenter)) {
+        Icon(icon, null, Modifier.fillMaxSize(), tint = muted)
+    }
+    val boxes = mapOf("open" to box(Icons.Outlined.CheckBoxOutlineBlank), "done" to box(Icons.Outlined.CheckBox))
+    Text(flowed, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, inlineContent = boxes)
 }
 
 /** A card's date: the time today, "Yesterday", the weekday within the last week, else "12 Oct" (with the year when it isn't this one). */
@@ -668,9 +679,9 @@ private fun inlineMarkdown(s: String, codeBg: Color, markBg: Color): AnnotatedSt
     }
 }
 
-/** Links and embeds as their text, Tasks fields (dates, reminders, priority, repeat) dropped. Formatting marks stay for [inlineMarkdown]. */
+/** Links as their text, embeds and Tasks fields (dates, reminders, priority, repeat) dropped. Formatting marks stay for [inlineMarkdown]. */
 private fun clean(s: String) = s
-    .replace(Regex("""!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\)"""), "🖼")
+    .replace(Regex("""!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\)"""), "")
     .replace(Regex("""\[\[([^\]|]+)\|?([^\]]*)]]""")) { it.groupValues[2].ifEmpty { it.groupValues[1] } }
     .replace(Regex("""\[([^\]]+)]\([^)]*\)"""), "$1")
     .replace(Regex("""[📅⏳🛫✅➕❌]\uFE0F?\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)|(?:⏫|🔼|🔽|🔺|⏬)\uFE0F?|🔁\uFE0F?\s*every[^📅⏳🛫✅➕❌\n]*"""), "")

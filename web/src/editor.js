@@ -107,6 +107,41 @@ class RuleWidget extends WidgetType {
   }
 }
 
+const FIELD_LABELS = { '📅': 'Due', '⏳': 'Scheduled', '🛫': 'Starts', '✅': 'Done', '❌': 'Cancelled', '➕': 'Created' };
+const PRIORITY_LABELS = { '🔺': 'Highest', '⏫': 'High', '🔼': 'Medium', '🔽': 'Low', '⏬': 'Lowest' };
+
+const shortDate = (iso) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(y === new Date().getFullYear() ? {} : { year: 'numeric' }) });
+};
+
+/** A Tasks field (`📅 2026-11-02`, `⏫`, `🔁 every week`, `(@2026-11-02 18:00)`) in words, for the chip shown in its place. */
+function fieldLabel(field, due) {
+  const reminder = /^\(@(\S+)(?:[ T](\S+))?\)$/.exec(field);
+  if (reminder) return ['Remind', reminder[1] === due && reminder[2] ? null : shortDate(reminder[1]), reminder[2]].filter(Boolean).join(' ');
+  const mark = [...field][0];
+  if (PRIORITY_LABELS[mark]) return PRIORITY_LABELS[mark];
+  if (mark === '🔁') return field.replace(/^🔁\uFE0F?\s*/u, '').trim().replace(/^./, (c) => c.toUpperCase());
+  return `${FIELD_LABELS[mark]} ${shortDate(/\d{4}-\d{2}-\d{2}/.exec(field)[0])}`;
+}
+
+class TaskFieldWidget extends WidgetType {
+  constructor(label) {
+    super();
+    this.label = label;
+  }
+  eq(other) {
+    return other.label === this.label;
+  }
+  toDOM() {
+    const s = document.createElement('span');
+    s.className = 'cm-taskfield cm-taskchip';
+    s.textContent = this.label;
+    return s;
+  }
+}
+
 const CALLOUT_ICONS = {
   note: 'edit', info: 'info', tip: 'lightbulb', hint: 'lightbulb', important: 'priority_high', success: 'check_circle',
   check: 'check_circle', done: 'check_circle', question: 'help', help: 'help', faq: 'help', warning: 'warning',
@@ -607,9 +642,16 @@ function livePreview(opts) {
       const base = Math.max(from, fmEnd);
       if (base >= to) continue;
       const text = state.sliceDoc(base, to);
-      for (const m of text.matchAll(/(?:[📅⏳🛫✅➕❌]\uFE0F?\s*\d{4}-\d{2}-\d{2}|\(@\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\)|[⏫🔼🔽🔺⏬]|🔁\uFE0F?\s*every[^📅⏳🛫✅➕❌\n]*)/gu)) {
+      // Off the cursor's line they read as words in small chips rather than emoji; on it, as typed.
+      for (const m of text.matchAll(/(?:[📅⏳🛫✅➕❌]\uFE0F?\s*\d{4}-\d{2}-\d{2}|\(@\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\)|[⏫🔼🔽🔺⏬]\uFE0F?|🔁\uFE0F?\s*every[^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(\n]*)/gu)) {
         const start = base + m.index;
-        if (!inCode(state, start)) add(start, start + m[0].length, Decoration.mark({ class: 'cm-taskfield' }));
+        if (inCode(state, start)) continue;
+        const field = m[0].trimEnd();
+        if (active.has(lineOf(start))) add(start, start + field.length, Decoration.mark({ class: 'cm-taskfield' }));
+        else {
+          const due = /📅\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u.exec(state.doc.lineAt(start).text)?.[1];
+          add(start, start + field.length, Decoration.replace({ widget: new TaskFieldWidget(fieldLabel(field, due)) }));
+        }
       }
       for (const m of text.matchAll(/(!?)\[\[([^\]\n|]+)(?:\|([^\]\n]+))?\]\]/g)) {
         const start = base + m.index;

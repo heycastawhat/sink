@@ -137,6 +137,16 @@
   font-size: 0.82em;
 }
 
+.cm-taskchip {
+  display: inline-block;
+  padding: 0 7px;
+  margin: 0 1px;
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-high);
+  line-height: 1.6;
+  vertical-align: 1px;
+}
+
 .cm-task-done .cm-taskfield {
   text-decoration: none;
 }

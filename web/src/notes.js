@@ -117,6 +117,8 @@ export async function setQuery(q) {
  * A note's first lines as card HTML, formatted like the note: headings, nested list indents, checkboxes, numbered
  * lists, quotes and code blocks, plus inline formatting. Mirrors the Android card.
  */
+const IMAGE_LINE = /^\s*(?:(?:!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\))\s*)+$/;
+
 function excerptHtml(text) {
   const out = [];
   let fenced = false;
@@ -130,7 +132,7 @@ function excerptHtml(text) {
       if (raw.trim()) out.push(`<span class="ln code">${esc(raw)}</span>`);
       continue;
     }
-    if (!raw.trim() || /^%%/.test(raw) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(raw)) continue;
+    if (!raw.trim() || /^%%/.test(raw) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(raw) || IMAGE_LINE.test(raw)) continue;
     // Tabs, or every two spaces, are one level of nesting.
     const lead = /^[\t ]*/.exec(raw)[0];
     const depth = Math.min(4, [...lead].reduce((d, c) => d + (c === '\t' ? 2 : 1), 0) >> 1);
