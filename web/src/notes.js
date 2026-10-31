@@ -836,8 +836,7 @@ function applyLook() {
   $('note-pin').setAttribute('aria-label', screen.pinned ? 'Unpin' : 'Pin');
   const archived = /^archive\//i.test(screen.path ?? '');
   $('note-archive').querySelector('m3e-icon').setAttribute('name', archived ? 'unarchive' : 'archive');
-  $('note-archive').setAttribute('aria-label', archived ? 'Unarchive' : 'Archive');
-  $('note-archive').title = archived ? 'Unarchive' : 'Archive';
+  $('note-archive').querySelector('span').textContent = archived ? 'Unarchive' : 'Archive';
   $('note-crumb').textContent = screen.path ? folderOf(screen.path) || 'Notes' : 'New note';
   for (const b of $('note-colors').querySelectorAll('[data-color]')) b.classList.toggle('on', (b.dataset.color || null) === screen.color);
 }
@@ -1279,6 +1278,30 @@ function wireScreen() {
   };
   // Keep's Archive: one tap moves the note into Archive/ and goes back to the grid, with Undo. In Archive, it
   // moves the note back to the top level.
+  // The less used actions live in a menu under ⋮, so the bar fits a phone.
+  const menu = $('note-menu');
+  const closeMenu = () => {
+    menu.hidden = true;
+    $('note-more').setAttribute('aria-expanded', 'false');
+  };
+  $('note-more').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!menu.hidden) return closeMenu();
+    const r = $('note-more').getBoundingClientRect();
+    Object.assign(menu.style, { left: 'auto', right: `${innerWidth - r.right}px`, top: `${r.bottom + 4}px` });
+    menu.hidden = false;
+    $('note-more').setAttribute('aria-expanded', 'true');
+    menu.querySelector('button')?.focus();
+  });
+  menu.addEventListener('click', closeMenu);
+  document.addEventListener('click', (e) => !menu.hidden && !e.target.closest('#note-menu') && closeMenu());
+  menu.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    closeMenu();
+    $('note-more').focus();
+  });
+
   $('note-archive').addEventListener('click', async () => {
     await flush();
     if (!screen.path) return toast('Write something first');

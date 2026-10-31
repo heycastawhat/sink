@@ -1494,11 +1494,6 @@ button.due:hover {
     font-size: 16px;
   }
 
-  /* Phone: not enough room in the bar for download. */
-  #note-download {
-    display: none;
-  }
-
   .todo-form {
     flex-wrap: wrap;
   }

@@ -166,14 +166,17 @@
             <span id="note-status" class="note-status" aria-live="polite"></span>
             <m3e-icon-button id="note-pin" aria-label="Pin" title="Pin"><m3e-icon name="push_pin"></m3e-icon></m3e-icon-button>
             <m3e-icon-button id="note-palette" aria-label="Colour" title="Colour"><m3e-icon name="palette"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="note-rename" aria-label="Rename" title="Rename"><m3e-icon name="drive_file_rename_outline"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="note-archive" aria-label="Archive" title="Archive"><m3e-icon name="archive"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="note-move" aria-label="Move to folder" title="Move to folder"><m3e-icon name="drive_file_move"></m3e-icon></m3e-icon-button>
             <m3e-icon-button id="note-share" aria-label="Share" title="Share"><m3e-icon name="share"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="note-history" aria-label="Version history" title="Version history"><m3e-icon name="history"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="note-download" aria-label="Download .md" title="Download .md"><m3e-icon name="download"></m3e-icon></m3e-icon-button>
-            <m3e-icon-button id="note-delete" aria-label="Delete" title="Delete"><m3e-icon name="delete"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded="false"><m3e-icon name="more_vert"></m3e-icon></m3e-icon-button>
           </header>
+          <div id="note-menu" class="new-menu" role="menu" aria-label="Note" hidden>
+            <button class="new-item" role="menuitem" id="note-rename"><m3e-icon name="drive_file_rename_outline"></m3e-icon><span>Rename</span></button>
+            <button class="new-item" role="menuitem" id="note-move"><m3e-icon name="drive_file_move"></m3e-icon><span>Move to folder</span></button>
+            <button class="new-item" role="menuitem" id="note-archive"><m3e-icon name="archive"></m3e-icon><span>Archive</span></button>
+            <button class="new-item" role="menuitem" id="note-history"><m3e-icon name="history"></m3e-icon><span>Version history</span></button>
+            <button class="new-item" role="menuitem" id="note-download"><m3e-icon name="download"></m3e-icon><span>Download .md</span></button>
+            <button class="new-item" role="menuitem" id="note-delete"><m3e-icon name="delete"></m3e-icon><span>Delete</span></button>
+          </div>
           <div id="note-colors" class="note-colors" hidden></div>
           <div class="note-scroll"><div id="note-editor" class="note-editor"></div><section id="note-links" class="note-links" hidden aria-label="Linked mentions"></section></div>
         </section>
