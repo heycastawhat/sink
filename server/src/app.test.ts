@@ -390,6 +390,8 @@ describe("mcp", () => {
       "clip_url",
       "complete_todo",
       "create_folder",
+      "get_links",
+      "list_tags",
       "list_todos",
       "list_trash",
       "move_note",
@@ -470,6 +472,39 @@ describe("mcp", () => {
     expect((await call(token, "read_note", { path: "Kitchen/Plan.md" })).data.path).toBe("Kitchen/Plan.md");
     await call(token, "save_note", { title: "Menu", content: "# Menu\n\nFrom [[Plan]].\n" });
     expect((await call(token, "read_note", { path: "Kitchen/Plan.md" })).data.linked_from).toEqual(["Menu.md"]);
+  });
+
+  test("links, tags and search filters", async () => {
+    const token = await login();
+    await call(token, "save_note", { title: "Soil", folder: "Garden", content: "# Soil\n\n#garden/beds compost\n" });
+    await call(token, "save_note", { title: "Beds", folder: "Garden", content: "# Beds\n\nSee [[Soil]] and [[Seeds]].\n![[photo.png]]\n#Garden\n" });
+    await call(token, "save_note", { title: "Budget", content: "# Budget\n\ncompost costs\n#money\n" });
+
+    const links = await call(token, "get_links", { path: "Beds" });
+    expect(links.data).toEqual({
+      path: "Garden/Beds.md",
+      linked_from: [],
+      links_to: [{ path: "Garden/Soil.md", title: "Soil", lines: ["See [[Soil]] and [[Seeds]]."] }],
+      missing: ["seeds"],
+    });
+    expect((await call(token, "get_links", { path: "Garden/Soil.md" })).data.linked_from).toEqual([
+      { path: "Garden/Beds.md", title: "Beds", lines: ["See [[Soil]] and [[Seeds]]."] },
+    ]);
+
+    expect((await call(token, "list_tags")).data.tags).toEqual([
+      { tag: "Garden", notes: 1 },
+      { tag: "garden/beds", notes: 1 },
+      { tag: "money", notes: 1 },
+    ]);
+    const paths = (out: any) => (out.data.results ?? out.data.notes).map((n: any) => n.path);
+    // A tag matches its nested tags, in any case.
+    expect(paths(await call(token, "search_notes", { tag: "#garden" })).sort()).toEqual(["Garden/Beds.md", "Garden/Soil.md"]);
+    expect(paths(await call(token, "search_notes", { query: "compost", tag: "money" }))).toEqual(["Budget.md"]);
+
+    setup.db.query("UPDATE notes SET mtime = ? WHERE path = ?").run(Date.parse("2026-01-10T12:00:00Z"), "Garden/Soil.md");
+    expect(paths(await call(token, "search_notes", { modified_before: "2026-02-01" }))).toEqual(["Garden/Soil.md"]);
+    expect(paths(await call(token, "search_notes", { query: "compost", modified_after: "2026-02-01" }))).toEqual(["Budget.md"]);
+    expect(paths(await call(token, "search_notes", { query: "compost", sort: "modified" }))).toEqual(["Budget.md", "Garden/Soil.md"]);
   });
 });
 

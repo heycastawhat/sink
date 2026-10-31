@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { COLORS } from "./notes";
+import { COLORS, parseLinks } from "./notes";
 import type { McpToolDef, McpToolHandler } from "./plugins";
+import { localTime } from "./time";
 
 /** Calls Sink's own REST API as the MCP caller, so tools share its auth, filters and validation. */
 export type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>;
@@ -55,8 +56,9 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
       instructions:
         "Sink is the user's notes app: markdown files in their vault (Obsidian-compatible, organised in folders), plus " +
         "todos, which are `- [ ]` checkbox lines inside notes (Tasks plugin syntax: `📅 YYYY-MM-DD` due date, " +
-        "`(@YYYY-MM-DD HH:mm)` reminder). Search first, then read_note for the full text. save_note creates or replaces " +
-        "a note, clip_url saves a web page as one; add_todo appends a todo to Todo.md, complete_todo ticks one off and update_todo changes or reschedules one. Notes and folders can be moved, " +
+        "`(@YYYY-MM-DD HH:mm)` reminder). Search first (by words, folder, tag or date), then read_note for the full " +
+        "text. save_note creates or replaces a note, " +
+        "clip_url saves a web page as one; add_todo appends a todo to Todo.md, complete_todo ticks one off and update_todo changes or reschedules one. Notes and folders can be moved, " +
         "renamed and trashed; the trash keeps them for the user to restore, so nothing is ever deleted for good from here.",
     },
   );
@@ -89,31 +91,62 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
     {
       title: "Search notes",
       description:
-        "Search the user's markdown notes by words (title, text, tags, path). Leave query empty to list notes, newest " +
-        "first, plus the folder list; give folder to list just that folder (and the folders inside it). Use read_note " +
-        "for a note's full text.",
+        "Search the user's markdown notes by words (title, text, tags, path), best match first. Leave query empty to " +
+        "list notes, most recently modified first, plus the folder list. folder, tag and the modified dates narrow " +
+        "either; sort=modified puts the newest matches first. Use read_note for a note's full text.",
       inputSchema: {
         query: z.string().max(200).optional(),
         folder: z.string().max(1024).optional().describe('Only notes in this folder and below, e.g. "Projects"'),
+        tag: z.string().max(200).optional().describe('Only notes with this tag or one nested in it ("work" matches "work/sink")'),
+        modified_after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("YYYY-MM-DD: modified on or after this day"),
+        modified_before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("YYYY-MM-DD: modified before this day"),
+        sort: z.enum(["relevance", "modified"]).optional().describe("With a query; default relevance"),
         limit: z.number().int().min(1).max(100).optional().describe("Default 20"),
       },
       annotations: { readOnlyHint: true },
     },
-    safe(async ({ query, folder, limit }) => {
+    safe(async ({ query, folder, tag, modified_after, modified_before, sort, limit }) => {
       const base = folder?.trim().replace(/^\/+|\/+$/g, "") ?? "";
       const inFolder = (p: string) => !base || p.startsWith(base + "/");
+      const want = tag?.trim().replace(/^#/, "").toLowerCase();
+      const day = (d?: string) => (d ? localTime(`${d}T00:00`, timeZone)! : undefined);
+      const [after, before] = [day(modified_after), day(modified_before)];
+      const keep = (n: NoteMeta) =>
+        inFolder(n.path) &&
+        (!want || n.tags.some((t) => t.toLowerCase() === want || t.toLowerCase().startsWith(want + "/"))) &&
+        (after === undefined || n.mtime >= after) &&
+        (before === undefined || n.mtime < before);
+      const newest = (a: NoteMeta, b: NoteMeta) => b.mtime - a.mtime;
       if (query?.trim()) {
-        // Search wide, then narrow to the folder, so a folder filter doesn't eat the limit.
-        const { items } = await json<{ items: NoteMeta[] }>(
-          await api(`/api/notes?q=${encodeURIComponent(query)}&limit=${base ? 100 : (limit ?? 20)}`),
-        );
-        return text({ results: items.filter((n) => inFolder(n.path)).slice(0, limit ?? 20).map(noteBrief) });
+        // Search wide, then filter, so the filters don't eat the limit.
+        const { items } = await json<{ items: NoteMeta[] }>(await api(`/api/notes?q=${encodeURIComponent(query)}&limit=100`));
+        const results = items.filter(keep);
+        if (sort === "modified") results.sort(newest);
+        return text({ results: results.slice(0, limit ?? 20).map(noteBrief) });
       }
       const all = await json<{ notes: NoteMeta[]; folders: string[] }>(await api("/api/notes"));
       if (base && !all.folders.includes(base)) throw new ToolError(`No folder "${base}". Folders: ${all.folders.join(", ") || "none"}`);
-      const notes = all.notes.filter((n) => inFolder(n.path));
-      const folders = all.folders.filter(inFolder);
-      return text({ notes: notes.slice(0, limit ?? 20).map(noteBrief), total: notes.length, folders });
+      const notes = all.notes.filter(keep).sort(newest);
+      return text({ notes: notes.slice(0, limit ?? 20).map(noteBrief), total: notes.length, folders: all.folders.filter(inFolder) });
+    }),
+  );
+
+  server.registerTool(
+    "list_tags",
+    {
+      title: "List tags",
+      description: "Every tag in the vault (frontmatter and #inline) with how many notes have it, most used first. search_notes filters by one.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    safe(async () => {
+      const { notes } = await json<{ notes: NoteMeta[] }>(await api("/api/notes"));
+      const counts = new Map<string, { tag: string; notes: number }>();
+      for (const t of notes.flatMap((n) => n.tags)) {
+        const key = t.toLowerCase();
+        counts.set(key, { tag: counts.get(key)?.tag ?? t, notes: (counts.get(key)?.notes ?? 0) + 1 });
+      }
+      return text({ tags: [...counts.values()].sort((a, b) => b.notes - a.notes || a.tag.localeCompare(b.tag)) });
     }),
   );
 
@@ -122,7 +155,8 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
     {
       title: "Read note",
       description:
-        "Full markdown of one note, plus the hash save_note needs to edit it and the notes that link to it (linked_from). " +
+        "Full markdown of one note, plus the hash save_note needs to edit it and the notes that link to it (linked_from; " +
+        "get_links has the lines and outgoing links). " +
         "Give the path from search_notes " +
         '(e.g. "Inbox/Door code.md"); a title or a name without ".md" also works.',
       inputSchema: { path: z.string().max(1024).describe("Vault path, file name or title") },
@@ -158,6 +192,46 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
     if (hits.length > 1) throw new ToolError(`Several notes match "${ref}": ${hits.map((h) => h.path).join(", ")}. Pass one of these paths.`);
     throw new ToolError(`No note "${ref}". Use search_notes to find its path.`);
   }
+
+  server.registerTool(
+    "get_links",
+    {
+      title: "Get links",
+      description:
+        "A note's place in the vault's link graph: the notes that link to it (linked_from) and the notes it links to " +
+        "(links_to), each with up to three of the lines holding the link. missing lists links to notes that don't exist yet.",
+      inputSchema: { path: z.string().max(1024).describe("Vault path, file name or title") },
+      annotations: { readOnlyHint: true },
+    },
+    safe(async ({ path }) => {
+      const n = await findNote(path);
+      const { items: linked_from } = await json<{ items: unknown[] }>(await api(`/api/notes/backlinks?${pathQs(n.path)}`));
+      const links = parseLinks(n.content);
+      const { notes } = links.length ? await json<{ notes: NoteMeta[] }>(await api("/api/notes")) : { notes: [] };
+      // Obsidian's resolution: the full path or any end of it, or the title; the shortest path wins.
+      const resolve = (target: string) =>
+        notes
+          .filter((m) => {
+            const key = m.path.toLowerCase().replace(/\.md$/, "");
+            return key === target || key.endsWith("/" + target) || m.title.toLowerCase() === target;
+          })
+          .sort((a, b) => a.path.length - b.path.length)[0];
+      const links_to = new Map<string, { path: string; title: string; lines: string[] }>();
+      const missing = new Set<string>();
+      for (const l of links) {
+        const m = resolve(l.target);
+        // Unresolved targets with a file extension are attachments (![[photo.png]]), not missing notes.
+        if (!m) {
+          if (!/\.\w{2,4}$/.test(l.target)) missing.add(l.target);
+          continue;
+        }
+        const out = links_to.get(m.path) ?? { path: m.path, title: m.title, lines: [] };
+        links_to.set(m.path, out);
+        if (out.lines.length < 3 && !out.lines.includes(l.line)) out.lines.push(l.line);
+      }
+      return text({ path: n.path, linked_from, links_to: [...links_to.values()], ...(missing.size && { missing: [...missing] }) });
+    }),
+  );
 
   server.registerTool(
     "save_note",
