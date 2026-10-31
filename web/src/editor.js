@@ -616,6 +616,8 @@ function livePreview(opts) {
           }
           // `[[wikilink]]` parses as a link inside brackets; the wikilink pass below handles it.
           if (name === 'Link' && state.sliceDoc(node.from - 1, node.from) === '[' && state.sliceDoc(node.to, node.to + 1) === ']') return false;
+          // So does `![[embed]]` (as an image of a link): that pass shows the picture.
+          if (name === 'Image' && state.sliceDoc(node.from, node.from + 3) === '![[') return false;
           // A callout's `[!type]` reads as a link too; the Blockquote branch above deals with it.
           if (name === 'Link' && state.sliceDoc(node.from, node.from + 2) === '[!') return false;
           if (name === 'Link' || name === 'Image') {
