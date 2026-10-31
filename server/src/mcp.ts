@@ -234,6 +234,35 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
   );
 
   server.registerTool(
+    "note_history",
+    {
+      title: "Note history",
+      description:
+        "A note's earlier versions, newest first (Sink keeps one per editing session, and the text before every " +
+        "save_note edit). Give version to read that one's full text; to restore it, save_note that text over the note.",
+      inputSchema: {
+        path: z.string().max(1024).describe("Vault path, file name or title"),
+        version: z.number().int().optional().describe("A version id from the list"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    safe(async ({ path, version }) => {
+      const n = await findNote(path);
+      if (version !== undefined) {
+        const v = await json<{ at: number; content: string }>(await api(`/api/notes/versions/${version}?${pathQs(n.path)}`));
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify({ path: n.path, version, saved_local: local(v.at) }, null, 2) },
+            { type: "text" as const, text: v.content },
+          ],
+        };
+      }
+      const { items } = await json<{ items: { id: number; at: number; size: number }[] }>(await api(`/api/notes/versions?${pathQs(n.path)}`));
+      return text({ path: n.path, versions: items.map((v) => ({ version: v.id, saved_local: local(v.at), size: v.size })) });
+    }),
+  );
+
+  server.registerTool(
     "save_note",
     {
       title: "Save note",
@@ -254,9 +283,9 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
       const headers = { "content-type": "application/json" };
       if (path) {
         if (!hash) throw new ToolError("Editing needs the hash from read_note");
-        const n = await json<NoteMeta>(
-          await api(`/api/notes/file?${pathQs(path)}`, { method: "PUT", headers, body: JSON.stringify({ content, base_hash: hash }) }),
-        );
+        // Always keep what it replaces, so note_history can undo any assistant edit.
+        const body = JSON.stringify({ content, base_hash: hash, keep_version: true });
+        const n = await json<NoteMeta>(await api(`/api/notes/file?${pathQs(path)}`, { method: "PUT", headers, body }));
         return text({ saved: noteBrief(n), hash: n.hash });
       }
       const n = await json<NoteMeta>(

@@ -395,6 +395,7 @@ describe("mcp", () => {
       "list_todos",
       "list_trash",
       "move_note",
+      "note_history",
       "read_note",
       "restore_from_trash",
       "save_note",
@@ -505,6 +506,17 @@ describe("mcp", () => {
     expect(paths(await call(token, "search_notes", { modified_before: "2026-02-01" }))).toEqual(["Garden/Soil.md"]);
     expect(paths(await call(token, "search_notes", { query: "compost", modified_after: "2026-02-01" }))).toEqual(["Budget.md"]);
     expect(paths(await call(token, "search_notes", { query: "compost", sort: "modified" }))).toEqual(["Budget.md", "Garden/Soil.md"]);
+  });
+
+  test("every assistant edit keeps what it replaced, to read back or undo", async () => {
+    const token = await login();
+    await call(token, "save_note", { title: "Budget", content: "# Budget\n\ncompost costs\n#money\n" });
+    const read = await call(token, "read_note", { path: "Budget" });
+    await call(token, "save_note", { path: "Budget.md", hash: read.data.hash, content: "# Budget\n\nnone\n" });
+    const history = await call(token, "note_history", { path: "Budget" });
+    expect(history.data.versions).toHaveLength(1);
+    const old = await call(token, "note_history", { path: "Budget", version: history.data.versions[0].version });
+    expect(old.result.content[1].text).toBe("# Budget\n\ncompost costs\n#money\n");
   });
 });
 

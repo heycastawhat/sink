@@ -147,7 +147,8 @@ on the same page and run the command it shows.
 Tools:
 
 - **Notes:** `search_notes` (by words, or list notes; filter by folder, tag or date modified), `read_note`,
-  `save_note`, `style_note` (pin, colour), `clip_url` (save a web page as a note)
+  `save_note`, `style_note` (pin, colour), `clip_url` (save a web page as a note), `note_history` (earlier versions,
+  to read or restore)
 - **Structure:** `get_links` (backlinks and outgoing links, with the lines that link), `list_tags`
 - **Folders:** `create_folder`, `move_note` (move or rename a note or a whole folder)
 - **Todos:** `list_todos`, `add_todo`, `complete_todo`, `update_todo`
