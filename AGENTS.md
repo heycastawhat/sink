@@ -62,7 +62,8 @@ database loses nothing a rescan can't rebuild.
 - `ui/` screens: `MainActivity.kt` (nav + floating tab toolbar), `NotesScreen.kt` (grid laid out bottom-up, cards),
   `NoteScreen.kt` (WebView editor host, bottom toolbar, history/share/archive), `TodosScreen.kt`, `SettingsScreen.kt`,
   `Recent.kt`, `Folders.kt`, `History.kt`, `Share.kt`, `NewMenu.kt`, `Common.kt` (`toolbarClearance()`).
-- The editor page is the web `editor.html` bundled into the APK (`web/dist` is copied in at build time).
+- The editor page is the web `editor.html` bundled into the APK (`web/dist` is copied in at build time). Boards open
+  in the same page (`sink.load({ board: true })` mounts `board.js`); there's no image tool on the phone yet.
   `shouldInterceptRequest` serves `https://sink.server/` (plugin files only, with the token) and
   `https://sink.attachment/` (cached images). Don't widen that proxy; pass data in through `window.sink.*` instead.
 

@@ -127,7 +127,6 @@ handled Message-IDs are remembered in SQLite.
 
 ## Next
 
-- Boards on Android (WebView with the board bundle).
 - Notion import.
 
 ## Decisions

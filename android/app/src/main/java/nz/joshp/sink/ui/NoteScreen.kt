@@ -74,7 +74,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -91,13 +90,11 @@ import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.FormatColorReset
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -228,7 +225,6 @@ fun NoteScreen(
     path: String?,
     line: Int?,
     folder: String,
-    serverUrl: String,
     onBack: () -> Unit,
     onOpenNote: (String) -> Unit,
     /** Opens the quick switcher. */
@@ -238,10 +234,9 @@ fun NoteScreen(
     /** For a new note: photos and PDFs shared from another app (copies in the cache), uploaded and embedded. */
     sharedFiles: List<File> = emptyList(),
 ) {
-    if (path != null && path.endsWith(".excalidraw.md", ignoreCase = true)) {
-        BoardScreen(path, serverUrl, onBack)
-        return
-    }
+    // A board opens in the same page, in Excalidraw, and saves like a note: hash-checked, queued offline, with history.
+    val board = path?.endsWith(".excalidraw.md", ignoreCase = true) == true
+    val ext = if (board) ".excalidraw.md" else ".md"
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -509,10 +504,11 @@ fun NoteScreen(
             })
             if (line != null) put("line", line)
             put("plugins", Json.parseToJsonElement(vm.pluginsJson()))
+            put("board", board)
         }
         js("window.sink.load($payload)")
         // Linked mentions after the text, so a slow or offline server never holds the note up.
-        val p = ed.path ?: return@LaunchedEffect
+        val p = ed.path?.takeIf { !board } ?: return@LaunchedEffect
         val items = runCatching { api()?.backlinksJson(p) }.getOrNull() ?: return@LaunchedEffect
         js("window.sink.backlinks($items)")
     }
@@ -708,10 +704,12 @@ fun NoteScreen(
                     onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onPickTemplate = { templating = TemplateAsk.Slash },
                 )).also { web = it } },
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                // Excalidraw's tools sit along the bottom, so a board stops above the floating toolbar instead of under it.
+                modifier = Modifier.fillMaxWidth().weight(1f)
+                    .padding(bottom = if (board && !keyboardUp) TOOLBAR_BOTTOM + TOOLBAR_HEIGHT else 0.dp),
             )
             // While typing, the bar above the keyboard is for formatting; the note's toolbar comes back with the keyboard down.
-            if (keyboardUp) {
+            if (keyboardUp && !board) {
                 FormatBar(onFormat = { js("window.sink.format(${JsonPrimitive(it)})") }, onImage = {
                     picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 }, onDone = ::hideKeyboard)
@@ -773,6 +771,7 @@ fun NoteScreen(
 
     if (menu) {
         NoteActionsSheet(
+            board = board,
             color = color,
             saved = ed.path != null,
             archived = ed.path?.startsWith("Archive/", ignoreCase = true) == true,
@@ -892,14 +891,14 @@ fun NoteScreen(
     if (renaming) {
         val p = ed.path
         NameDialog(
-            title = "Rename note",
-            initial = p?.substringAfterLast('/')?.removeSuffix(".md").orEmpty(),
+            title = if (board) "Rename board" else "Rename note",
+            initial = p?.substringAfterLast('/')?.removeSuffix(ext).orEmpty(),
             confirm = "Rename",
             onConfirm = { name ->
                 renaming = false
                 if (p == null) return@NameDialog
                 val parent = p.substringBeforeLast('/', "")
-                relocate(listOf(parent, "$name.md").filter { it.isNotEmpty() }.joinToString("/"), "A note with that name already exists", "Renamed")
+                relocate(listOf(parent, "$name$ext").filter { it.isNotEmpty() }.joinToString("/"), "A note with that name already exists", "Renamed")
             },
             onDismiss = { renaming = false },
         )
@@ -950,14 +949,15 @@ private enum class NoteAction { Image, Template, Share, History, GoTo, Move, Ren
 /**
  * The note's options in a sheet, bottom up where the thumb is: its colour, then the common actions as big tiles,
  * then the rest as a list with Delete last. [saved] is false for a new note not yet written (no share or history).
+ * A [board] has no colour, images, templates or share link, as on the web.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NoteActionsSheet(color: String?, saved: Boolean, archived: Boolean, onColor: (String?) -> Unit, onAction: (NoteAction) -> Unit, onDismiss: () -> Unit) {
+private fun NoteActionsSheet(board: Boolean, color: String?, saved: Boolean, archived: Boolean, onColor: (String?) -> Unit, onAction: (NoteAction) -> Unit, onDismiss: () -> Unit) {
     val haptics = rememberHaptics()
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
-            LazyRow(
+            if (!board) LazyRow(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(bottom = 16.dp),
@@ -966,9 +966,9 @@ private fun NoteActionsSheet(color: String?, saved: Boolean, archived: Boolean, 
                 items(NOTE_COLORS.size) { i -> Swatch(NOTE_COLORS[i], color == NOTE_COLORS[i]) { onColor(NOTE_COLORS[i]) } }
             }
             val tiles = listOfNotNull(
-                Triple(NoteAction.Image, Icons.Outlined.AddPhotoAlternate, "Image"),
-                Triple(NoteAction.Template, Icons.Outlined.ContentCopy, "Template"),
-                if (saved) Triple(NoteAction.Share, Icons.Outlined.Share, "Share") else null,
+                if (!board) Triple(NoteAction.Image, Icons.Outlined.AddPhotoAlternate, "Image") else null,
+                if (!board) Triple(NoteAction.Template, Icons.Outlined.ContentCopy, "Template") else null,
+                if (saved && !board) Triple(NoteAction.Share, Icons.Outlined.Share, "Share") else null,
                 if (saved) Triple(NoteAction.History, Icons.Outlined.History, "History") else null,
             )
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1046,6 +1046,7 @@ private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge):
                     path.endsWith(".js") -> "text/javascript"
                     path.endsWith(".css") -> "text/css"
                     path.endsWith(".html") -> "text/html"
+                    path.endsWith(".woff2") -> "font/woff2"
                     else -> "application/octet-stream"
                 }
                 WebResourceResponse(mime, "utf-8", context.assets.open("web/$path"))
@@ -1089,30 +1090,5 @@ private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge):
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
         }
         loadUrl(EDITOR_URL)
-    }
-}
-
-/** Boards are Excalidraw drawings; the phone hands them to the web app, which has the editor. */
-@Composable
-private fun BoardScreen(path: String, serverUrl: String, onBack: () -> Unit) {
-    val context = LocalContext.current
-    val name = path.substringAfterLast('/').removeSuffix(".md").removeSuffix(".excalidraw")
-    BackHandler(onBack = onBack)
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest).statusBarsPadding()) {
-        ScreenTitle(name, sub = path.substringBeforeLast('/', "").ifEmpty { null }, onBack = onBack)
-        Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            Text("Boards open in Sink on the web, which has the Excalidraw editor.", style = MaterialTheme.typography.bodyLarge)
-            Spacer(Modifier.size(20.dp))
-            FilledTonalButton(onClick = {
-                val hash = path.split('/').joinToString("/") { Uri.encode(it) }
-                val url = "$serverUrl/#/n/$hash"
-                runCatching { CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(url)) }
-                    .onFailure { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-            }) {
-                Icon(Icons.Outlined.OpenInBrowser, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Open board")
-            }
-        }
     }
 }

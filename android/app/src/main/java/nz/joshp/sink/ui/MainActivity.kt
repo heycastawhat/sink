@@ -317,7 +317,6 @@ class MainActivity : ComponentActivity() {
                         path = path,
                         line = e.arguments?.getInt("line")?.takeIf { it >= 0 },
                         folder = e.arguments?.getString("folder").orEmpty(),
-                        serverUrl = session.serverUrl,
                         onBack = { nav.popBackStack() },
                         onOpenNote = { openNoteAt(it, null) },
                         onSwitch = { switching.value = true },

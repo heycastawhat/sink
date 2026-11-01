@@ -49,6 +49,13 @@ body {
   padding: 24px 22px 50vh;
 }
 
+/* A board fills the page; Excalidraw brings its own toolbars. */
+body.board .note-editor {
+  position: fixed;
+  inset: 0;
+  padding: 0;
+}
+
 .note-editor .cm-editor {
   font-size: 17px;
 }

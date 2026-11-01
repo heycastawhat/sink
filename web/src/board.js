@@ -76,7 +76,7 @@ const dataUrlOf = (blob) =>
  * Mounts a board editor. Returns the same shape as the text editor (getText / setText / destroy), so the note screen
  * saves boards exactly like notes: hash-checked, autosaved, conflict-safe.
  *  attachmentUrl(name) -> url     to load embedded images
- *  upload(file) -> {path}         to store new images in attachments/
+ *  upload(file) -> {path}         to store new images in attachments/; without it the image tool is hidden
  */
 export function createBoard({ parent, text, onChange, attachmentUrl, upload, onError, dark }) {
   let { frontmatter, scene, files } = parseBoard(text);
@@ -101,6 +101,7 @@ export function createBoard({ parent, text, onChange, attachmentUrl, upload, onE
 
   // New images dropped or pasted onto the board become vault attachments, then get listed in the file.
   const storeNewFiles = async (sceneFiles) => {
+    if (!upload) return;
     for (const [id, f] of Object.entries(sceneFiles ?? {})) {
       if (files.has(id) || uploading.has(id)) continue;
       uploading.add(id);
@@ -131,7 +132,10 @@ export function createBoard({ parent, text, onChange, attachmentUrl, upload, onE
         },
         initialData: { elements: scene.elements, appState: { ...scene.appState, collaborators: undefined }, files: {}, scrollToContent: true },
         theme: dark ? 'dark' : 'light',
-        UIOptions: { canvasActions: { loadScene: false, saveToActiveFile: false, export: { saveFileToDisk: true } } },
+        UIOptions: {
+          canvasActions: { loadScene: false, saveToActiveFile: false, export: { saveFileToDisk: true } },
+          tools: { image: !!upload },
+        },
         onChange: (elements, appState, sceneFiles) => {
           // Excalidraw calls this on every pointer move; only element edits count as changes.
           const v = sceneVersion(elements);

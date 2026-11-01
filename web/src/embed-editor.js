@@ -6,7 +6,8 @@
 //   SinkBridge.pickImage()                  user wants to attach an image; reply with sink.insert(text)
 //   SinkBridge.pickTemplate()               /template: user wants a template; reply with sink.template(text or null)
 // The app drives it with:
-//   sink.load({ text, dark, colors, links, line, plugins })   colors: { '--md-sys-color-primary': '#...', ... }
+//   sink.load({ text, dark, colors, links, line, plugins, board })   colors: { '--md-sys-color-primary': '#...', ... }
+//     board: the text is an Excalidraw board (.excalidraw.md); it opens in Excalidraw instead of the text editor.
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
 //   sink.setText(text)  sink.insert(text)  sink.getText()  sink.focus()
@@ -43,7 +44,8 @@ let timer = null;
 const attachment = (ref) => `https://sink.attachment/${ref.split('/').map(encodeURIComponent).join('/')}`;
 
 window.sink = {
-  async load({ text = '', dark = false, colors = {}, links: targets = [], line = null, plugins = [] } = {}) {
+  async load({ text = '', dark = false, colors = {}, links: targets = [], line = null, plugins = [], board = false } = {}) {
+    if (board) return loadBoard(text, dark, colors);
     await loadPlugins(
       {
         list: async () => plugins,
@@ -111,6 +113,28 @@ window.sink = {
     box.innerHTML = items.length ? backlinksHtml(items, { href: () => '#' }) : '';
   },
 };
+
+// Excalidraw and React only download (here: load from the APK) when a board opens. Its fonts are bundled too, bar
+// the large CJK one, which falls back to the system's.
+async function loadBoard(text, dark, colors) {
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  for (const [k, v] of Object.entries(colors)) document.documentElement.style.setProperty(k, v);
+  document.body.classList.add('board');
+  window.EXCALIDRAW_ASSET_PATH = '/excalidraw/';
+  const { createBoard } = await import('./board.js');
+  editor?.destroy();
+  editor = createBoard({
+    parent: document.getElementById('editor'),
+    text,
+    dark,
+    attachmentUrl: attachment,
+    // Boards only change on a stroke's end, and serializing the scene isn't free: send it a little less often.
+    onChange: () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => bridge.changed(editor.getText()), 500);
+    },
+  });
+}
 
 document.getElementById('links').addEventListener('click', (e) => {
   const a = e.target.closest('[data-path]');

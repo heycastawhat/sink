@@ -55,8 +55,8 @@ android {
 }
 
 /**
- * The note editor is the web app's CodeMirror page (web/dist/editor.html), shipped inside the APK so notes edit
- * offline. The main app's and the board's bundles aren't needed here.
+ * The note editor is the web app's CodeMirror page (web/dist/editor.html), shipped inside the APK so notes and
+ * boards edit offline. The main app's bundle isn't needed here.
  */
 abstract class CopyEditorTask : DefaultTask() {
     @get:Internal
@@ -64,7 +64,7 @@ abstract class CopyEditorTask : DefaultTask() {
 
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
-    val distFiles get() = webDist.asFileTree.matching { include("editor.html", "assets/**") }
+    val distFiles get() = webDist.asFileTree.matching { include("editor.html", "assets/**", "excalidraw/**") }
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -80,7 +80,7 @@ abstract class CopyEditorTask : DefaultTask() {
         dist.resolve("editor.html").copyTo(out.resolve("editor.html"))
         // Only what the editor page loads, following imports from file to file.
         val assets = dist.resolve("assets")
-        val ref = Regex("""[\"'(/]([\w.-]+\.(?:js|css))[\"')]""")
+        val ref = Regex("""[\"'(/]([\w.-]+\.(?:js|css|woff2))[\"')]""")
         val seen = mutableSetOf<String>()
         val queue = ArrayDeque(ref.findAll(dist.resolve("editor.html").readText()).map { it.groupValues[1] }.toList())
         while (queue.isNotEmpty()) {
@@ -88,7 +88,12 @@ abstract class CopyEditorTask : DefaultTask() {
             val file = assets.resolve(name)
             if (!seen.add(name) || !file.isFile) continue
             file.copyTo(out.resolve("assets/$name"))
-            if (name.endsWith(".js")) queue.addAll(ref.findAll(file.readText()).map { it.groupValues[1] })
+            if (!name.endsWith(".woff2")) queue.addAll(ref.findAll(file.readText()).map { it.groupValues[1] })
+        }
+        // Excalidraw's drawing fonts, found at run time under EXCALIDRAW_ASSET_PATH. Not Xiaolai: it's 13 MB of
+        // CJK glyphs, and without it such text falls back to a system font.
+        dist.resolve("excalidraw/fonts").listFiles()?.filter { it.name != "Xiaolai" }?.forEach {
+            it.copyRecursively(out.resolve("excalidraw/fonts/${it.name}"))
         }
     }
 }
