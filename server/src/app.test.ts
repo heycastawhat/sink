@@ -571,9 +571,10 @@ describe("notes", () => {
     await make("Log", "Monday", "# Monday\n\nDug beds, per [[Garden/Soil]].\n");
     await make("", "Links", "# Links\n\n[soil notes](Garden/Soil.md)\n");
     await make("", "Other", "# Other\n\n[[Soil mix]] and [[Soils]] are different notes. https://x.y/Soil.md)\n");
+    await make("", "Table", "# Table\n\n| Bed | Note |\n| --- | --- |\n| [[Garden/Soil\\|Soil]] | loam |\n");
     const res = await get(token, `/api/notes/backlinks?path=${encodeURIComponent("Garden/Soil.md")}`);
     const items = ((await res.json()) as any).items as { path: string; lines: string[] }[];
-    expect(items.map((i) => i.path).sort()).toEqual(["Links.md", "Log/Monday.md", "Plan.md"]);
+    expect(items.map((i) => i.path).sort()).toEqual(["Links.md", "Log/Monday.md", "Plan.md", "Table.md"]);
     expect(items.find((i) => i.path === "Plan.md")!.lines).toEqual(["See [[Soil]] first.", "Also [[soil#pH|the dirt]]."]);
 
     // A nested note: any end of its path, a markdown link with an anchor, frontmatter, non-ASCII capitals, its title.
@@ -590,7 +591,7 @@ describe("notes", () => {
     await send(token, "PUT", q("Plan.md"), { content: "# Plan\n\nNo links now.\n", base_hash: plan.hash });
     await send(token, "DELETE", q("Log/Monday.md"));
     const after = await get(token, `/api/notes/backlinks?path=${encodeURIComponent("Garden/Soil.md")}`);
-    expect((((await after.json()) as any).items as { path: string }[]).map((i) => i.path)).toEqual(["Links.md"]);
+    expect((((await after.json()) as any).items as { path: string }[]).map((i) => i.path).sort()).toEqual(["Links.md", "Table.md"]);
   });
 
   test("version history: one per sitting, newest first, survives a rename, restorable", async () => {
@@ -674,10 +675,10 @@ describe("notes", () => {
     const token = await login();
     const make = (folder: string, title: string, content: string) => send(token, "POST", "/api/notes", { folder, title, content });
     await make("Garden", "Soil", "# Soil\n");
-    await make("", "Plan", "# Plan\n\n[[Soil]], [[soil#pH|the dirt]], ![[Garden/Soil]], [notes](Garden/Soil.md#top), [[Soils]], [[Other]]\n");
+    await make("", "Plan", "# Plan\n\n[[Soil]], [[soil#pH|the dirt]], ![[Garden/Soil]], [notes](Garden/Soil.md#top), [[Soils]], [[Other]]\n| [[Garden/Soil\\|Soil]] |\n");
     await send(token, "POST", "/api/notes/move", { from: "Garden/Soil.md", to: "Beds/Loam.md" });
     const plan = ((await (await get(token, q("Plan.md"))).json()) as any).content;
-    expect(plan).toBe("# Plan\n\n[[Loam]], [[Loam#pH|the dirt]], ![[Beds/Loam]], [notes](Beds/Loam.md#top), [[Soils]], [[Other]]\n");
+    expect(plan).toBe("# Plan\n\n[[Loam]], [[Loam#pH|the dirt]], ![[Beds/Loam]], [notes](Beds/Loam.md#top), [[Soils]], [[Other]]\n| [[Beds/Loam\\|Soil]] |\n");
 
     // A bare name another note also has is left alone: it may mean that one.
     await make("", "Loam", "# Loam (the other one)\n");

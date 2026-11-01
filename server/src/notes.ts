@@ -185,14 +185,15 @@ type Row = { path: string; title: string; tags: string; mtime: number; size: num
 
 /** Card preview: the body without the heading that became the title, trimmed to whole lines. */
 /**
- * Every link to another note in a file, frontmatter included: `[[target]]` (with `#heading`, `|alias`, or `!` embed)
- * and `[text](target.md)`. Targets come back as the backlinks lookup wants them: lower case, no `.md` or `#heading`,
- * no leading `./`, `../` or `/`. One entry per target per line, with the line trimmed for display.
+ * Every link to another note in a file, frontmatter included: `[[target]]` (with `#heading`, `|alias`, or `!` embed;
+ * in a table the alias is `\|alias`) and `[text](target.md)`. Targets come back as the backlinks lookup wants them:
+ * lower case, no `.md` or `#heading`, no leading `./`, `../` or `/`. One entry per target per line, with the line
+ * trimmed for display.
  */
 export function parseLinks(content: string): { target: string; line: string }[] {
   const out: { target: string; line: string }[] = [];
   const norm = (ref: string) =>
-    ref.trim().replace(/#.*$/, "").replace(/^(\.{1,2}\/|\/)+/, "").replace(/\.md$/i, "").toLowerCase();
+    ref.trim().replace(/\\$/, "").replace(/#.*$/, "").replace(/^(\.{1,2}\/|\/)+/, "").replace(/\.md$/i, "").toLowerCase();
   for (const raw of content.split("\n")) {
     if (!raw.includes("[[") && !raw.includes("](")) continue;
     const targets = new Set<string>();
@@ -218,7 +219,8 @@ export function rewriteLinks(
   m: { oldFull: string; oldName: string; newFull: string; newName: string; byName: boolean },
 ): string {
   const norm = (t: string) => t.trim().replace(/^(\.{1,2}\/|\/)+/, "").replace(/\.md$/i, "").toLowerCase();
-  const wiki = content.replace(/(!?\[\[)([^\]|#]+)((?:#[^\]|]*)?(?:\|[^\]]*)?\]\])/g, (all, open: string, t: string, rest: string) => {
+  // A table cell escapes the alias's pipe (`[[target\|alias]]`): the backslash belongs with the alias, not the target.
+  const wiki = content.replace(/(!?\[\[)([^\]|#\\]+)((?:#[^\]|\\]*)?(?:\\?\|[^\]]*)?\]\])/g, (all, open: string, t: string, rest: string) => {
     const n = norm(t);
     const ext = /\.md\s*$/i.test(t) ? ".md" : "";
     if (t.includes("/")) return n === m.oldFull || m.oldFull.endsWith("/" + n) ? `${open}${m.newFull}${ext}${rest}` : all;
