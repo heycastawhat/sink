@@ -319,6 +319,15 @@ async function renderSettings() {
   </div>
   <div class="setting-row">
     <div class="grow">
+      <div class="setting-title">Import from Notion</div>
+      <div class="muted small">In Notion, Settings → Export all workspace content (or ⋯ → Export on a page), as Markdown &amp; CSV with subpages, then pick the zip here. Pages land in a Notion folder in the same tree, with links, images and databases (as tables). Running it again skips pages already imported.</div>
+      <div id="notion-status" class="small" aria-live="polite" hidden></div>
+    </div>
+    <m3e-button id="notion-import" variant="tonal">${ic('upload', 'icon')}Import</m3e-button>
+    <input id="notion-file" type="file" accept=".zip" hidden />
+  </div>
+  <div class="setting-row">
+    <div class="grow">
       <div class="setting-title">Download all notes</div>
       <div class="muted small">Every note and attachment as a zip of plain files, in their folders. Opens in Obsidian or any editor.</div>
     </div>
@@ -417,22 +426,23 @@ async function renderTokens() {
 $('settings').addEventListener('change', (e) => {
   if (e.target.id === 'haptics') setHaptics(e.target.checked);
   if (e.target.id === 'hide-foldered') notes.prefs.hideFoldered = e.target.checked;
-  if (e.target.id === 'keep-file') runKeepImport(e.target);
+  if (e.target.id === 'keep-file') runImport('keep', e.target);
+  if (e.target.id === 'notion-file') runImport('notion', e.target);
 });
 
-/** Google Keep import from Settings: loaded only when used. */
-async function runKeepImport(input) {
+/** Google Keep and Notion imports from Settings: loaded only when used. */
+async function runImport(kind, input) {
   const files = [...input.files];
   input.value = '';
   if (!files.length) return;
-  const status = $('keep-status');
-  const button = $('keep-import');
+  const status = $(`${kind}-status`);
+  const button = $(`${kind}-import`);
   status.hidden = false;
   status.textContent = 'Reading…';
   button.disabled = true;
   try {
-    const { importKeep } = await import('./keep-import.js');
-    const r = await importKeep(files, (done, total) => (status.textContent = `Importing ${done} of ${total}…`));
+    const run = kind === 'keep' ? (await import('./keep-import.js')).importKeep : (await import('./notion-import.js')).importNotion;
+    const r = await run(files, (done, total) => (status.textContent = `Importing ${done} of ${total}…`));
     status.textContent =
       [`Imported ${r.imported} note${r.imported === 1 ? '' : 's'}`, r.skipped && `skipped ${r.skipped} already here`, r.failed && `${r.failed} failed`]
         .filter(Boolean)
@@ -489,8 +499,8 @@ $('settings').addEventListener('click', async (e) => {
     }
   } else if (id === 'export-notes') {
     location.href = '/api/notes/export';
-  } else if (id === 'keep-import') {
-    $('keep-file').click();
+  } else if (id === 'keep-import' || id === 'notion-import') {
+    $(id.replace('import', 'file')).click();
   } else if (id === 'open-trash') {
     location.hash = '#/trash';
   } else if (id === 'logout') {

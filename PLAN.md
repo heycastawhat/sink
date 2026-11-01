@@ -125,10 +125,6 @@ handled Message-IDs are remembered in SQLite.
   `SINK_KEYSTORE_BASE64`, `SINK_KEYSTORE_PASSWORD`, `SINK_KEY_ALIAS`, `SINK_KEY_PASSWORD`).
 - The image starts as root only to chown fresh `/data` and `/notes` folders, then drops to `PUID:PGID`.
 
-## Next
-
-- Notion import.
-
 ## Decisions
 
 - Name: **Sink**. Seed colour **`#6750A4`**. Android package `nz.joshp.sink`.

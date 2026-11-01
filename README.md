@@ -13,6 +13,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Share a note:** a read-only link anyone can open, no account needed. Stop sharing any time.
 - **Version history:** earlier versions of every note, to read or restore.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
+- **Leaving Notion:** import its Markdown & CSV export from Settings: the page tree, links between pages, images, and
+  databases as tables with each row's properties in its page's frontmatter.
 - **Todos:** every `- [ ]` in every note, in one list, with due dates and reminders (Obsidian Tasks syntax).
   Recurring todos (`🔁 every week`) add their next copy when ticked; tick with Undo, tap to edit, reschedule in a tap.
   Quick add reads dates off the end ("call mum tomorrow 6pm", "bins every tuesday"); priorities sort and show,

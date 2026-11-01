@@ -51,7 +51,8 @@ database loses nothing a rescan can't rebuild.
 - `dialogs.js` native `<dialog>` helpers (text prompt, folder picker, version history, share, list picker).
 - `util.js` shared `esc`, `folderOf`, `inlineHtml`, `tableCells`. Always `esc()` before putting text in HTML.
 - `board.js` Excalidraw (Obsidian plugin file format). `backlinks.js`, `templates.js`, `keep-import.js`
-  (zip read in the browser with `DecompressionStream`), `plugin-api.js` + `plugins/`.
+  (zip read in the browser with `DecompressionStream`), `notion-import.js` (reuses its zip reader), `plugin-api.js` +
+  `plugins/`.
 - Extra entry pages: `editor.html` + `embed-editor.js` (the Android WebView editor; talks over `window.SinkBridge`),
   `share.html` + `share.js` (read-only shared note).
 

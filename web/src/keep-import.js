@@ -24,7 +24,7 @@ const COLORS = {
  * The files in a zip, by name, each read on demand. Handles stored and deflated entries (all Takeout uses) with the
  * browser's own DecompressionStream; no zip64, which only matters past 4 GB.
  */
-async function readZip(file) {
+export async function readZip(file) {
   const buf = new Uint8Array(await file.arrayBuffer());
   const view = new DataView(buf.buffer);
   // End of central directory: the last "PK\5\6" within the final 64 KB (it may be followed by a comment).
@@ -38,7 +38,7 @@ async function readZip(file) {
   if (eocd < 0) throw new Error("That isn't a zip file");
   const count = view.getUint16(eocd + 10, true);
   let at = view.getUint32(eocd + 16, true);
-  if (at === 0xffffffff) throw new Error('That zip is too big to read here; unzip it and pick the Keep folder instead');
+  if (at === 0xffffffff) throw new Error('That zip is too big to read here; unzip it and pick the files inside instead');
   const names = new TextDecoder();
   const entries = new Map();
   for (let n = 0; n < count; n++) {
@@ -66,14 +66,14 @@ async function readZip(file) {
 }
 
 /** Files picked one by one or as a folder, in the same shape as readZip's. */
-function readFiles(files) {
+export function readFiles(files) {
   const entries = new Map();
   for (const f of files) entries.set(f.webkitRelativePath || f.name, async () => new Uint8Array(await f.arrayBuffer()));
   return entries;
 }
 
 /** The file name the server gives a note with this title (server/src/notes.ts fileNameFor), without ".md". */
-function fileNameFor(title) {
+export function fileNameFor(title) {
   const name = title
     .replace(/[\\/:*?"<>|#^[\]\u0000-\u001f]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -84,7 +84,7 @@ function fileNameFor(title) {
   return name || 'Untitled';
 }
 
-const yamlString = (s) => (/^[\w .-]+$/.test(s) && !/^(true|false|null|yes|no)$/i.test(s) ? s : JSON.stringify(s));
+export const yamlString = (s) => (/^[\w .-]+$/.test(s) && !/^(true|false|null|yes|no)$/i.test(s) ? s : JSON.stringify(s));
 
 /** One Keep note (Takeout's JSON) as markdown, without its images. */
 export function keepToMarkdown(k) {
