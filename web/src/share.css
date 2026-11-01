@@ -7,6 +7,8 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --md-sys-color-primary: #d0bcff;
+    --md-sys-color-secondary: #ccc2dc;
+    --md-sys-color-tertiary: #efb8c8;
     --md-sys-color-on-surface: #e6e0e9;
     --md-sys-color-on-surface-variant: #cac4d0;
     --md-sys-color-surface-container-high: #2b2930;

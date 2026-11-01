@@ -1,6 +1,8 @@
 /* Standalone editor page: the app's Material colours arrive as CSS variables from sink.load(). */
 :root {
   --md-sys-color-primary: #6750a4;
+  --md-sys-color-secondary: #625b71;
+  --md-sys-color-tertiary: #7d5260;
   --md-sys-color-on-surface: #1d1b20;
   --md-sys-color-on-surface-variant: #49454f;
   --md-sys-color-surface-container-high: #ece6f0;
@@ -14,6 +16,8 @@
 
 :root[data-theme='dark'] {
   --md-sys-color-primary: #d0bcff;
+  --md-sys-color-secondary: #ccc2dc;
+  --md-sys-color-tertiary: #efb8c8;
   --md-sys-color-on-surface: #e6e0e9;
   --md-sys-color-on-surface-variant: #cac4d0;
   --md-sys-color-surface-container-high: #2b2930;

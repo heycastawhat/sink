@@ -189,6 +189,8 @@ private enum class TemplateAsk { Slash, Menu }
 /** The app's Material colours as the CSS variables the editor styles use. */
 private fun ColorScheme.css() = mapOf(
     "--md-sys-color-primary" to primary,
+    "--md-sys-color-secondary" to secondary,
+    "--md-sys-color-tertiary" to tertiary,
     "--md-sys-color-on-surface" to onSurface,
     "--md-sys-color-on-surface-variant" to onSurfaceVariant,
     "--md-sys-color-surface-container-high" to surfaceContainerHigh,

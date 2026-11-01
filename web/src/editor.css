@@ -122,6 +122,14 @@
   color: var(--md-sys-color-on-surface-variant);
 }
 
+.cm-codeblock .cm-code-keyword { color: var(--md-sys-color-primary); }
+.cm-codeblock .cm-code-string { color: var(--md-sys-color-tertiary); }
+.cm-codeblock .cm-code-number { color: var(--md-sys-color-error); }
+.cm-codeblock .cm-code-comment { color: var(--md-sys-color-on-surface-variant); font-style: italic; }
+.cm-codeblock .cm-code-function { color: var(--md-sys-color-secondary); }
+.cm-codeblock .cm-code-type { color: var(--md-sys-color-primary); font-weight: 600; }
+.cm-codeblock .cm-code-property { color: var(--md-sys-color-on-surface-variant); }
+
 .cm-line.cm-fm,
 .cm-line.cm-fm * {
   color: var(--md-sys-color-on-surface-variant) !important;

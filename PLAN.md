@@ -127,9 +127,8 @@ handled Message-IDs are remembered in SQLite.
 
 ## Next
 
-- Tables in live preview; syntax colouring in code blocks.
 - Boards on Android (WebView with the board bundle).
-- Version history; Keep (Takeout) and Notion import.
+- Notion import.
 
 ## Decisions
 

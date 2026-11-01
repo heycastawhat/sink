@@ -14,6 +14,7 @@ import {
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore, indentWithTab, redo, undo } from '@codemirror/commands';
 import { syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput, indentUnit } from '@codemirror/language';
 import { markdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
+import { languages } from '@codemirror/language-data';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
@@ -36,6 +37,15 @@ const highlight = HighlightStyle.define([
   { tag: t.monospace, class: 'cm-mono' },
   { tag: [t.processingInstruction, t.meta], class: 'cm-meta' },
   { tag: t.contentSeparator, class: 'cm-meta' },
+  // Tokens inside fenced code; editor.css colours them only within .cm-codeblock, so markdown's own uses of these
+  // tags (link titles are strings, for one) keep the text colour.
+  { tag: [t.keyword, t.operatorKeyword, t.modifier, t.controlKeyword], class: 'cm-code-keyword' },
+  { tag: [t.string, t.special(t.string), t.regexp], class: 'cm-code-string' },
+  { tag: [t.number, t.bool, t.null, t.atom], class: 'cm-code-number' },
+  { tag: [t.comment, t.lineComment, t.blockComment], class: 'cm-code-comment' },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.definition(t.function(t.variableName))], class: 'cm-code-function' },
+  { tag: [t.typeName, t.className, t.namespace, t.tagName], class: 'cm-code-type' },
+  { tag: [t.propertyName, t.attributeName], class: 'cm-code-property' },
 ]);
 
 // Syntax nodes whose characters are markup, hidden when the cursor is elsewhere.
@@ -822,7 +832,7 @@ export function createEditor(opts) {
         closeBrackets(),
         highlightSelectionMatches(),
         EditorView.lineWrapping,
-        markdown({ base: markdownLanguage, addKeymap: true }),
+        markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: true }),
         syntaxHighlighting(highlight),
         livePreview(opts),
         properties,
