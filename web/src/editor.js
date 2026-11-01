@@ -832,6 +832,8 @@ export function createEditor(opts) {
         closeBrackets(),
         highlightSelectionMatches(),
         EditorView.lineWrapping,
+        // Room to keep clear when scrolling the cursor into view (the Android app's toolbar floats over the page bottom).
+        EditorView.scrollMargins.of(() => ({ bottom: opts.bottomMargin?.() ?? 0 })),
         markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: true }),
         syntaxHighlighting(highlight),
         livePreview(opts),

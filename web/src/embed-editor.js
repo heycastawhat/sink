@@ -14,8 +14,10 @@
 //   sink.format(kind)   the bar above the keyboard: h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike,
 //                       code, link, indent, outdent, undo, redo (see editor.js format)
 //   sink.backlinks(items)   GET /api/notes/backlinks' items, shown under the note; tapping one calls openLink(path)
+//   sink.inset(px)      how much of the page's bottom the app's floating toolbar covers; the cursor stays above it
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
 
+import { EditorView } from '@codemirror/view';
 import { backlinksHtml } from './backlinks.js';
 import { createEditor } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
@@ -40,6 +42,7 @@ const pickTemplate = () =>
 let editor = null;
 let links = [];
 let timer = null;
+let inset = 0;
 
 const attachment = (ref) => `https://sink.attachment/${ref.split('/').map(encodeURIComponent).join('/')}`;
 
@@ -71,6 +74,7 @@ window.sink = {
       resolveEmbed: attachment,
       resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
       linkTargets: () => links,
+      bottomMargin: () => inset,
       // Only when the app can pick one (an older app has no pickTemplate, so the command stays hidden).
       pickTemplate: bridge.pickTemplate ? pickTemplate : undefined,
     });
@@ -106,6 +110,14 @@ window.sink = {
   template(text) {
     templateReply?.(text);
     templateReply = null;
+  },
+  inset(px) {
+    inset = px;
+    // The toolbar comes back as the keyboard goes down, over where the cursor may be: bring it back into sight once
+    // the page has its new height.
+    const view = editor?.view;
+    if (!view?.hasFocus) return;
+    requestAnimationFrame(() => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest' }) }));
   },
   backlinks(items = []) {
     const box = document.getElementById('links');

@@ -406,6 +406,13 @@ fun NoteScreen(
     fun flushAndLeave() = flush(onBack)
 
     val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    // The floating toolbar covers the bottom of the page while the keyboard is down; the editor keeps the cursor above
+    // it (CSS px are dp in a WebView). With the keyboard up the format bar sits below the page instead, so nothing's covered.
+    LaunchedEffect(pageReady, keyboardUp, board) {
+        if (!pageReady || board) return@LaunchedEffect
+        val covered = if (keyboardUp) 0 else (TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 8.dp).value.toInt()
+        js("window.sink.inset && window.sink.inset($covered)")
+    }
     fun hideKeyboard() {
         val w = web ?: return
         w.evaluateJavascript("document.activeElement && document.activeElement.blur()", null)
