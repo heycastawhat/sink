@@ -71,7 +71,7 @@ export class Passkeys {
   }
 }
 
-export type SignedIn = { client: "web" | "android"; device: string; challenge?: string; next?: string };
+export type SignedIn = { client: "web" | "android" | "obsidian"; device: string; challenge?: string; next?: string };
 
 const signInFields = {
   client: z.enum(["web", "android"]).default("web"),

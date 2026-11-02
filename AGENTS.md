@@ -18,6 +18,7 @@ database loses nothing a rescan can't rebuild.
 | `server/` | Bun + Hono + `bun:sqlite`, TypeScript. Serves the API and the built web app. |
 | `web/` | Vite + `@m3e/web` (Material 3 Expressive web components) + CodeMirror 6. Plain JS, no framework. |
 | `android/` | Kotlin + Jetpack Compose (Material 3 Expressive). The note editor is the web editor in a WebView. |
+| `obsidian/` | Obsidian plugin that syncs a local vault with the server over the API (Bun build, TypeScript, `bun test` against an in-process server). See `obsidian/README.md`. |
 | `docs/plugins.md`, `examples/plugins/` | Plugin API and an example plugin. |
 | `.github/workflows/` | `ci.yml` (server tests + web build), `docker.yml` (GHCR image), `android.yml` (APK; releases on `v*` tags). |
 
@@ -37,7 +38,8 @@ database loses nothing a rescan can't rebuild.
 - `db.ts` migrations (append only; `user_version`). `routes/notes.ts` notes/attachments/trash/versions/backlinks/export
   routes. `routes/share.ts` share links. `routes/events.ts` live change stream (SSE). `todos.ts` todo parsing and
   routes. `auth.ts` tokens (scopes `full`/`mcp`, optional expiry), cookie + bearer, CSRF origin check. `oidc.ts`
-  sign-in. `oauth.ts` OAuth for MCP connectors (dynamic registration, PKCE, refresh rotation). `mcp.ts` MCP tools
+  sign-in (`client=web|android|obsidian`; the apps get a hand-back code redirected to their own scheme, swapped with a PKCE verifier
+  at `/oidc/exchange`). `oauth.ts` OAuth for MCP connectors (dynamic registration, PKCE, refresh rotation). `mcp.ts` MCP tools
   (all go through the REST API as the caller). `email.ts`/`html.ts` IMAP ingest. `plugins.ts` + `builtin/` plugin
   host (daily notes, webhooks). `users.ts` accounts: the owner keeps `SINK_NOTES_DIR` + the main DB (email in,
   plugins); other accounts get a vault + DB under `SINK_USERS_DIR`. `app.ts` builds each account's `/api` routes
@@ -81,6 +83,7 @@ database loses nothing a rescan can't rebuild.
 cd server && bun install && bun test            # 60+ tests; bunx tsc --noEmit -p . to typecheck
 cd web && bun install && bun run build          # builds web/dist (the server serves it)
 cd web && bun run dev                           # Vite on :5173, proxies /api to :8787
+cd obsidian && bun install && bun test && bun run typecheck && bun run build   # plugin; its tests import ../server/src, so bun install there first
 # Android: build on CI, not locally (see below). gh workflow run android.yml --ref main
 ```
 

@@ -12,11 +12,12 @@ import { clientIp, rateLimit } from "./ratelimit";
 export const SESSION_COOKIE = "sink_session";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
-// Pending logins: OIDC round-trips (state) and Android hand-back codes both expire quickly.
+// Pending logins: OIDC round-trips (state) and app hand-back codes (Android, Obsidian) both expire quickly.
 const PENDING_TTL_MS = 10 * 60 * 1000;
 const HANDBACK_TTL_MS = 2 * 60 * 1000;
 const MAX_PENDING = 500;
 export const ANDROID_REDIRECT = "nz.joshp.sink://auth";
+export const OBSIDIAN_REDIRECT = "obsidian://sink-auth";
 
 function sha256(value: string): string {
   return new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -125,7 +126,7 @@ type Pending = {
   verifier: string;
   nonce: string;
   origin: string;
-  client: "web" | "android";
+  client: "web" | "android" | "obsidian";
   device: string;
   appChallenge?: string;
   // Web: same-origin path to land on after signing in (e.g. back to an OAuth consent page).
@@ -136,9 +137,9 @@ type Pending = {
 type Handback = { challenge: string; device: string; subject: string; created: number };
 
 const startQuery = z.object({
-  client: z.enum(["web", "android"]).default("web"),
+  client: z.enum(["web", "android", "obsidian"]).default("web"),
   device: z.string().max(100).optional(),
-  // Android: S256 of a verifier only the app holds, so an intercepted hand-back code is useless.
+  // Apps: S256 of a verifier only the app holds, so an intercepted hand-back code is useless.
   challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
   // A local path only: "/x", never "//host" or "/\host", so it can't become an open redirect.
   next: z.string().max(2000).regex(/^\/(?![\/\\])/).optional(),
@@ -171,12 +172,12 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     return opts.publicUrls.includes(origin) ? origin : opts.publicUrls[0]!;
   };
 
-  /** Signs `subject` in: a session cookie for the web, or a one-time code handed back to the Android app. */
+  /** Signs `subject` in: a session cookie for the web, or a one-time code handed back to the Android or Obsidian app. */
   const finish = (c: Context, to: SignedIn & { origin?: string }, subject: string) => {
-    if (to.client === "android") {
+    if (to.client !== "web") {
       const handback = randomString();
       handbacks.set(handback, { challenge: to.challenge!, device: to.device, subject, created: now() });
-      return `${ANDROID_REDIRECT}?code=${handback}`;
+      return `${to.client === "android" ? ANDROID_REDIRECT : OBSIDIAN_REDIRECT}?code=${handback}`;
     }
     const origin = to.origin ?? allowedOrigin(c);
     setCookie(c, SESSION_COOKIE, auth.issueToken(to.device, subject), {
@@ -202,7 +203,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     sweep();
     const q = startQuery.safeParse(c.req.query());
     if (!q.success) return c.json({ error: "invalid query" }, 400);
-    if (q.data.client === "android" && !q.data.challenge) return c.json({ error: "missing challenge" }, 400);
+    if (q.data.client !== "web" && !q.data.challenge) return c.json({ error: "missing challenge" }, 400);
 
     const state = randomString();
     const entry: Pending = {
@@ -210,7 +211,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
       nonce: randomString(),
       origin: allowedOrigin(c),
       client: q.data.client,
-      device: q.data.device ?? (q.data.client === "android" ? "Android" : "Web"),
+      device: q.data.device ?? { web: "Web", android: "Android", obsidian: "Obsidian" }[q.data.client],
       appChallenge: q.data.challenge,
       next: q.data.next,
       created: now(),
@@ -260,7 +261,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     return c.redirect(finish(c, { ...entry, challenge: entry.appChallenge }, identity.sub), 302);
   });
 
-  // Android swaps the one-time hand-back code (plus its PKCE verifier) for a device token.
+  // The apps swap the one-time hand-back code (plus its PKCE verifier) for a device token.
   app.post("/oidc/exchange", async (c) => {
     sweep();
     const body = exchangeBody.safeParse(await c.req.json().catch(() => null));

@@ -1,0 +1,17 @@
+{
+  "name": "sink-obsidian",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build.ts",
+    "dev": "bun build.ts --watch",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "obsidian": "^1.14.4",
+    "typescript": "^5"
+  }
+}

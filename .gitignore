@@ -5,6 +5,8 @@ node_modules/
 .env
 *.log
 dist/
+# Built Obsidian plugin (copy it and manifest.json into a vault).
+/obsidian/main.js
 .DS_Store
 # Copied from node_modules at build time.
 /web/public/excalidraw/

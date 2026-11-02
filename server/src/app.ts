@@ -115,6 +115,9 @@ export function createApp(deps: {
   api.all("*", (c) =>
     spaceApi(spaceOf(c.get("subject"))).fetch(c.req.raw, { tokenId: c.get("tokenId"), scope: c.get("scope"), subject: c.get("subject") }),
   );
+  // Obsidian's sync plugin reads the change stream with fetch (EventSource can't send the bearer header) from the
+  // app's own origins. Bearer only: no credentials, so a page on one of these can't ride a session cookie.
+  app.use("/api/events", cors({ origin: ["app://obsidian.md", "capacitor://localhost", "http://localhost", "https://localhost"], allowHeaders: ["authorization"] }));
   // Shared notes, readable without signing in. Before the signed-in API, which would answer 401.
   app.route("/api/public", publicShareRoutes(() => users?.all() ?? [owner]));
   if (users) app.route("/api/public/pages", publicPageRoutes(users));

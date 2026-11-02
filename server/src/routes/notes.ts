@@ -35,6 +35,7 @@ const createBody = z.object({
   title: z.string().trim().max(200).default(""),
   content: z.string().default(""),
 });
+const fileQuery = pathQuery.extend({ base_hash: z.string().max(64).optional() });
 const moveBody = z.object({ from: z.string().min(1).max(1024), to: z.string().min(1).max(1024) });
 const listQuery = z.object({
   q: z.string().max(200).optional(),
@@ -73,6 +74,7 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     const parsed = listQuery.safeParse(c.req.query());
     if (!parsed.success) return c.json({ error: "invalid query" }, 400);
     const { q, limit } = parsed.data;
+    if (c.req.query("brief") === "true") return c.json({ notes: vault.manifest() });
     if (!q?.trim()) return c.json(vault.list());
     const fts = toFtsQuery(q);
     return c.json({ items: fts ? vault.search(fts, limit) : [] });
@@ -207,6 +209,22 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const path = ref ? vault.resolveFile(ref) : null;
       if (!path) return c.json({ error: "not found" }, 404);
       return attachmentResponse(vault, path);
+    }),
+  );
+
+  app.get("/notes/attachments", (c) => run(c, async () => c.json({ items: await vault.attachments() })));
+
+  // Save a file at a path, like a note save: `base_hash` is what the client last saw (none: it must not exist yet).
+  // It can replace a file, so not for assistants' tokens (they can still add new ones through POST).
+  app.put("/notes/attachment", (c) =>
+    run(c, async () => {
+      if (c.get("scope") !== "full") return c.json({ error: "not allowed with this token" }, 403);
+      const q = fileQuery.safeParse(c.req.query());
+      if (!q.success) return c.json({ error: "invalid query" }, 400);
+      if (Number(c.req.header("content-length") ?? 0) > maxUploadBytes) return c.json({ error: "too large" }, 413);
+      const bytes = new Uint8Array(await c.req.arrayBuffer());
+      if (bytes.length > maxUploadBytes) return c.json({ error: "too large" }, 413);
+      return c.json(await vault.writeFile(q.data.path, bytes, q.data.base_hash || null));
     }),
   );
 

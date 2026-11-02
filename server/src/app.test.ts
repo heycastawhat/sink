@@ -13,7 +13,7 @@ import { pageText } from "./html";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
-import { Vault, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery, firstImage } from "./notes";
+import { Vault, sha256, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery, firstImage } from "./notes";
 import { localIso, localTime, utcOffset } from "./time";
 import { editTodo, nextDate, nextOccurrence, parseQuick, parseTodos, setDone, setStatus, todoLine } from "./todos";
 
@@ -1402,5 +1402,173 @@ describe("accounts", () => {
     expect(((await (await get(other, "/api/notes/file?path=Shared.md")).json()) as any).content).toContain("edited by a visitor");
     expect(existsSync(join(setup.vaultDir, "Shared.md"))).toBe(false);
     expect(((await (await get(other, "/api/notes/share?path=Shared.md")).json()) as any).edited_by).toBe("Visitor");
+  });
+});
+
+describe("obsidian sync support", () => {
+  const send = (token: string, method: string, path: string, body?: unknown) =>
+    setup.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const putFile = (token: string, path: string, bytes: Uint8Array | string, baseHash?: string) =>
+    setup.app.request(`/api/notes/attachment?path=${encodeURIComponent(path)}${baseHash ? `&base_hash=${baseHash}` : ""}`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${token}` },
+      body: bytes,
+    });
+  const listed = async (token: string) => ((await (await get(token, "/api/notes/attachments")).json()) as any).items;
+
+  test("obsidian sign-in hands back to the plugin and needs the PKCE verifier", async () => {
+    expect((await setup.app.request("/api/auth/oidc/start?client=obsidian")).status).toBe(400);
+
+    const verifier = "o".repeat(64);
+    const { callback } = await signIn(`client=obsidian&challenge=${s256(verifier)}`);
+    const location = new URL(callback.headers.get("location")!);
+    expect(location.protocol).toBe("obsidian:");
+    expect(location.host).toBe("sink-auth");
+    expect(callback.headers.get("set-cookie")).toBeNull();
+    const code = location.searchParams.get("code")!;
+
+    const exchange = (v: string) =>
+      setup.app.request("/api/auth/oidc/exchange", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code, verifier: v }),
+      });
+    expect((await exchange("w".repeat(64))).status).toBe(400);
+    expect((await exchange(verifier)).status).toBe(400);
+
+    const again = await signIn(`client=obsidian&challenge=${s256(verifier)}`);
+    const code2 = new URL(again.callback.headers.get("location")!).searchParams.get("code")!;
+    const res = await setup.app.request("/api/auth/oidc/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: code2, verifier }),
+    });
+    const { token } = (await res.json()) as { token: string };
+    const [row] = setup.auth.listTokens("abc123") as { name: string; scope: string }[];
+    expect([row!.name, row!.scope]).toEqual(["Obsidian", "full"]);
+    // A full token: the things an assistant's can't do.
+    expect((await send(token, "DELETE", "/api/notes/trash?all=true")).status).toBe(200);
+  });
+
+  test("the change stream can be read by Obsidian with a bearer header, and by no other origin", async () => {
+    const ok = await setup.app.request("/api/events", {
+      method: "OPTIONS",
+      headers: { origin: "app://obsidian.md", "access-control-request-method": "GET", "access-control-request-headers": "authorization" },
+    });
+    expect(ok.headers.get("access-control-allow-origin")).toBe("app://obsidian.md");
+    expect(ok.headers.get("access-control-allow-headers")).toContain("authorization");
+    expect(ok.headers.get("access-control-allow-credentials")).toBeNull();
+    const evil = await setup.app.request("/api/events", { method: "OPTIONS", headers: { origin: "https://evil.example", "access-control-request-method": "GET" } });
+    expect(evil.headers.get("access-control-allow-origin")).toBeNull();
+    // Other routes stay same-origin only.
+    const other = await setup.app.request("/api/notes", { method: "OPTIONS", headers: { origin: "app://obsidian.md", "access-control-request-method": "GET" } });
+    expect(other.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  test("a brief note list is just what a sync client compares", async () => {
+    const token = await login();
+    const made = (await (await send(token, "POST", "/api/notes", { title: "A", content: "# A\nbody" })).json()) as any;
+    const brief = (await (await get(token, "/api/notes?brief=true")).json()) as any;
+    expect(brief).toEqual({ notes: [{ path: "A.md", mtime: made.mtime, size: made.size, hash: sha256("# A\nbody") }] });
+  });
+
+  test("attachments are listed with a hash, and only the ones that are files you'd sync", async () => {
+    const token = await login();
+    writeFileSync(join(setup.vaultDir, "Note.md"), "# n");
+    mkdirSync(join(setup.vaultDir, "pics/deep"), { recursive: true });
+    mkdirSync(join(setup.vaultDir, ".obsidian"));
+    writeFileSync(join(setup.vaultDir, "pics/deep/a.png"), png);
+    writeFileSync(join(setup.vaultDir, "doc.pdf"), "pdf");
+    writeFileSync(join(setup.vaultDir, ".obsidian/app.json"), "{}");
+    writeFileSync(join(setup.vaultDir, "bad:name.png"), "x");
+
+    const items = await listed(token);
+    expect(items.map((i: any) => i.path).sort()).toEqual(["doc.pdf", "pics/deep/a.png"]);
+    const a = items.find((i: any) => i.path === "pics/deep/a.png");
+    expect(a).toMatchObject({ size: png.length, hash: sha256(png) });
+    expect(typeof a.mtime).toBe("number");
+
+    // An edit made outside Sink shows as a new hash (utimes: the cache goes by size and mtime).
+    writeFileSync(join(setup.vaultDir, "doc.pdf"), "pdf, edited");
+    utimesSync(join(setup.vaultDir, "doc.pdf"), new Date(), new Date(Date.now() + 5000));
+    expect((await listed(token)).find((i: any) => i.path === "doc.pdf").hash).toBe(sha256("pdf, edited"));
+    // The other account doesn't see them.
+    expect(await listed(setup.auth.issueToken("test", "someone-else"))).toEqual([]);
+  });
+
+  test("a file can be saved to a path with a base hash, like a note", async () => {
+    const token = await login();
+    const created = await putFile(token, "pics/new.png", png);
+    expect(created.status).toBe(200);
+    expect(await created.json()).toMatchObject({ path: "pics/new.png", size: png.length, hash: sha256(png) });
+    expect(readFileSync(join(setup.vaultDir, "pics/new.png"))).toEqual(Buffer.from(png));
+
+    // Creating needs the path to be free; the answer says what's there.
+    expect((await putFile(token, "pics/new.png", "other")).status).toBe(409);
+
+    const next = new Uint8Array([...png, 0]);
+    const updated = await putFile(token, "pics/new.png", next, sha256(png));
+    expect(await updated.json()).toMatchObject({ hash: sha256(next) });
+    expect(readFileSync(join(setup.vaultDir, "pics/new.png"))).toEqual(Buffer.from(next));
+
+    const stale = await putFile(token, "pics/new.png", "mine", sha256(png));
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as any).current).toMatchObject({ path: "pics/new.png", hash: sha256(next), size: next.length });
+    expect(readFileSync(join(setup.vaultDir, "pics/new.png"))).toEqual(Buffer.from(next));
+
+    // Gone meanwhile: the base hash can't match a file that isn't there.
+    rmSync(join(setup.vaultDir, "pics/new.png"));
+    expect((await putFile(token, "pics/new.png", "mine", sha256(next))).status).toBe(409);
+    // No temp files left behind.
+    expect(readdirSync(join(setup.vaultDir, "pics"))).toEqual([]);
+  });
+
+  test("saving a file refuses notes, hidden places and odd paths, and an assistant's token", async () => {
+    const token = await login();
+    for (const path of ["x.md", "../out.png", ".obsidian/a.png", "a/.b/c.png", "a:b.png"]) {
+      expect((await putFile(token, path, "x")).status).toBe(400);
+    }
+    expect(readdirSync(setup.vaultDir)).toEqual([]);
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    expect((await putFile(mcp, "a.png", "x")).status).toBe(403);
+    expect((await get(mcp, "/api/notes/attachments")).status).toBe(200);
+    expect((await get(mcp, "/api/notes?brief=true")).status).toBe(200);
+  });
+
+  test("a file bigger than the upload limit is refused", async () => {
+    const token = await login();
+    const app = createApp({
+      db: setup.db,
+      vault: setup.vault,
+      users: setup.users,
+      auth: setup.auth,
+      oidc: new Oidc({ issuer: ISSUER, clientId: "c", clientSecret: "", allowedUsers: [], allowedGroups: [], allowAnyone: true }),
+      config: { secureCookies: false, maxUploadBytes: 4, webDir: undefined, publicUrls: [PUBLIC] },
+    });
+    const res = await app.request("/api/notes/attachment?path=big.bin", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: "12345" });
+    expect(res.status).toBe(413);
+    expect(existsSync(join(setup.vaultDir, "big.bin"))).toBe(false);
+  });
+
+  test("a synced file can be found by name, moved and trashed", async () => {
+    const token = await login();
+    await putFile(token, "pics/cat.png", png);
+    expect((await get(token, "/api/notes/attachment?name=cat.png")).status).toBe(200);
+
+    expect((await send(token, "POST", "/api/notes/move", { from: "pics/cat.png", to: "photos/kitten.png" })).status).toBe(200);
+    expect(readFileSync(join(setup.vaultDir, "photos/kitten.png"))).toEqual(Buffer.from(png));
+    expect((await get(token, "/api/notes/attachment?name=cat.png")).status).toBe(404);
+    expect((await get(token, "/api/notes/attachment?name=kitten.png")).status).toBe(200);
+    expect((await listed(token)).map((i: any) => i.path)).toEqual(["photos/kitten.png"]);
+
+    expect((await send(token, "DELETE", "/api/notes/file?path=photos/kitten.png")).status).toBe(200);
+    expect(existsSync(join(setup.vaultDir, "photos/kitten.png"))).toBe(false);
+    expect(readFileSync(join(setup.vaultDir, ".trash/photos/kitten.png"))).toEqual(Buffer.from(png));
+    expect((await get(token, "/api/notes/attachment?name=kitten.png")).status).toBe(404);
+    expect(await listed(token)).toEqual([]);
   });
 });

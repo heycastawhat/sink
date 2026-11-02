@@ -38,6 +38,8 @@ export type NoteMeta = {
   searchable: boolean;
 };
 export type Note = NoteMeta & { content: string };
+/** What a sync client compares a file by. */
+export type FileMeta = { path: string; mtime: number; size: number; hash: string };
 /** A note in `.trash/`: `path` is inside the trash, `original` is where a restore puts it back. */
 export type TrashedNote = {
   path: string;
@@ -55,7 +57,7 @@ export class VaultError extends Error {
   constructor(
     public status: 400 | 404 | 409 | 413 | 503,
     message: string,
-    public current?: Note,
+    public current?: Note | FileMeta,
   ) {
     super(message);
   }
@@ -280,6 +282,8 @@ export class Vault {
   private folders = new Set<string>();
   /** Non-note files by lowercase name, for resolving `![[image.png]]` embeds. */
   private files = new Map<string, string[]>();
+  /** Hash of each attachment as of its size and mtime, so listing them doesn't read them all every time. */
+  private hashes = new Map<string, FileMeta>();
   /** Emits "event" with a VaultEvent. */
   readonly events = new EventEmitter();
 
@@ -447,6 +451,48 @@ export class Vault {
       .all()
       .map(({ head, ...r }) => ({ ...meta(r), excerpt: cardText(r.excerpt, r.title), image: isBoard(r.path) ? null : firstImage(head) }));
     return { notes, folders: [...this.folders].sort((a, b) => a.localeCompare(b)) };
+  }
+
+  /** Every note's path, mtime, size and hash, without the excerpts `list` adds. */
+  manifest(): FileMeta[] {
+    return this.db.query<FileMeta, []>("SELECT path, mtime, size, hash FROM notes").all();
+  }
+
+  /** Every non-note file (images, PDFs, boards' drawings, anything else) with its hash. */
+  async attachments(): Promise<FileMeta[]> {
+    const out: FileMeta[] = [];
+    const hashes = new Map<string, FileMeta>();
+    const walk = async (rel: string) => {
+      for (const e of await readdir(rel ? join(this.dir, rel) : this.dir, { withFileTypes: true })) {
+        if (e.name.startsWith(".") || SKIP_DIRS.has(e.name)) continue;
+        const path = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) await walk(path);
+        else if (e.isFile() && !e.name.toLowerCase().endsWith(".md")) {
+          try {
+            cleanPath(path, "file");
+          } catch {
+            continue;
+          }
+          const abs = join(this.dir, path);
+          const st = await stat(abs);
+          const mtime = Math.floor(st.mtimeMs);
+          let m = this.hashes.get(path);
+          if (!m || m.size !== st.size || m.mtime !== mtime) m = { path, mtime, size: st.size, hash: sha256(await readFile(abs)) };
+          hashes.set(path, m);
+          out.push(m);
+        }
+      }
+    };
+    try {
+      await walk("");
+    } catch (err) {
+      fsError(err, "attachments");
+    }
+    this.hashes = hashes;
+    // The walk is fresher than the last scan: fetching by path shouldn't fall back to a same-named file elsewhere.
+    this.files = new Map();
+    for (const m of out) this.addFile(m.path);
+    return out;
   }
 
   /**
@@ -696,6 +742,7 @@ export class Vault {
       this.folders = new Set([...this.folders].map((f) => (f === from ? to : f.startsWith(from + "/") ? to + f.slice(from.length) : f)));
     }
     for (let d = dirname(to); d !== "."; d = dirname(d)) this.folders.add(d);
+    this.refile(from, to);
     for (const old of moved) this.emit({ type: "note.moved", path: isNote ? to : to + old.slice(from.length), from: old, source: "sink" });
     // Links to what moved follow it, as in Obsidian. A failure here leaves a link stale, never the move undone.
     for (const old of moved) {
@@ -762,6 +809,7 @@ export class Vault {
           .all(path.length + 1, path + "/")
           .map((r) => r.path);
     this.db.query("INSERT OR REPLACE INTO trash (path, original, at) VALUES (?, ?, ?)").run(dest.slice(TRASH.length + 1), path, now());
+    this.refile(path);
     for (const p of gone) this.emit({ type: "note.deleted", path: p, source: "sink" });
     if (isNote) this.unindex(path);
     else {
@@ -956,6 +1004,18 @@ export class Vault {
     if (row && !(await exists(join(this.dir, TRASH, row)))) this.db.query("DELETE FROM trash WHERE path = ?").run(row);
   }
 
+  /** Keeps the embed lookup in step with a file or folder that moved to `to`, or (with no `to`) went to the trash. */
+  private refile(from: string, to?: string) {
+    const files = new Map<string, string[]>();
+    for (const p of [...this.files.values()].flat()) {
+      const next = p === from || p.startsWith(from + "/") ? (to === undefined ? null : to + p.slice(from.length)) : p;
+      if (next === null) continue;
+      const key = basename(next).toLowerCase();
+      files.set(key, [...(files.get(key) ?? []), next]);
+    }
+    this.files = files;
+  }
+
   async createFolder(path: string): Promise<string> {
     path = cleanPath(path, "folder");
     try {
@@ -981,8 +1041,7 @@ export class Vault {
           if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
           throw err;
         }
-        const key = basename(path).toLowerCase();
-        this.files.set(key, [...(this.files.get(key) ?? []), path]);
+        this.addFile(path);
         this.folders.add(ATTACHMENTS);
         return path;
       }
@@ -990,6 +1049,46 @@ export class Vault {
       fsError(err, "attachment");
     }
     throw new VaultError(409, "too many attachments with that name");
+  }
+
+  private addFile(path: string) {
+    const key = basename(path).toLowerCase();
+    if (!this.files.get(key)?.includes(path)) this.files.set(key, [...(this.files.get(key) ?? []), path]);
+  }
+
+  /**
+   * Saves a file at `path` (not a note: those have `write`). Like a note save, `baseHash` is the hash the client last
+   * saw, null meaning "create, must not exist"; a mismatch is a conflict and says what's there now.
+   */
+  async writeFile(path: string, bytes: Uint8Array, baseHash: string | null): Promise<FileMeta> {
+    path = cleanPath(path, "file");
+    if (path.toLowerCase().endsWith(".md")) throw new VaultError(400, "notes are saved through the notes routes");
+    const abs = await this.abs(path);
+    try {
+      const current = await readFile(abs).catch((err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") return null;
+        throw err;
+      });
+      if (current === null && baseHash !== null) throw new VaultError(409, "file was deleted");
+      if (current !== null) {
+        if (baseHash === null) throw new VaultError(409, "file already exists");
+        const hash = sha256(current);
+        const st = await stat(abs);
+        const here = { path, mtime: Math.floor(st.mtimeMs), size: st.size, hash };
+        if (hash !== baseHash) throw new VaultError(409, "file changed since it was read", here);
+        if (Buffer.compare(current, bytes) === 0) return here;
+      }
+      await mkdir(dirname(abs), { recursive: true });
+      await atomicWrite(abs, bytes);
+      const st = await stat(abs);
+      const m = { path, mtime: Math.floor(st.mtimeMs), size: st.size, hash: sha256(bytes) };
+      this.hashes.set(path, m);
+      this.addFile(path);
+      for (let d = dirname(path); d !== "."; d = dirname(d)) this.folders.add(d);
+      return m;
+    } catch (err) {
+      fsError(err, "file");
+    }
   }
 
   /**
@@ -1062,7 +1161,7 @@ const exists = (abs: string) =>
   );
 
 /** Temp file beside the target, then rename: a crash or NAS drop never leaves half a note. */
-async function atomicWrite(abs: string, content: string) {
+async function atomicWrite(abs: string, content: string | Uint8Array) {
   const tmp = join(dirname(abs), `.${basename(abs)}.${crypto.randomUUID().slice(0, 8)}.sink-tmp`);
   try {
     await writeFile(tmp, content, "utf8");

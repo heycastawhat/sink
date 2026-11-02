@@ -139,7 +139,7 @@ export function publicShareRoutes(spaces: () => Space[]) {
     } catch (err) {
       if (!(err instanceof VaultError)) throw err;
       // The current text, without its frontmatter, so the editor can catch up.
-      const current = err.current && { content: splitFrontmatter(err.current.content).body, hash: err.current.hash };
+      const current = err.current && "content" in err.current && { content: splitFrontmatter(err.current.content).body, hash: err.current.hash };
       return c.json({ error: err.message, current }, err.status);
     }
   });

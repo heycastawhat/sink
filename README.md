@@ -22,6 +22,7 @@ app, and an MCP server so AI assistants can read and write your notes.
   start dates (`🛫`) keep a todo out of the way until then, and the Todos tab counts what's overdue or due today.
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
+- **Obsidian plugin:** keeps a local Obsidian vault (desktop or mobile) in sync with Sink over the internet.
 - **AI assistants:** connect Claude, ChatGPT or Poke as a custom connector (MCP) to search, read and write notes.
 - **Email in (optional):** forward an email and it becomes a note, or `you+todo@` makes it a todo.
 - **Public page:** pick a name in Settings, then Share → "Show on my public page" lists a note at
@@ -115,6 +116,19 @@ Obsidian ignores.
 If two apps edit the same note at once, Sink never overwrites: the other version is kept as a
 "(conflict …)" copy next to it.
 
+### Obsidian sync plugin
+
+If your vault lives on a server (a NAS) and you want to use Obsidian on a laptop or phone away from home, the
+plugin in [`obsidian/`](obsidian/README.md) syncs a local vault with Sink over its API: notes, images and other
+files, both ways, on desktop and mobile. Install it by copying two files (see its README), then in
+Settings → Sink enter your server address and press Sign in; the browser signs you in and hands back to Obsidian.
+
+- Changes sync as you make them and as they happen on the server; edits made offline go up when you're back.
+- If a note changed on both sides, you get both: the server's version keeps the name and yours is saved as
+  `Note (conflict 2026-11-02).md`. Nothing is overwritten.
+- Renames move the note on the server (links follow), and deletes go to Sink's trash, or your vault's trash.
+- It syncs the account you sign in as, and never touches `.obsidian/`, `.trash/` or other hidden folders.
+
 ## AI assistants (MCP)
 
 In Sink, open **Settings → AI assistants** for the connector URL (`https://<your Sink address>/mcp`). Add it as a
@@ -174,6 +188,7 @@ Obsidian or you put in `.trash/` shows on the Trash page but is never removed au
 cd server && bun install && bun test          # API (Bun + Hono + SQLite)
 cd web && bun install && bun run dev           # web app (Vite), proxies /api to :8787
 cd android && ./gradlew assembleDebug          # Android app; run `bun run build` in web/ first
+cd obsidian && bun install && bun test && bun run build   # Obsidian plugin (tests run against ../server)
 ```
 
 See [PLAN.md](PLAN.md) for how it fits together.

@@ -1,0 +1,9 @@
+{
+  "id": "sink",
+  "name": "Sink",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Sync this vault with your Sink notes server.",
+  "author": "Sink",
+  "isDesktopOnly": false
+}
