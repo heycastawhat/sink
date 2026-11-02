@@ -214,15 +214,15 @@ private data class ShareJson(
 /** A note's share link (anyone can read it at /s/<id>, and edit it if [editable]); [editedBy] made the last edit through it. */
 data class ShareLink(val url: String, val editable: Boolean, val editedBy: String?, val editedAt: Long?)
 
-private fun Api.shareLink(body: String): ShareLink? =
+private fun Api.parseShare(body: String): ShareLink? =
     json.decodeFromString<ShareJson>(body).let { s -> s.id?.let { ShareLink(absolute("/s/$it"), s.editable, s.editedBy, s.editedAt) } }
 
 /** The note's share link, or null if it isn't shared. */
-suspend fun Api.shareLink(path: String): ShareLink? = call(authed(pathUrl("/api/notes/share", path)).build()) { shareLink(it) }
+suspend fun Api.shareLink(path: String): ShareLink? = call(authed(pathUrl("/api/notes/share", path)).build()) { parseShare(it) }
 
 /** Shares the note (or returns its existing link), letting the link edit or not. */
 suspend fun Api.share(path: String, editable: Boolean): ShareLink =
-    call(request("/api/notes/share").post(jsonBody(buildJsonObject { put("path", path); put("editable", editable) })).build()) { shareLink(it)!! }
+    call(request("/api/notes/share").post(jsonBody(buildJsonObject { put("path", path); put("editable", editable) })).build()) { parseShare(it)!! }
 
 /** Stops sharing the note: its link stops working. */
 suspend fun Api.unshare(path: String) {
