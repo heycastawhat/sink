@@ -44,8 +44,9 @@ export class Passkeys {
     return this.db.query<Invite, [number]>("SELECT * FROM invites WHERE expires_at > ? ORDER BY created_at").all(now());
   }
 
-  cancelInvite(id: string) {
-    this.db.query("DELETE FROM invites WHERE id = ?").run(id);
+  /** Whether there was one to cancel. */
+  cancelInvite(id: string): boolean {
+    return this.db.query("DELETE FROM invites WHERE id = ?").run(id).changes > 0;
   }
 
   inviteFor(token: string): Invite | null {
@@ -155,8 +156,9 @@ export function passkeyRoutes(deps: {
     }).catch(() => null);
     if (!result?.verified) return c.json({ error: "couldn't check that passkey" }, 400);
     const { credential } = result.registrationInfo;
+    // Used up here, after the await: two registrations racing on one invite get one account between them.
+    if (!passkeys.cancelInvite(invite.id)) return c.json({ error: "this invite has expired or was already used" }, 400);
     const subject = `passkey:${newId()}`;
-    passkeys.cancelInvite(invite.id);
     passkeys.add({ id: credential.id, subject, public_key: credential.publicKey, counter: credential.counter, transports: credential.transports });
     users.allow(`sub:${subject}`);
     users.seen({ sub: subject, username: invite.name });

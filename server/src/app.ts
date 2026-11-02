@@ -125,6 +125,7 @@ export function createApp(deps: {
 
   // A plugin's client script, styles and assets. Signed in like the API: they're the owner's code, not public.
   app.get("/plugins/:id/*", requireAuth(auth, config.publicUrls), async (c) => {
+    if (!isOwner(c.get("subject"))) return c.json({ error: "not found" }, 404);
     const rel = decodeURIComponent(c.req.path.split("/").slice(3).join("/"));
     const file = plugins?.file(c.req.param("id"), rel);
     const type = file && pluginFileType(file);

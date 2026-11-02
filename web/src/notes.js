@@ -841,16 +841,21 @@ function applyLook() {
   for (const b of $('note-colors').querySelectorAll('[data-color]')) b.classList.toggle('on', (b.dataset.color || null) === screen.color);
 }
 
+let openSeq = 0;
 export async function openNote(path, { line } = {}) {
   if (screen.path === path && !$('note-screen').hidden) {
     if (line != null) screen.editor.goToLine(line);
     return;
   }
+  // A later open (a quick Back, a second click) wins; this one stops at its next await.
+  const seq = ++openSeq;
   await closeEditor();
+  if (seq !== openSeq) return;
   showScreen();
   setStatus('Opening…');
   try {
     const note = await api.note(path);
+    if (seq !== openSeq) return;
     Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
     opened.touch(note.path);
     let text = note.content;
@@ -860,8 +865,20 @@ export async function openNote(path, { line } = {}) {
       if (stash.base === note.hash) {
         text = stash.text;
         toast('Restored unsaved changes');
-      } else clearUnsaved(note.path);
-    }
+      } else {
+        // The note changed elsewhere since: keep them as a sibling note, like a conflict.
+        // If that fails too (still offline), the stash stays for next time and the note opens anyway.
+        try {
+          const copy = await api.createNote({ folder: folderOf(note.path), title: conflictTitle(note.path), content: stash.text });
+          clearUnsaved(note.path);
+          toast(`Changed somewhere else. Your unsaved version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
+          loadNotes();
+        } catch (err) {
+          if (err instanceof Unauthorized) throw err;
+        }
+      }
+    } else if (stash) clearUnsaved(note.path);
+    if (seq !== openSeq) return;
     if (isBoardPath(note.path)) await mountBoard(text);
     else mountEditor(text);
     applyLook();
@@ -874,6 +891,7 @@ export async function openNote(path, { line } = {}) {
     startPolling();
   } catch (err) {
     if (err instanceof Unauthorized) throw err;
+    if (seq !== openSeq) return;
     toast(err.status === 404 ? 'That note is gone' : `Can't open: ${err.message}`);
     hideScreen();
     navigate(state.folder ? `#/notes/${encodeURIComponent(state.folder)}` : '#/notes');
@@ -989,7 +1007,8 @@ export async function openSwitcher() {
 }
 
 export function newNote() {
-  openFromApp('#/new');
+  // The folder rides along so the draft (and the grid behind it) stay where you were.
+  openFromApp(state.folder ? `#/new?folder=${encodeURIComponent(state.folder)}` : '#/new');
 }
 
 /** Text the next draft starts with (New → From template). */
@@ -1096,6 +1115,11 @@ async function doSave() {
   }
 }
 
+function conflictTitle(path) {
+  const stamp = new Date().toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[/:,]/g, '-');
+  return `${fileName(path)} (conflict ${stamp})`;
+}
+
 /**
  * The file changed elsewhere since we loaded it. Their version wins the file; ours is kept as a sibling note,
  * so nothing is lost and nothing is merged wrongly.
@@ -1105,9 +1129,10 @@ async function resolveConflict(mine, current) {
     Object.assign(screen, { hash: current.hash, saved: mine });
     return setStatus('Saved');
   }
-  const stamp = new Date().toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[/:,]/g, '-');
   try {
-    const copy = await api.createNote({ folder: screen.folder, title: `${fileName(screen.path)} (conflict ${stamp})`, content: mine });
+    // What's in the editor now, including anything typed while the save was out.
+    mine = screen.editor.getText();
+    const copy = await api.createNote({ folder: screen.folder, title: conflictTitle(screen.path), content: mine });
     clearUnsaved(screen.path);
     if (current) {
       Object.assign(screen, { hash: current.hash, saved: current.content, pinned: current.pinned, color: current.color });
@@ -1131,9 +1156,11 @@ async function resolveConflict(mine, current) {
 /** The open note, fetched again: a newer version from elsewhere replaces it unless there are unsaved edits. */
 async function refreshOpenNote() {
   if (!screen.path || dirty() || screen.saving || document.hidden) return;
+  const { path, hash } = screen;
   try {
-    const note = await api.note(screen.path);
-    if (note.hash !== screen.hash && !dirty()) {
+    const note = await api.note(path);
+    // Only if nothing happened meanwhile: another note opened, a save landed, or typing started.
+    if (note.hash !== hash && screen.path === path && screen.hash === hash && !screen.saving && !dirty()) {
       Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
       screen.editor.setText(note.content);
       applyLook();
@@ -1165,6 +1192,13 @@ export function listenForChanges() {
       change = JSON.parse(e.data);
     } catch {
       return;
+    }
+    // Moved elsewhere (another tab, the phone, Obsidian): follow it, or the next save would hit the old path.
+    if (screen.path && change.type === 'note.moved' && change.from === screen.path) {
+      opened.rename(screen.path, change.path);
+      Object.assign(screen, { path: change.path, folder: folderOf(change.path) });
+      history.replaceState(history.state, '', noteHash(change.path));
+      applyLook();
     }
     if (screen.path && (change.path === screen.path || change.from === screen.path)) refreshOpenNote();
     // A burst of autosaves is one refresh.
@@ -1222,16 +1256,25 @@ async function setMeta(changes) {
     await save();
     if (!screen.path) return;
   }
-  try {
+  // Hold autosave until the new hash is in, or a save with the old one would be a conflict.
+  clearTimeout(screen.timer);
+  const run = (async () => {
     const meta = await api.noteMeta(screen.path, changes);
     const note = await api.note(meta.path);
+    // Typed meanwhile: keep that body under the server's new frontmatter, so the next save doesn't undo the change.
+    const text = dirty() ? frontmatterOf(note.content) + bodyOf(screen.editor.getText()) : note.content;
     Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
-    if (!dirty()) screen.editor.setText(note.content);
+    if (text !== screen.editor.getText()) screen.editor.setText(text);
     applyLook();
-  } catch (err) {
-    toast(err.message);
-  }
+  })();
+  screen.saving = run.catch((err) => toast(err.message)).finally(() => (screen.saving = null));
+  await screen.saving;
+  if (dirty()) save();
 }
+
+const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/;
+const frontmatterOf = (text) => FRONTMATTER.exec(text)?.[0] ?? '';
+const bodyOf = (text) => text.slice(frontmatterOf(text).length);
 
 function wireScreen() {
   const back = () => {

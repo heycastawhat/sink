@@ -1,6 +1,6 @@
 import { ApiError, AuthError, Conflict, OfflineError, type SinkApi } from "./api";
 import { sha256, type Bytes } from "./hash";
-import { conflictPath, isConflictCopy, isNote } from "./paths";
+import { conflictPath, isConflictCopy, isNote, syncable } from "./paths";
 import { massDeletes, plan, type Hashes } from "./plan";
 
 export type LocalFile = { path: string; mtime: number; size: number };
@@ -109,7 +109,8 @@ export class SyncEngine {
 
   private async remote(): Promise<Map<string, string>> {
     const [notes, files] = await Promise.all([this.api.notes(), this.api.files()]);
-    return new Map([...notes, ...files].map((f) => [f.path, f.hash]));
+    // A name the server lists but won't serve (put there by another sync tool) would fail on every pull.
+    return new Map([...notes, ...files].filter((f) => syncable(f.path)).map((f) => [f.path, f.hash]));
   }
 
   private async hashes(files: LocalFile[]): Promise<Map<string, string>> {

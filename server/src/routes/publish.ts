@@ -18,7 +18,8 @@ export function publishRoutes(users: Users) {
     if (c.get("scope") !== "full") return c.json({ error: "not allowed with this token" }, 403);
     const body = handleBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "use lower-case letters, numbers and dashes" }, 400);
-    if (!users.setHandle(c.get("subject"), body.data.handle)) return c.json({ error: "someone else has that name" }, 409);
+    // "owner" is the route the bare /public page asks, so no account can have it.
+    if (body.data.handle === "owner" || !users.setHandle(c.get("subject"), body.data.handle)) return c.json({ error: "someone else has that name" }, 409);
     return c.json({ handle: body.data.handle });
   });
   return app;

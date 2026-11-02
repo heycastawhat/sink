@@ -637,9 +637,12 @@ export class Vault {
     return this.db.query<Row, [string]>("SELECT path, title, tags, mtime, size, hash, pinned, color, publish, searchable FROM notes WHERE path = ?").get(path);
   }
 
-  /** Finds an attachment by vault path or, for `![[name.png]]`, by file name (attachments/ first). */
-  resolveFile(ref: string): string | null {
-    const direct = ref.includes("/") ? ref : `${ATTACHMENTS}/${ref}`;
+  /**
+   * Finds an attachment by vault path or, for `![[name.png]]`, by file name (attachments/ first). `exact`: `ref` is a
+   * vault path, and the file at it wins even at the top level (a sync client asking for `diagram.png` means that one).
+   */
+  resolveFile(ref: string, { exact = false } = {}): string | null {
+    const direct = ref.includes("/") || exact ? ref : `${ATTACHMENTS}/${ref}`;
     try {
       const path = cleanPath(direct, "file");
       if (this.files.get(basename(path).toLowerCase())?.includes(path)) return path;
@@ -649,12 +652,33 @@ export class Vault {
 
   // ---- writing
 
+  private locks = new Map<string, Promise<unknown>>();
+  /**
+   * One write at a time per path: the hash check and the rename are separate awaits, so two saves on the same base
+   * could otherwise both pass the check and the first be lost. Lower-cased for case-insensitive shares.
+   */
+  private async locked<T>(path: string, fn: () => Promise<T>): Promise<T> {
+    const key = path.toLowerCase();
+    const run = (this.locks.get(key) ?? Promise.resolve()).then(fn, fn);
+    const tail = run.catch(() => {});
+    this.locks.set(key, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.locks.get(key) === tail) this.locks.delete(key);
+    }
+  }
+
   /**
    * Saves a note. `baseHash` is the hash the client last read: null means "create, must not exist";
    * a mismatch is a conflict and returns the file as it is now so the client can merge.
    */
   async write(path: string, content: string, baseHash: string | null, opts: { keepVersion?: boolean } = {}): Promise<NoteMeta> {
     path = cleanPath(path, "note");
+    return this.locked(path, () => this.writeNote(path, content, baseHash, opts));
+  }
+
+  private async writeNote(path: string, content: string, baseHash: string | null, opts: { keepVersion?: boolean }): Promise<NoteMeta> {
     if (Buffer.byteLength(content) > MAX_NOTE_BYTES) throw new VaultError(413, "note too large");
     const abs = await this.abs(path);
     try {
@@ -728,16 +752,7 @@ export class Vault {
           .query<{ path: string }, [number, string]>("SELECT path FROM notes WHERE substr(path, 1, ?) = ?")
           .all(from.length + 1, from + "/")
           .map((r) => r.path);
-    this.db.transaction(() => {
-      // Version history and share links aren't tied to the notes table (they outlive a note's row), so they move here too.
-      for (const table of ["notes", "versions", "shares"]) {
-        if (isNote) this.db.query(`UPDATE ${table} SET path = ? WHERE path = ?`).run(to, from);
-        else
-          this.db
-            .query(`UPDATE ${table} SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?`)
-            .run(to, from.length + 1, from.length + 1, from + "/");
-      }
-    })();
+    this.db.transaction(() => this.repath(from, to, !isNote, ["notes", "versions", "shares"]))();
     if (!isNote) {
       this.folders = new Set([...this.folders].map((f) => (f === from ? to : f.startsWith(from + "/") ? to + f.slice(from.length) : f)));
     }
@@ -750,6 +765,26 @@ export class Vault {
         console.warn(`[notes] couldn't update links to ${old}: ${(err as Error).message}`),
       );
     }
+  }
+
+  /**
+   * Version history and share links aren't tied to the notes table (they outlive a note's row, in the trash too), so
+   * they follow a note or folder here. OR REPLACE: a stale share left at the destination gives way.
+   */
+  private repath(from: string, to: string, folder: boolean, tables = ["versions", "shares"]) {
+    for (const table of tables) {
+      if (!folder) this.db.query(`UPDATE OR REPLACE ${table} SET path = ? WHERE path = ?`).run(to, from);
+      else
+        this.db
+          .query(`UPDATE OR REPLACE ${table} SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?`)
+          .run(to, from.length + 1, from.length + 1, from + "/");
+    }
+  }
+
+  /** History and share links of something deleted for good. */
+  private forget(path: string) {
+    for (const table of ["versions", "shares"])
+      this.db.query(`DELETE FROM ${table} WHERE path = ? OR substr(path, 1, ?) = ?`).run(path, path.length + 1, path + "/");
   }
 
   /**
@@ -809,6 +844,8 @@ export class Vault {
           .all(path.length + 1, path + "/")
           .map((r) => r.path);
     this.db.query("INSERT OR REPLACE INTO trash (path, original, at) VALUES (?, ?, ?)").run(dest.slice(TRASH.length + 1), path, now());
+    // Into the trash with it, so a new note at the old path doesn't inherit its share link or history.
+    this.repath(path, dest, !isNote);
     this.refile(path);
     for (const p of gone) this.emit({ type: "note.deleted", path: p, source: "sink" });
     if (isNote) this.unindex(path);
@@ -890,6 +927,7 @@ export class Vault {
       for (let n = 1; await exists(await this.abs(dest)); n++) dest = `${original} ${n}`;
       await mkdir(dirname(await this.abs(dest)), { recursive: true });
       await rename(src, await this.abs(dest));
+      this.repath(`${TRASH}/${rel}`, dest, true);
       await this.tidyTrash(dirname(rel), from?.row);
       // Index what came back, the way a scan would, but as Sink's own change.
       const walk = async (folder: string) => {
@@ -930,6 +968,7 @@ export class Vault {
       for (let n = 1; await exists(await this.abs(dest)); n++) dest = `${stem} ${n}${ext}`;
       await mkdir(dirname(await this.abs(dest)), { recursive: true });
       await rename(src, await this.abs(dest));
+      this.repath(`${TRASH}/${rel}`, dest, false);
       await this.tidyTrash(dirname(rel), from?.row);
       const content = await readFile(await this.abs(dest), "utf8");
       const st = await stat(await this.abs(dest));
@@ -951,6 +990,7 @@ export class Vault {
     } catch (err) {
       fsError(err, "note");
     }
+    this.forget(`${TRASH}/${rel}`);
     await this.tidyTrash(dirname(rel), trashOrigin(this.trashRows(), rel)?.row);
   }
 
@@ -963,15 +1003,16 @@ export class Vault {
       fsError(err, "trash");
     }
     this.db.query("DELETE FROM trash").run();
+    this.forget(TRASH);
   }
 
   /** Deletes what Sink trashed more than `days` ago. Things Obsidian or a person put in .trash/ are left alone. */
   async purgeTrash(days: number, at = now()): Promise<number> {
     if (days <= 0) return 0;
-    // History of notes that have been gone (not in the index) for as long as the trash keeps things.
+    // History of notes deleted outside Sink (gone from the index, not in the trash) for as long as the trash keeps things.
     this.db
-      .query("DELETE FROM versions WHERE path NOT IN (SELECT path FROM notes) AND at < ?")
-      .run(at - days * 24 * 60 * 60 * 1000);
+      .query("DELETE FROM versions WHERE path NOT IN (SELECT path FROM notes) AND substr(path, 1, ?) != ? AND at < ?")
+      .run(TRASH.length + 1, TRASH + "/", at - days * 24 * 60 * 60 * 1000);
     const old = this.db
       .query<{ path: string }, [number]>("SELECT path FROM trash WHERE at < ?")
       .all(at - days * 24 * 60 * 60 * 1000);
@@ -981,6 +1022,7 @@ export class Vault {
         const abs = await this.abs(`${TRASH}/${path}`);
         if (await exists(abs)) purged++;
         await rm(abs, { recursive: true, force: true });
+        this.forget(`${TRASH}/${path}`);
         await this.tidyTrash(dirname(path), path);
       } catch (err) {
         console.warn(`[notes] couldn't purge .trash/${path}: ${(err as Error).message}`);
@@ -1063,6 +1105,10 @@ export class Vault {
   async writeFile(path: string, bytes: Uint8Array, baseHash: string | null): Promise<FileMeta> {
     path = cleanPath(path, "file");
     if (path.toLowerCase().endsWith(".md")) throw new VaultError(400, "notes are saved through the notes routes");
+    return this.locked(path, () => this.writeFileNow(path, bytes, baseHash));
+  }
+
+  private async writeFileNow(path: string, bytes: Uint8Array, baseHash: string | null): Promise<FileMeta> {
     const abs = await this.abs(path);
     try {
       const current = await readFile(abs).catch((err: NodeJS.ErrnoException) => {
@@ -1144,11 +1190,9 @@ type TrashRow = { path: string; original: string; at: number };
 
 /** Where a note in the trash came from: its own row, or the row of the folder it was trashed with. */
 function trashOrigin(rows: TrashRow[], rel: string): { row: string; original: string; at: number } | null {
-  for (const r of rows) {
-    if (r.path === rel) return { row: r.path, original: r.original, at: r.at };
-    if (rel.startsWith(r.path + "/")) return { row: r.path, original: r.original + rel.slice(r.path.length), at: r.at };
-  }
-  return null;
+  // Its own row first, else the innermost folder: a note trashed later can land inside a folder trashed earlier.
+  const r = rows.find((r) => r.path === rel) ?? rows.filter((r) => rel.startsWith(r.path + "/")).sort((a, b) => b.path.length - a.path.length)[0];
+  return r ? { row: r.path, original: r.original + rel.slice(r.path.length), at: r.at } : null;
 }
 
 const exists = (abs: string) =>

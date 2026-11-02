@@ -21,7 +21,7 @@ const CONSENT_TTL_MS = 10 * 60 * 1000;
 const SCOPE = "sink";
 
 type Client = { id: string; name: string; redirect_uris: string; secret_hash: string | null };
-type Consent = { clientId: string; redirectUri: string; challenge: string; state?: string; created: number };
+type Consent = { clientId: string; redirectUri: string; challenge: string; state?: string; subject: string; created: number };
 type Code = { clientId: string; redirectUri: string; challenge: string; subject: string; created: number };
 
 const sha256 = (v: string) => new Bun.CryptoHasher("sha256").update(v).digest("hex");
@@ -185,13 +185,14 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
       return page("Can't connect", "<h1>Can't connect</h1><p>This app needs to use PKCE (S256) to connect to Sink.</p>", 400);
     }
 
-    if (!sessionSubject(c)) {
+    const subject = sessionSubject(c);
+    if (!subject) {
       const here = `/oauth/authorize?${new URLSearchParams(q)}`;
       return c.redirect(`/api/auth/oidc/start?client=web&next=${encodeURIComponent(here)}`, 302);
     }
 
     const id = random();
-    consents.set(id, { clientId: client.id, redirectUri, challenge: q.code_challenge, state: q.state, created: now() });
+    consents.set(id, { clientId: client.id, redirectUri, challenge: q.code_challenge, state: q.state, subject, created: now() });
     const host = new URL(redirectUri).host;
     return page(
       "Allow access",
@@ -217,6 +218,8 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
     if (!consent) return page("Expired", "<h1>That took too long</h1><p>Start connecting again from the app.</p>", 400);
     const subject = sessionSubject(c);
     if (!subject) return page("Signed out", "<h1>Signed out</h1><p>Sign in to Sink and connect again.</p>", 400);
+    // Only the person who was asked can answer: SameSite doesn't stop a sibling subdomain posting someone else's request id.
+    if (subject !== consent.subject) return page("Expired", "<h1>That took too long</h1><p>Start connecting again from the app.</p>", 400);
 
     const u = new URL(consent.redirectUri);
     if (consent.state) u.searchParams.set("state", consent.state);
