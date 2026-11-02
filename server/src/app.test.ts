@@ -8,6 +8,7 @@ import { Oidc } from "./oidc";
 import { createApp } from "./app";
 import { Backups } from "./backup";
 import { Users } from "./users";
+import { robotsFor } from "./routes/publish";
 import { pageText } from "./html";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
@@ -1328,6 +1329,57 @@ describe("accounts", () => {
     expect((await get(kim, "/api/notes")).status).toBe(401);
     expect((await get(owner, "/api/notes")).status).toBe(200);
     expect((await signIn()).callback.status).toBe(403);
+  });
+
+  test("public pages show only published notes, each account under its own name", async () => {
+    const owner = await login();
+    const other = setup.auth.issueToken("test", "someone-else");
+    await get(owner, "/api/notes");
+    await send(owner, "POST", "/api/notes", { title: "Hello", content: "# Hello\n\n![[pic.png]] and [[Secret]]" });
+    await send(owner, "POST", "/api/notes", { title: "Secret", content: "# Secret\n\nnot for you" });
+    const form = new FormData();
+    form.append("file", new File([png], "pic.png", { type: "image/png" }));
+    await setup.app.request("/api/notes/attachments", { method: "POST", headers: { authorization: `Bearer ${owner}` }, body: form });
+
+    expect((await setup.app.request("/api/public/pages/josh")).status).toBe(404);
+    expect((await send(owner, "PUT", "/api/publish", { handle: "Not OK!" })).status).toBe(400);
+    expect((await send(owner, "PUT", "/api/publish", { handle: "Josh" })).status).toBe(200);
+    expect((await send(other, "PUT", "/api/publish", { handle: "josh" })).status).toBe(409);
+    expect(((await (await setup.app.request("/api/public/pages/owner")).json()) as any).handle).toBe("josh");
+
+    // Nothing published yet: an empty page, and no way to read a note by guessing its path.
+    expect(((await (await setup.app.request("/api/public/pages/josh")).json()) as any).notes).toEqual([]);
+    expect((await setup.app.request("/api/public/pages/josh/note?path=Secret.md")).status).toBe(404);
+
+    const meta = (await (await send(owner, "PATCH", "/api/notes/meta?path=Hello.md", { publish: true })).json()) as any;
+    expect(meta.publish).toBe(true);
+    expect(readFileSync(join(setup.vaultDir, "Hello.md"), "utf8")).toStartWith("---\npublish: true\n---\n");
+    const page = (await (await setup.app.request("/api/public/pages/josh")).json()) as any;
+    expect(page.notes.map((n: any) => n.title)).toEqual(["Hello"]);
+    const note = (await (await setup.app.request("/api/public/pages/josh/note?path=Hello.md")).json()) as any;
+    expect(note.content).not.toContain("publish");
+    expect(note.content).toContain("[[Secret]]");
+    expect((await setup.app.request("/api/public/pages/josh/note?path=Secret.md")).status).toBe(404);
+    expect((await setup.app.request("/api/public/pages/josh/attachment?path=Hello.md&name=pic.png")).status).toBe(200);
+    expect((await setup.app.request("/api/public/pages/josh/attachment?path=Secret.md&name=pic.png")).status).toBe(404);
+
+    // Search engines: never the list itself, and a note only once it's marked searchable.
+    expect(await robotsFor(setup.users, "/public/josh")).toBe("noindex, follow");
+    expect(await robotsFor(setup.users, "/public/josh/Hello")).toBe("noindex, nofollow");
+    await send(owner, "PATCH", "/api/notes/meta?path=Hello.md", { searchable: true });
+    expect(await robotsFor(setup.users, "/public/josh/Hello")).toBeNull();
+    expect(await robotsFor(setup.users, "/public/josh/Secret")).toBe("noindex, nofollow");
+    expect(await robotsFor(setup.users, "/public/nobody/Hello")).toBe("noindex, nofollow");
+    expect(await robotsFor(setup.users, "/public/josh/%E0%A4%A")).toBe("noindex, nofollow");
+
+    // Another account's page is its own.
+    await send(other, "PUT", "/api/publish", { handle: "kim" });
+    expect(((await (await setup.app.request("/api/public/pages/kim")).json()) as any).notes).toEqual([]);
+    expect((await setup.app.request("/api/public/pages/kim/note?path=Hello.md")).status).toBe(404);
+
+    // Unpublishing takes it off.
+    await send(owner, "PATCH", "/api/notes/meta?path=Hello.md", { publish: false });
+    expect((await setup.app.request("/api/public/pages/josh/note?path=Hello.md")).status).toBe(404);
   });
 
   test("share links find the right account's note", async () => {

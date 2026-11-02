@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Notes</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wdth,wght@8..144,25..151,100..1000&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/embed.css" />
+    <link rel="stylesheet" href="/src/share.css" />
+    <link rel="stylesheet" href="/src/public.css" />
+  </head>
+  <body>
+    <main class="share">
+      <nav class="public-head"><a id="public-home" href="/public"></a></nav>
+      <ul id="public-list" class="public-list" hidden></ul>
+      <p id="public-empty" class="share-missing" hidden>Nothing here yet.</p>
+      <div id="editor" class="note-editor"></div>
+      <p id="share-missing" class="share-missing" hidden>There's no public page or note here.</p>
+    </main>
+    <footer class="share-foot"><img src="/favicon.svg" alt="" width="18" height="18" /> Published with <a href="https://github.com/heycastawhat/sink" rel="noopener">Sink</a></footer>
+    <script type="module" src="/src/public.js"></script>
+  </body>
+</html>

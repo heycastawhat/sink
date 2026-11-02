@@ -32,6 +32,10 @@ export type NoteMeta = {
   hash: string;
   pinned: boolean;
   color: string | null;
+  // On the account's public page (`publish: true`, Obsidian Publish's property), and open to search engines there
+  // (`searchable: true`; off unless asked for).
+  publish: boolean;
+  searchable: boolean;
 };
 export type Note = NoteMeta & { content: string };
 /** A note in `.trash/`: `path` is inside the trash, `original` is where a restore puts it back. */
@@ -114,9 +118,16 @@ export function splitFrontmatter(content: string): { yaml: string | null; body: 
  * Just enough YAML for the keys Sink reads: `title: x`, `tags: [a, b]`, `tags: a, b`, and block lists.
  * Anything fancier is left alone (it's still in the file; Sink only indexes it).
  */
-export function readFrontmatter(yaml: string): { title?: string; tags: string[]; pinned?: boolean; color?: string } {
+export function readFrontmatter(yaml: string): {
+  title?: string;
+  tags: string[];
+  pinned?: boolean;
+  color?: string;
+  publish?: boolean;
+  searchable?: boolean;
+} {
   const unquote = (s: string) => s.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
-  const out: { title?: string; tags: string[]; pinned?: boolean; color?: string } = { tags: [] };
+  const out: ReturnType<typeof readFrontmatter> = { tags: [] };
   const lines = yaml.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const m = /^(\w[\w-]*):\s*(.*)$/.exec(lines[i]!);
@@ -124,6 +135,8 @@ export function readFrontmatter(yaml: string): { title?: string; tags: string[];
     const [, key, value] = m;
     if (key === "title" && value) out.title = unquote(value);
     if (key === "pinned") out.pinned = /^(true|yes|1)$/i.test(unquote(value!));
+    if (key === "publish") out.publish = /^(true|yes|1)$/i.test(unquote(value!));
+    if (key === "searchable") out.searchable = /^(true|yes|1)$/i.test(unquote(value!));
     if (key === "color" && COLORS.includes(unquote(value!).toLowerCase())) out.color = unquote(value!).toLowerCase();
     if (key === "tags" || key === "tag") {
       if (value) {
@@ -168,7 +181,7 @@ export const isBoard = (path: string) => path.toLowerCase().endsWith(".excalidra
 export function parseNote(
   path: string,
   content: string,
-): { title: string; tags: string[]; body: string; pinned: boolean; color: string | null } {
+): { title: string; tags: string[]; body: string; pinned: boolean; color: string | null; publish: boolean; searchable: boolean } {
   const { yaml, body: full } = splitFrontmatter(content);
   // `%% … %%` is an Obsidian comment; Excalidraw boards keep their whole drawing JSON in one.
   // The Excalidraw plugin's "==⚠ Switch to EXCALIDRAW VIEW … ==" banner isn't content either.
@@ -178,10 +191,10 @@ export function parseNote(
   const title = heading || fm.title || basename(path).replace(/(\.excalidraw)?\.md$/i, "");
   const seen = new Map<string, string>();
   for (const t of [...fm.tags, ...inlineTags(body)]) if (!seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t);
-  return { title, tags: [...seen.values()], body, pinned: fm.pinned ?? false, color: fm.color ?? null };
+  return { title, tags: [...seen.values()], body, pinned: fm.pinned ?? false, color: fm.color ?? null, publish: fm.publish ?? false, searchable: fm.searchable ?? false };
 }
 
-type Row = { path: string; title: string; tags: string; mtime: number; size: number; hash: string; pinned: number; color: string | null };
+type Row = { path: string; title: string; tags: string; mtime: number; size: number; hash: string; pinned: number; color: string | null; publish: number; searchable: number };
 
 /** Card preview: the body without the heading that became the title, trimmed to whole lines. */
 /**
@@ -308,15 +321,15 @@ export class Vault {
   // ---- index
 
   private index(path: string, content: string, size: number, mtime: number, hash = sha256(content)): NoteMeta {
-    const { title, tags, body, pinned, color } = parseNote(path, content);
+    const { title, tags, body, pinned, color, publish, searchable } = parseNote(path, content);
     this.db
       .query(
-        `INSERT INTO notes (path, title, tags, body, hash, size, mtime, indexed_at, pinned, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO notes (path, title, tags, body, hash, size, mtime, indexed_at, pinned, color, publish, searchable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET title = excluded.title, tags = excluded.tags, body = excluded.body,
            hash = excluded.hash, size = excluded.size, mtime = excluded.mtime, indexed_at = excluded.indexed_at,
-           pinned = excluded.pinned, color = excluded.color`,
+           pinned = excluded.pinned, color = excluded.color, publish = excluded.publish, searchable = excluded.searchable`,
       )
-      .run(path, title, JSON.stringify(tags), body, hash, size, mtime, now(), pinned ? 1 : 0, color);
+      .run(path, title, JSON.stringify(tags), body, hash, size, mtime, now(), pinned ? 1 : 0, color, publish ? 1 : 0, searchable ? 1 : 0);
     this.db.query("DELETE FROM todos WHERE path = ?").run(path);
     if (!isBoard(path)) {
       const insert = this.db.query(
@@ -329,7 +342,7 @@ export class Vault {
     const link = this.db.query("INSERT INTO links (src, target, line) VALUES (?, ?, ?)");
     for (const l of parseLinks(content)) link.run(path, l.target, l.line);
     for (let d = dirname(path); d !== "."; d = dirname(d)) this.folders.add(d);
-    return { path, title, tags, mtime, size, hash, pinned, color };
+    return { path, title, tags, mtime, size, hash, pinned, color, publish, searchable };
   }
 
   private unindex(path: string) {
@@ -428,7 +441,7 @@ export class Vault {
   list(): { notes: (NoteMeta & { excerpt: string; image: string | null })[]; folders: string[] } {
     const notes = this.db
       .query<Row & { excerpt: string; head: string }, []>(
-        `SELECT path, title, tags, mtime, size, hash, pinned, color, substr(body, 1, 600) AS excerpt, substr(body, 1, 4000) AS head
+        `SELECT path, title, tags, mtime, size, hash, pinned, color, publish, searchable, substr(body, 1, 600) AS excerpt, substr(body, 1, 4000) AS head
          FROM notes ORDER BY pinned DESC, mtime DESC`,
       )
       .all()
@@ -470,7 +483,7 @@ export class Vault {
   search(fts: string, limit: number) {
     return this.db
       .query<Row & { snippet: string }, [string, number]>(
-        `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color,
+        `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color, n.publish, n.searchable,
            snippet(notes_fts, 2, '[', ']', '…', 16) AS snippet
          FROM notes_fts JOIN notes n ON n.rowid = notes_fts.rowid
          WHERE notes_fts MATCH ? ORDER BY bm25(notes_fts, 2.0, 5.0, 1.0, 3.0) LIMIT ?`,
@@ -480,12 +493,14 @@ export class Vault {
   }
 
   /** Pin or colour a note by rewriting its frontmatter; same conflict rules as a save. */
-  async setMeta(path: string, changes: { pinned?: boolean; color?: string | null }): Promise<NoteMeta> {
+  async setMeta(path: string, changes: { pinned?: boolean; color?: string | null; publish?: boolean; searchable?: boolean }): Promise<NoteMeta> {
     for (let attempt = 0; ; attempt++) {
       const note = await this.read(path);
       let content = note.content;
       if (changes.pinned !== undefined) content = setFrontmatterKey(content, "pinned", changes.pinned ? "true" : null);
       if (changes.color !== undefined) content = setFrontmatterKey(content, "color", changes.color);
+      if (changes.publish !== undefined) content = setFrontmatterKey(content, "publish", changes.publish ? "true" : null);
+      if (changes.searchable !== undefined) content = setFrontmatterKey(content, "searchable", changes.searchable ? "true" : null);
       try {
         return await this.write(note.path, content, note.hash);
       } catch (err) {
@@ -573,7 +588,7 @@ export class Vault {
   }
 
   private row(path: string) {
-    return this.db.query<Row, [string]>("SELECT path, title, tags, mtime, size, hash, pinned, color FROM notes WHERE path = ?").get(path);
+    return this.db.query<Row, [string]>("SELECT path, title, tags, mtime, size, hash, pinned, color, publish, searchable FROM notes WHERE path = ?").get(path);
   }
 
   /** Finds an attachment by vault path or, for `![[name.png]]`, by file name (attachments/ first). */
@@ -1023,6 +1038,8 @@ const meta = ({ excerpt: _, snippet: __, ...r }: Row & { excerpt?: string; snipp
   ...r,
   tags: JSON.parse(r.tags) as string[],
   pinned: r.pinned === 1,
+  publish: r.publish === 1,
+  searchable: r.searchable === 1,
 });
 type TrashRow = { path: string; original: string; at: number };
 

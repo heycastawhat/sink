@@ -129,7 +129,7 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     run(c, async () => {
       const q = pathQuery.safeParse(c.req.query());
       const body = z
-        .object({ pinned: z.boolean().optional(), color: z.enum(COLORS as [string, ...string[]]).nullable().optional() })
+        .object({ pinned: z.boolean().optional(), publish: z.boolean().optional(), searchable: z.boolean().optional(), color: z.enum(COLORS as [string, ...string[]]).nullable().optional() })
         .safeParse(await c.req.json().catch(() => null));
       if (!q.success || !body.success) return c.json({ error: "invalid request" }, 400);
       return c.json(await vault.setMeta(q.data.path, body.data));

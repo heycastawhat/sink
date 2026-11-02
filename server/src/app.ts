@@ -8,6 +8,7 @@ import { noteRoutes } from "./routes/notes";
 import { publicShareRoutes, shareRoutes } from "./routes/share";
 import { eventRoutes } from "./routes/events";
 import { adminRoutes } from "./routes/admin";
+import { publicPageRoutes, publishRoutes, robotsFor } from "./routes/publish";
 import { todoRoutes } from "./todos";
 import type { Vault } from "./notes";
 import { pluginFileType, type PluginHost } from "./plugins";
@@ -102,6 +103,7 @@ export function createApp(deps: {
 
   const api = new Hono<AuthEnv>();
   api.use("*", requireAuth(auth, config.publicUrls));
+  if (users) api.route("/", publishRoutes(users));
   if (users && passkeys) api.route("/admin", adminRoutes(users, auth, oidc, passkeys, config.publicUrls));
   // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/. Plugins work on
   // the owner's vault, so only the owner gets them.
@@ -115,6 +117,7 @@ export function createApp(deps: {
   );
   // Shared notes, readable without signing in. Before the signed-in API, which would answer 401.
   app.route("/api/public", publicShareRoutes(() => users?.all() ?? [owner]));
+  if (users) app.route("/api/public/pages", publicPageRoutes(users));
   app.route("/api", api);
 
   // A plugin's client script, styles and assets. Signed in like the API: they're the owner's code, not public.
@@ -175,6 +178,14 @@ export function createApp(deps: {
       c.header("referrer-policy", "no-referrer");
     });
     app.get("/s/:id", serveStatic({ root: config.webDir, path: "share.html" }));
+    // Public pages: /public (the owner's), /public/<handle> and /public/<handle>/<note path>.
+    app.on("GET", ["/public", "/public/*"], async (c, next) => {
+      await next();
+      const robots = users ? await robotsFor(users, c.req.path) : "noindex";
+      if (robots) c.header("x-robots-tag", robots);
+    });
+    app.get("/public", serveStatic({ root: config.webDir, path: "public.html" }));
+    app.get("/public/*", serveStatic({ root: config.webDir, path: "public.html" }));
     app.use("/*", serveStatic({ root: config.webDir }));
     // SPA fallback.
     // `path` is joined to `root`; on its own it's read relative to the working directory, not webDir.

@@ -24,6 +24,10 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
 - **AI assistants:** connect Claude, ChatGPT or Poke as a custom connector (MCP) to search, read and write notes.
 - **Email in (optional):** forward an email and it becomes a note, or `you+todo@` makes it a todo.
+- **Public page:** pick a name in Settings, then Share → "Show on my public page" lists a note at
+  `/public/<name>` for anyone to read (it sets `publish: true`, as Obsidian Publish does). Bare `/public` is the
+  owner's page. Links between published notes work; nothing else in the vault is visible. Search engines are kept
+  out unless you turn on "Let search engines find it" for a note (`searchable: true`).
 - **Plugins:** diagrams (Mermaid), math (KaTeX), daily notes and webhooks built in; add your own code blocks, slash
   commands, routes, assistant tools and automations.
 

@@ -1,0 +1,56 @@
+/* A public page (/public/<handle>): the list of published notes, and each note in the share page's look. */
+.public-head {
+  padding: 0 24px 16px;
+}
+
+.public-head a {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.public-head a:hover {
+  color: var(--md-sys-color-primary);
+}
+
+.public-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 16px;
+}
+
+.public-list a {
+  display: block;
+  padding: 16px 12px;
+  border-radius: 16px;
+  color: var(--md-sys-color-on-surface);
+  text-decoration: none;
+}
+
+.public-list a:hover {
+  background: var(--md-sys-color-surface-container);
+}
+
+.public-list h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.public-list p {
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 14px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.public-list time {
+  display: block;
+  margin-top: 6px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+}

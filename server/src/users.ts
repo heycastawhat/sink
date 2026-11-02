@@ -12,6 +12,7 @@ export type Account = {
   subject: string;
   email: string | null;
   username: string | null;
+  handle: string | null;
   owner: boolean;
   created_at: number;
   seen_at: number | null;
@@ -56,6 +57,32 @@ export class Users {
       .query<Omit<Account, "owner"> & { dir: string }, []>("SELECT * FROM users ORDER BY created_at")
       .all()
       .map(({ dir, ...a }) => ({ ...a, owner: dir === "" }));
+  }
+
+  /** The account's public page name (/public/<handle>), if it has picked one. */
+  handleOf(subject: string): string | null {
+    return this.db.query<{ handle: string | null }, [string]>("SELECT handle FROM users WHERE subject = ?").get(subject)?.handle ?? null;
+  }
+
+  /** False if another account has it. */
+  setHandle(subject: string, handle: string | null): boolean {
+    this.ensure(subject);
+    try {
+      this.db.query("UPDATE users SET handle = ? WHERE subject = ?").run(handle, subject);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The space behind a public page, and whether it's the owner's. */
+  byHandle(handle: string): Space | null {
+    const user = this.db.query<User, [string]>("SELECT subject, dir FROM users WHERE handle = ?").get(handle);
+    return user ? this.for(user.subject) : null;
+  }
+
+  ownerHandle(): string | null {
+    return this.db.query<{ handle: string | null }, []>("SELECT handle FROM users WHERE dir = ''").get()?.handle ?? null;
   }
 
   /** Allowlist entries added in Settings (same forms as SINK_OIDC_ALLOWED_USERS). */

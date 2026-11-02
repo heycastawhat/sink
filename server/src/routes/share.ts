@@ -72,10 +72,23 @@ export function shareRoutes(db: Database, vault: Vault) {
  * embeds, nothing else from the vault. An editable share also takes new text, which replaces the body and keeps the
  * frontmatter as it is.
  */
+/** What a note embeds (![[name]] or ![](name)): all a public page may fetch besides the note itself. */
+export function embedsOf(content: string): Set<string> {
+  return new Set(
+    [...content.matchAll(/!\[\[([^\]|#]+)[^\]]*\]\]|!\[[^\]]*\]\(<?([^)>\s]+)>?\)/g)].map((m) => {
+      let ref = (m[1] ?? m[2] ?? "").trim();
+      try {
+        ref = decodeURIComponent(ref);
+      } catch {}
+      return ref.replace(/^(\.{1,2}\/)+/, "");
+    }),
+  );
+}
+
 export function publicShareRoutes(spaces: () => Space[]) {
   const app = new Hono();
   const allowed = rateLimit(120, 60_000);
-  app.use("*", async (c, next) => {
+  app.use("/share/*", async (c, next) => {
     if (!allowed(clientIp(c))) return c.json({ error: "slow down" }, 429);
     await next();
     c.header("x-robots-tag", "noindex, nofollow");
@@ -133,19 +146,9 @@ export function publicShareRoutes(spaces: () => Space[]) {
 
   app.get("/share/:id/attachment", async (c) => {
     const found = await shared(c.req.param("id"));
-    const note = found?.note;
     const name = c.req.query("name") ?? "";
-    // Only what this note embeds (![[name]] or ![](name)), so a share can't be used to fetch the rest of the vault.
-    const embeds = new Set(
-      [...note?.content.matchAll(/!\[\[([^\]|#]+)[^\]]*\]\]|!\[[^\]]*\]\(<?([^)>\s]+)>?\)/g) ?? []].map((m) => {
-        let ref = (m[1] ?? m[2] ?? "").trim();
-        try {
-          ref = decodeURIComponent(ref);
-        } catch {}
-        return ref.replace(/^(\.{1,2}\/)+/, "");
-      }),
-    );
-    if (!found || !name || !embeds.has(name)) return c.json({ error: "not found" }, 404);
+    // Only what this note embeds, so a share can't be used to fetch the rest of the vault.
+    if (!found || !name || !embedsOf(found.note.content).has(name)) return c.json({ error: "not found" }, 404);
     const path = found.vault.resolveFile(name);
     if (!path) return c.json({ error: "not found" }, 404);
     return attachmentResponse(found.vault, path);

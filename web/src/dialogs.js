@@ -169,9 +169,10 @@ export function editTodo({ text, due, time, dates }) {
 /**
  * Sharing one note: a link anyone can read, and edit if `editable`. `shared` is the current share
  * ({ url, editable, edited }) or null; `share(editable)` makes or updates one and resolves to it, `unshare()` stops it.
- * Resolves when closed.
+ * `published` is { on, searchable, url } for the account's public page (url null until it has a name);
+ * `publish({ on?, searchable? })` changes it and resolves to the same. Resolves when closed.
  */
-export function shareNote({ title, shared, share, unshare }) {
+export function shareNote({ title, shared, share, unshare, published, publish }) {
   return open(
     `<div class="sink-dialog-body share-dialog">
   <h2>Share “${esc(title)}”</h2>
@@ -185,6 +186,20 @@ export function shareNote({ title, shared, share, unshare }) {
       <div class="muted small share-edited"></div>
     </div>
     <m3e-switch id="share-editable"></m3e-switch>
+  </div>
+  <div class="setting-row">
+    <div class="grow">
+      <label class="setting-title" for="share-publish">Show on my public page</label>
+      <div class="muted small share-public"></div>
+    </div>
+    <m3e-switch id="share-publish"></m3e-switch>
+  </div>
+  <div class="setting-row">
+    <div class="grow">
+      <label class="setting-title" for="share-searchable">Let search engines find it</label>
+      <div class="muted small">Off: only people with the link or your page's address see it.</div>
+    </div>
+    <m3e-switch id="share-searchable"></m3e-switch>
   </div>
   <p class="dialog-error" hidden></p>
   <div class="dialog-actions">
@@ -237,6 +252,28 @@ export function shareNote({ title, shared, share, unshare }) {
           fail(err);
         }
       });
+      const pub = dlg.querySelector('#share-publish');
+      const searchable = dlg.querySelector('#share-searchable');
+      const showPublished = (p) => {
+        pub.checked = p.on;
+        pub.disabled = !p.url;
+        searchable.checked = p.searchable;
+        searchable.disabled = !p.on;
+        const note = dlg.querySelector('.share-public');
+        note.innerHTML = !p.url
+          ? 'Pick a name for your public page in Settings first.'
+          : p.on
+            ? `Listed at <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\//, ''))}</a> for anyone to read.`
+            : 'Lists it on your public page for anyone to read.';
+      };
+      showPublished(published);
+      for (const [el, key] of [[pub, 'on'], [searchable, 'searchable']])
+        el.addEventListener('change', () =>
+          publish({ [key]: el.checked }).then(showPublished, (err) => {
+            el.checked = !el.checked;
+            fail(err);
+          }),
+        );
       dlg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
     },
   );

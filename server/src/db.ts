@@ -378,6 +378,15 @@ export const migrations: string[] = [
   );
   CREATE TABLE invites (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
   `,
+  // Public pages (routes/publish.ts): notes with `publish: true`, at /public/<handle>; search engines only see the
+  // ones with `searchable: true`. mtime 0 re-reads every note.
+  `
+  ALTER TABLE notes ADD COLUMN publish INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE notes ADD COLUMN searchable INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE users ADD COLUMN handle TEXT;
+  CREATE UNIQUE INDEX users_handle ON users(handle);
+  UPDATE notes SET mtime = 0;
+  `,
 ];
 
 export function openDb(path: string): Database {

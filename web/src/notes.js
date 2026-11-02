@@ -1367,8 +1367,11 @@ function wireScreen() {
         edited: s.edited_by ? `Last edited through the link by ${s.edited_by}, ${relative(s.edited_at)}` : '',
       };
     let shared = null;
+    let published;
     try {
-      shared = view(await api.shareOf(path));
+      const [s, { handle }, note] = await Promise.all([api.shareOf(path), api.publishInfo(), api.note(path)]);
+      shared = view(s);
+      published = { on: note.publish, searchable: note.searchable, url: handle && `${location.origin}/public/${handle}/${path.replace(/\.md$/i, '').split('/').map(encodeURIComponent).join('/')}` };
     } catch (err) {
       return toast(err.message);
     }
@@ -1377,6 +1380,11 @@ function wireScreen() {
       shared,
       share: async (editable) => view(await api.share(path, editable)),
       unshare: () => api.unshare(path),
+      published,
+      publish: async (change) => {
+        await setMeta({ ...('on' in change && { publish: change.on }), ...('searchable' in change && { searchable: change.searchable }) });
+        return Object.assign(published, change);
+      },
     });
   });
 

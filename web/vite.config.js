@@ -13,6 +13,8 @@ export default defineConfig({
         editor: resolve(import.meta.dirname, 'editor.html'),
         // share.html is a shared note's read-only page (/s/<id>).
         share: resolve(import.meta.dirname, 'share.html'),
+        // public.html is an account's public page (/public/<handle>) and its published notes.
+        public: resolve(import.meta.dirname, 'public.html'),
       },
     },
   },

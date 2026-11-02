@@ -386,6 +386,19 @@ async function renderSettings() {
 </section>
 
 <section class="setting-card">
+  <h2>Public page</h2>
+  <p class="muted small">Notes you choose (Share → Show on my public page) are listed here for anyone to read. Nothing else is.</p>
+  <div class="setting-row">
+    <m3e-form-field variant="outlined" class="grow">
+      <label slot="label" for="public-handle">Name in the address</label>
+      <input id="public-handle" autocomplete="off" maxlength="30" placeholder="e.g. josh" />
+    </m3e-form-field>
+    <m3e-button id="public-save" variant="tonal">Save</m3e-button>
+  </div>
+  <div class="copy-row" id="public-link" hidden><code id="public-url"></code><m3e-icon-button id="public-open" aria-label="Open public page" title="Open">${ic('open_in_new')}</m3e-icon-button></div>
+</section>
+
+<section class="setting-card">
   <h2>AI assistants</h2>
   <p class="muted">Let Claude, ChatGPT, Poke or another assistant search and read your notes, write new ones and add todos.</p>
   <div class="setting-title">Connector URL</div>
@@ -465,6 +478,7 @@ async function renderSettings() {
 </section>`;
   renderTokens();
   renderPeople();
+  renderPublic();
   try {
     const { notes: all } = await api.notes();
     $('server-info').innerHTML = [
@@ -551,6 +565,17 @@ async function renderPeople() {
   } catch (err) {
     $('people-list').textContent = err.message;
     $('people').hidden = false;
+  }
+}
+
+async function renderPublic(handle) {
+  try {
+    if (handle === undefined) ({ handle } = await api.publishInfo());
+    $('public-handle').value = handle ?? '';
+    $('public-url').textContent = handle ? `${location.origin}/public/${handle}` : '';
+    $('public-link').hidden = !handle;
+  } catch (err) {
+    toast(err.message);
   }
 }
 
@@ -651,6 +676,15 @@ $('settings').addEventListener('click', async (e) => {
     } catch (err) {
       toast(err.message);
     }
+  } else if (id === 'public-save') {
+    try {
+      renderPublic((await api.setHandle($('public-handle').value.trim() || null)).handle);
+      toast('Saved');
+    } catch (err) {
+      toast(err.message);
+    }
+  } else if (id === 'public-open') {
+    window.open($('public-url').textContent, '_blank', 'noopener');
   } else if (id === 'invite-copy') {
     await navigator.clipboard.writeText($('invite-url').textContent);
     toast('Copied');

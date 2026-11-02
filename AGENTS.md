@@ -32,6 +32,8 @@ database loses nothing a rescan can't rebuild.
   hash-based conflict detection (409 returns the current file), atomic writes, move (with link rewriting, case-only
   renames on case-insensitive shares), trash/restore, links index + backlinks, version history snapshots, export walk.
   Emits `VaultEvent`s.
+- `routes/publish.ts` public pages: an account's `handle` (users table) and its notes with `publish: true` (indexed
+  in `notes.publish`) at `/api/public/pages/<handle>`; `web/public.html` + `public.js` render `/public/…`.
 - `db.ts` migrations (append only; `user_version`). `routes/notes.ts` notes/attachments/trash/versions/backlinks/export
   routes. `routes/share.ts` share links. `routes/events.ts` live change stream (SSE). `todos.ts` todo parsing and
   routes. `auth.ts` tokens (scopes `full`/`mcp`, optional expiry), cookie + bearer, CSRF origin check. `oidc.ts`
