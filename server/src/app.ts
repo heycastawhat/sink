@@ -15,6 +15,7 @@ import { handleMcp, type ApiFetch } from "./mcp";
 import { oauthRoutes } from "./oauth";
 import { cors } from "hono/cors";
 import type { Space, Users } from "./users";
+import { Passkeys } from "./passkeys";
 import type { Config } from "./config";
 import type { Oidc } from "./oidc";
 
@@ -54,6 +55,7 @@ export function createApp(deps: {
 }) {
   const { db, vault, plugins, users, auth, oidc, config } = deps;
   const owner: Space = { db, vault };
+  const passkeys = users && new Passkeys(db);
   const spaceOf = (subject: string) => users?.for(subject) ?? owner;
   const isOwner = (subject: string) => users?.isOwner(subject) ?? true;
 
@@ -96,11 +98,11 @@ export function createApp(deps: {
     return c.json({ ok: true });
   });
 
-  app.route("/api/auth", authRoutes(auth, oidc, { secureCookies: config.secureCookies, publicUrls: config.publicUrls, users }));
+  app.route("/api/auth", authRoutes(auth, oidc, { secureCookies: config.secureCookies, publicUrls: config.publicUrls, users, passkeys }));
 
   const api = new Hono<AuthEnv>();
   api.use("*", requireAuth(auth, config.publicUrls));
-  if (users) api.route("/admin", adminRoutes(users, auth, oidc));
+  if (users && passkeys) api.route("/admin", adminRoutes(users, auth, oidc, passkeys, config.publicUrls));
   // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/. Plugins work on
   // the owner's vault, so only the owner gets them.
   api.get("/plugins", (c) => c.json({ plugins: isOwner(c.get("subject")) ? (plugins?.list() ?? []) : [] }));

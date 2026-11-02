@@ -69,7 +69,9 @@ Then set `SINK_OIDC_ISSUER`, `SINK_OIDC_CLIENT_ID`, `SINK_OIDC_CLIENT_SECRET`, a
 - `sub:1234…` (or anything else): the provider's fixed ID for your account
 
 Once you're in, add more people in Settings → People (the same kinds of entries); removing someone there signs them
-out. `SINK_OIDC_ALLOWED_GROUPS` works too, for groups an admin assigns. If the provider is shared with other people,
+out. For someone without an account at your provider, "Invite someone with a passkey" makes a link they open once
+to create a passkey, and they sign in with that from then on (web and Android). A passkey belongs to the address it
+was made on, so invite people on the address they'll use. `SINK_OIDC_ALLOWED_GROUPS` works too, for groups an admin assigns. If the provider is shared with other people,
 don't use `SINK_OIDC_ALLOW_ANY_USER`.
 
 | Provider | Issuer URL looks like |

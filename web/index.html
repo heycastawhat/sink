@@ -22,10 +22,16 @@
         <div class="login-card">
           <img src="/favicon.svg" alt="" class="login-logo" width="88" height="88" />
           <h1 class="wordmark">Sink</h1>
-          <p class="muted">Everything but the kitchen sink. Well, including it.</p>
+          <p id="login-tagline" class="muted">Everything but the kitchen sink. Well, including it.</p>
           <p id="login-error" class="error" hidden></p>
           <m3e-button id="login-submit" variant="filled" size="medium">
             <m3e-icon slot="icon" name="key"></m3e-icon><span id="login-label">Sign in</span>
+          </m3e-button>
+          <m3e-button id="login-passkey" variant="tonal" size="medium" hidden>
+            <m3e-icon slot="icon" name="passkey"></m3e-icon>Sign in with a passkey
+          </m3e-button>
+          <m3e-button id="invite-accept" variant="filled" size="medium" hidden>
+            <m3e-icon slot="icon" name="passkey"></m3e-icon>Create a passkey
           </m3e-button>
         </div>
       </section>

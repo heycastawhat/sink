@@ -8,7 +8,14 @@ import { Vault } from "./notes";
 export type Space = { db: Database; vault: Vault };
 
 type User = { subject: string; dir: string };
-export type Account = { subject: string; email: string | null; username: string | null; owner: boolean; created_at: number; seen_at: number | null };
+export type Account = {
+  subject: string;
+  email: string | null;
+  username: string | null;
+  owner: boolean;
+  created_at: number;
+  seen_at: number | null;
+};
 
 /**
  * Accounts and their vaults. The owner (whoever was using Sink before it had accounts, else the first to sign in)
@@ -38,6 +45,10 @@ export class Users {
     this.db
       .query("UPDATE users SET email = ?, username = ?, seen_at = ? WHERE subject = ?")
       .run(id.email ?? null, id.username ?? null, now(), id.sub);
+  }
+
+  touch(subject: string) {
+    this.db.query("UPDATE users SET seen_at = ? WHERE subject = ?").run(now(), subject);
   }
 
   accounts(): Account[] {

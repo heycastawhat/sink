@@ -247,7 +247,7 @@ describe("auth", () => {
   });
 
   test("the login screen can name the provider", async () => {
-    expect(await (await setup.app.request("/api/auth/info")).json()).toEqual({ provider: "Pocket ID" });
+    expect(await (await setup.app.request("/api/auth/info")).json()).toEqual({ provider: "Pocket ID", passkeys: false });
   });
 
   test("nonce mismatch is refused", async () => {

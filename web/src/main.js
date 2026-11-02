@@ -22,6 +22,7 @@ import { bundledPlugins } from './plugins/index.js';
 import { askConfirm } from './dialogs.js';
 import { hapticsEnabled, setHaptics } from './haptics.js';
 import { esc } from './util.js';
+import { acceptInvite, inviteName, passkeysWork, signInWithPasskey } from './passkey.js';
 
 // ---------- helpers ----------
 
@@ -88,7 +89,14 @@ const state = {
 
 // ---------- auth ----------
 
+// The sign-in screen also takes invite links (?invite=…) and the Android app's sign-in (?client=android&…), which
+// always show it, even in a browser that's already signed in.
+const params = new URLSearchParams(location.search);
+const signInParams = ['client', 'device', 'challenge', 'next'].filter((k) => params.has(k)).map((k) => [k, params.get(k)]);
+
 async function boot() {
+  if (params.has('invite')) return showInvite(params.get('invite'));
+  if (params.get('client') === 'android') return showLogin();
   try {
     await api.me();
     showApp();
@@ -103,8 +111,40 @@ function showLogin() {
   $('login').hidden = false;
   fetch('/api/auth/info')
     .then((r) => r.json())
-    .then(({ provider }) => provider && ($('login-label').textContent = `Sign in with ${provider}`))
+    .then(({ provider, passkeys }) => {
+      if (provider) $('login-label').textContent = `Sign in with ${provider}`;
+      $('login-passkey').hidden = !passkeys || !passkeysWork() || params.has('invite');
+      // The Android app opens this screen; with nothing to choose, straight on to the provider.
+      if (params.get('client') === 'android' && $('login-passkey').hidden) $('login-submit').click();
+    })
     .catch(() => {});
+}
+
+function loginError(message) {
+  $('login-error').textContent = message;
+  $('login-error').hidden = !message;
+}
+
+async function showInvite(token) {
+  showLogin();
+  $('login-submit').hidden = true;
+  $('login-passkey').hidden = true;
+  try {
+    const name = await inviteName(token);
+    $('login-tagline').textContent = `${name}, you're invited to keep your notes here. Make a passkey to sign in with: your phone, computer or password manager keeps it, so there's no password.`;
+    if (!passkeysWork()) return loginError('This browser can’t make passkeys. Try an up-to-date Chrome, Safari or Firefox.');
+    $('invite-accept').hidden = false;
+    $('invite-accept').onclick = async () => {
+      loginError('');
+      try {
+        location.replace(await acceptInvite(token));
+      } catch (err) {
+        if (err.name !== 'NotAllowedError') loginError(err.message);
+      }
+    };
+  } catch (err) {
+    loginError(err.message);
+  }
 }
 
 async function showApp() {
@@ -128,7 +168,17 @@ async function showApp() {
 }
 
 $('login-submit').addEventListener('click', () => {
-  location.href = '/api/auth/oidc/start?client=web';
+  location.href = `/api/auth/oidc/start?${new URLSearchParams(signInParams.length ? signInParams : [['client', 'web']])}`;
+});
+
+$('login-passkey').addEventListener('click', async () => {
+  loginError('');
+  try {
+    location.replace(await signInWithPasskey(Object.fromEntries(signInParams)));
+  } catch (err) {
+    // NotAllowedError: they closed the passkey prompt.
+    if (err.name !== 'NotAllowedError') loginError(err.message);
+  }
 });
 
 // Any 401 anywhere drops back to login.
@@ -377,6 +427,21 @@ async function renderSettings() {
     </m3e-form-field>
     <m3e-button id="people-add" variant="tonal">${ic('person_add', 'icon')}Add</m3e-button>
   </div>
+  <m3e-expansion-panel class="token-panel">
+    <span slot="header">Invite someone with a passkey</span>
+    <p class="muted small">For people without an account at your sign-in provider. They get a link that works once, for 7 days, and make a passkey with it.</p>
+    <div class="setting-row">
+      <m3e-form-field variant="outlined" class="grow">
+        <label slot="label" for="invite-name">Their name</label>
+        <input id="invite-name" autocomplete="off" maxlength="60" />
+      </m3e-form-field>
+      <m3e-button id="invite-create" variant="tonal">${ic('passkey', 'icon')}Make link</m3e-button>
+    </div>
+    <div id="invite-result" hidden>
+      <p class="small">Send them this link:</p>
+      <div class="copy-row"><code id="invite-url"></code><m3e-icon-button id="invite-copy" aria-label="Copy invite link" title="Copy">${ic('content_copy')}</m3e-icon-button></div>
+    </div>
+  </m3e-expansion-panel>
   <div id="people-list" class="token-list"></div>
 </section>
 
@@ -441,7 +506,12 @@ async function renderTokens() {
 async function renderPeople() {
   try {
     if (!(await api.me()).admin) return;
-    const { accounts, allowed, configured } = await api.people();
+    const { accounts, allowed, configured, invites } = await api.people();
+    // Passkey accounts are on the list as sub:passkey:…; show their name instead.
+    const label = (entry) => {
+      const account = entry.startsWith('sub:passkey:') && accounts.find((a) => `sub:${a.subject}` === entry);
+      return account ? `${esc(account.username ?? 'Passkey')} <span class="muted small">passkey</span>` : esc(entry);
+    };
     const ago = (ts) => (ts ? `${relativeDay(ts).toLowerCase()} ${timeOf(ts)}` : 'not yet');
     const row = (icon, title, sub, action = '') => `<div class="token-row">
   <span class="token-icon">${ic(icon)}</span>
@@ -456,11 +526,20 @@ async function renderPeople() {
         [
           ...fixed.map((e) => row('lock', esc(e), 'Set on the server')),
           ...allowed.map((e) =>
-            row('person', esc(e), '', `<m3e-icon-button data-disallow="${esc(e)}" aria-label="Remove ${esc(e)}" title="Remove">${ic('close')}</m3e-icon-button>`),
+            row(e.startsWith('sub:passkey:') ? 'passkey' : 'person', label(e), '', `<m3e-icon-button data-disallow="${esc(e)}" aria-label="Remove ${esc(e)}" title="Remove">${ic('close')}</m3e-icon-button>`),
           ),
         ],
         'Nobody yet.',
       ) +
+      (invites.length
+        ? group(
+            'Invited',
+            invites.map((i) =>
+              row('schedule_send', esc(i.name), `Link works until ${esc(new Date(i.expires_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))}`, `<m3e-icon-button data-uninvite="${esc(i.id)}" aria-label="Cancel invite for ${esc(i.name)}" title="Cancel invite">${ic('close')}</m3e-icon-button>`),
+            ),
+            '',
+          )
+        : '') +
       group(
         'Accounts',
         accounts.map((a) =>
@@ -547,6 +626,11 @@ $('settings').addEventListener('click', async (e) => {
     await api.revokeToken(revoke.dataset.revoke).catch((err) => toast(err.message));
     return renderTokens();
   }
+  const uninvite = e.target.closest('[data-uninvite]');
+  if (uninvite) {
+    await api.cancelInvite(uninvite.dataset.uninvite).catch((err) => toast(err.message));
+    return renderPeople();
+  }
   const disallow = e.target.closest('[data-disallow]');
   if (disallow) {
     const ok = await askConfirm({ title: 'Remove this person?', body: 'They get signed out and can’t sign in again. Their notes stay on the server.', action: 'Remove', danger: true });
@@ -557,6 +641,19 @@ $('settings').addEventListener('click', async (e) => {
   const id = e.target.closest('[id]')?.id;
   if (id === 'people-add') {
     addPerson();
+  } else if (id === 'invite-create') {
+    try {
+      const { url } = await api.invitePerson($('invite-name').value.trim());
+      $('invite-url').textContent = url;
+      $('invite-result').hidden = false;
+      $('invite-name').value = '';
+      renderPeople();
+    } catch (err) {
+      toast(err.message);
+    }
+  } else if (id === 'invite-copy') {
+    await navigator.clipboard.writeText($('invite-url').textContent);
+    toast('Copied');
   } else if (id === 'connect-url-copy') {
     await navigator.clipboard.writeText($('connect-url').textContent);
     toast('Copied');

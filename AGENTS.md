@@ -40,7 +40,9 @@ database loses nothing a rescan can't rebuild.
   host (daily notes, webhooks). `users.ts` accounts: the owner keeps `SINK_NOTES_DIR` + the main DB (email in,
   plugins); other accounts get a vault + DB under `SINK_USERS_DIR`. `app.ts` builds each account's `/api` routes
   per vault; tokens, OAuth, `users` and `allowed_users` (who
-  may sign in, added by the owner in Settings → People; `routes/admin.ts`) live in the main DB. `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
+  may sign in, added by the owner in Settings → People; `routes/admin.ts`) live in the main DB. `passkeys.ts`
+  passkey sign-in (`@simplewebauthn/server`) for invited people without a provider account; they're allowed as
+  `sub:passkey:…`. The web sign-in screen also handles `?invite=` links and the Android app's `?client=android` sign-in. `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
 
 ### Web (`web/src/`)
 

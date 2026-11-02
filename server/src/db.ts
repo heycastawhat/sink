@@ -364,6 +364,20 @@ export const migrations: string[] = [
   ALTER TABLE users ADD COLUMN username TEXT;
   ALTER TABLE users ADD COLUMN seen_at INTEGER;
   `,
+  // Passkeys (passkeys.ts) for people without an account at the sign-in provider, and the invites that make them.
+  // An invite's id is the hash of the secret in its link.
+  `
+  CREATE TABLE passkeys (
+    id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    public_key BLOB NOT NULL,
+    counter INTEGER NOT NULL,
+    transports TEXT,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+  );
+  CREATE TABLE invites (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+  `,
 ];
 
 export function openDb(path: string): Database {

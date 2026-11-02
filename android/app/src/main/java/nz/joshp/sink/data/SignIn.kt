@@ -9,8 +9,8 @@ import java.security.SecureRandom
 import android.util.Base64
 
 /**
- * Sign-in (any OIDC provider): open the server's OIDC start URL in a Custom Tab, then the server redirects
- * back to nz.joshp.sink://auth?code=… and we exchange that code with a PKCE verifier only this app knows.
+ * Sign-in (the OIDC provider, or a passkey): open the server's sign-in screen in a Custom Tab, then the server
+ * redirects back to nz.joshp.sink://auth?code=… and we exchange that code with a PKCE verifier only this app knows.
  */
 object SignIn {
     private fun b64(bytes: ByteArray) = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
@@ -19,7 +19,7 @@ object SignIn {
         val verifier = b64(ByteArray(48).also(SecureRandom()::nextBytes))
         val challenge = b64(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray()))
         settings.savePendingLogin(serverUrl, verifier)
-        val url = Uri.parse("$serverUrl/api/auth/oidc/start").buildUpon()
+        val url = Uri.parse("$serverUrl/").buildUpon()
             .appendQueryParameter("client", "android")
             .appendQueryParameter("device", "${Build.MANUFACTURER} ${Build.MODEL}")
             .appendQueryParameter("challenge", challenge)

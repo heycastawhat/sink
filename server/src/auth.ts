@@ -6,6 +6,7 @@ import { z } from "zod";
 import { newId, now } from "./db";
 import type { Oidc } from "./oidc";
 import type { Users } from "./users";
+import { passkeyRoutes, type Passkeys, type SignedIn } from "./passkeys";
 import { clientIp, rateLimit } from "./ratelimit";
 
 export const SESSION_COOKIE = "sink_session";
@@ -148,7 +149,7 @@ const exchangeBody = z.object({
   verifier: z.string().min(43).max(128),
 });
 
-export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolean; publicUrls: string[]; users?: Users }) {
+export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolean; publicUrls: string[]; users?: Users; passkeys?: Passkeys }) {
   const app = new Hono<AuthEnv>();
   const pending = new Map<string, Pending>();
   const handbacks = new Map<string, Handback>();
@@ -169,6 +170,29 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     const origin = requestOrigin(c);
     return opts.publicUrls.includes(origin) ? origin : opts.publicUrls[0]!;
   };
+
+  /** Signs `subject` in: a session cookie for the web, or a one-time code handed back to the Android app. */
+  const finish = (c: Context, to: SignedIn & { origin?: string }, subject: string) => {
+    if (to.client === "android") {
+      const handback = randomString();
+      handbacks.set(handback, { challenge: to.challenge!, device: to.device, subject, created: now() });
+      return `${ANDROID_REDIRECT}?code=${handback}`;
+    }
+    const origin = to.origin ?? allowedOrigin(c);
+    setCookie(c, SESSION_COOKIE, auth.issueToken(to.device, subject), {
+      httpOnly: true,
+      secure: opts.secureCookies || origin.startsWith("https://"),
+      // Lax so the cookie survives the redirect back from the sign-in provider.
+      sameSite: "Lax",
+      path: "/",
+      maxAge: COOKIE_MAX_AGE,
+    });
+    return `${origin}${to.next ?? "/"}`;
+  };
+
+  if (opts.users && opts.passkeys) {
+    app.route("/passkey", passkeyRoutes({ passkeys: opts.passkeys, users: opts.users, oidc, publicUrls: opts.publicUrls, finish }));
+  }
 
   // Anyone can start a login; a cap per caller keeps one client from crowding out real sign-ins.
   const logins = rateLimit(30, 10 * 60_000);
@@ -233,22 +257,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     }
     opts.users?.seen(identity);
 
-    if (entry.client === "android") {
-      const handback = randomString();
-      handbacks.set(handback, { challenge: entry.appChallenge!, device: entry.device, subject: identity.sub, created: now() });
-      return c.redirect(`${ANDROID_REDIRECT}?code=${handback}`, 302);
-    }
-
-    const token = auth.issueToken(entry.device, identity.sub);
-    setCookie(c, SESSION_COOKIE, token, {
-      httpOnly: true,
-      secure: opts.secureCookies || entry.origin.startsWith("https://"),
-      // Lax so the cookie survives the redirect back from the sign-in provider.
-      sameSite: "Lax",
-      path: "/",
-      maxAge: COOKIE_MAX_AGE,
-    });
-    return c.redirect(`${entry.origin}${entry.next ?? "/"}`, 302);
+    return c.redirect(finish(c, { ...entry, challenge: entry.appChallenge }, identity.sub), 302);
   });
 
   // Android swaps the one-time hand-back code (plus its PKCE verifier) for a device token.
@@ -269,7 +278,8 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
   });
 
   // Before sign-in: what the login button should say.
-  app.get("/info", (c) => c.json({ provider: oidc.name }));
+  // passkeys: whether to offer passkey sign-in (only once someone has one).
+  app.get("/info", (c) => c.json({ provider: oidc.name, passkeys: !!opts.passkeys?.any() }));
 
   // admin: the owner, who manages who else may sign in.
   app.get("/me", authed, (c) =>

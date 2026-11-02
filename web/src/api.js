@@ -37,6 +37,8 @@ export const api = {
   revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
   people: () => request('/admin/users'),
   allowPerson: (entry) => request('/admin/users/allowed', json('POST', { entry })),
+  invitePerson: (name) => request('/admin/invites', json('POST', { name })),
+  cancelInvite: (id) => request(`/admin/invites/${id}`, { method: 'DELETE' }),
   disallowPerson: (entry) => request(`/admin/users/allowed?entry=${encodeURIComponent(entry)}`, { method: 'DELETE' }),
 
   notes: () => request('/notes'),
