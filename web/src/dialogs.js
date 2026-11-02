@@ -167,16 +167,25 @@ export function editTodo({ text, due, time, dates }) {
 }
 
 /**
- * Sharing one note: a link anyone can read (not edit). `shared` is the current link or null; `share()` makes one
- * and resolves to its URL, `unshare()` stops it. Resolves when closed.
+ * Sharing one note: a link anyone can read, and edit if `editable`. `shared` is the current share
+ * ({ url, editable, edited }) or null; `share(editable)` makes or updates one and resolves to it, `unshare()` stops it.
+ * Resolves when closed.
  */
 export function shareNote({ title, shared, share, unshare }) {
   return open(
     `<div class="sink-dialog-body share-dialog">
   <h2>Share “${esc(title)}”</h2>
-  <p class="muted small" data-off>Make a link anyone can open to read this note, without signing in. They can't edit it, see your other notes, or find it in search engines.</p>
-  <p class="muted small" data-on>Anyone with this link can read this note (not edit it). It shows the latest text.</p>
+  <p class="muted small" data-off>Make a link anyone can open to read this note, without signing in. They can't see your other notes, or find it in search engines.</p>
+  <p class="muted small" data-on>Anyone with this link can read this note. It shows the latest text.</p>
   <div class="copy-row" data-on><code class="share-url"></code><m3e-icon-button data-copy aria-label="Copy link" title="Copy">${ic('content_copy')}</m3e-icon-button></div>
+  <div class="setting-row">
+    <div class="grow">
+      <label class="setting-title" for="share-editable">Anyone with the link can edit</label>
+      <div class="muted small">They give a name first. Earlier text stays in the note's history.</div>
+      <div class="muted small share-edited"></div>
+    </div>
+    <m3e-switch id="share-editable"></m3e-switch>
+  </div>
   <p class="dialog-error" hidden></p>
   <div class="dialog-actions">
     <m3e-button data-stop variant="text" data-on>${ic('link_off', 'icon')}Stop sharing</m3e-button>
@@ -187,10 +196,13 @@ export function shareNote({ title, shared, share, unshare }) {
 </div>`,
     (dlg, done) => {
       const error = dlg.querySelector('.dialog-error');
-      const show = (url) => {
-        for (const el of dlg.querySelectorAll('[data-on]')) el.hidden = !url;
-        for (const el of dlg.querySelectorAll('[data-off]')) el.hidden = !!url;
-        dlg.querySelector('.share-url').textContent = url ?? '';
+      const editable = dlg.querySelector('#share-editable');
+      const show = (s) => {
+        for (const el of dlg.querySelectorAll('[data-on]')) el.hidden = !s;
+        for (const el of dlg.querySelectorAll('[data-off]')) el.hidden = !!s;
+        dlg.querySelector('.share-url').textContent = s?.url ?? '';
+        dlg.querySelector('.share-edited').textContent = s?.edited ?? '';
+        if (s) editable.checked = s.editable;
       };
       const fail = (err) => {
         error.textContent = err.message;
@@ -199,12 +211,20 @@ export function shareNote({ title, shared, share, unshare }) {
       show(shared);
       dlg.querySelector('[data-make]').addEventListener('click', async () => {
         try {
-          const url = await share();
-          show(url);
-          await navigator.clipboard?.writeText(url).catch(() => {});
+          const s = await share(editable.checked);
+          show(s);
+          await navigator.clipboard?.writeText(s.url).catch(() => {});
         } catch (err) {
           fail(err);
         }
+      });
+      // Before there's a link the switch only picks what Create link makes; after, it changes the link at once.
+      editable.addEventListener('change', async () => {
+        if (dlg.querySelector('[data-make]').hidden)
+          await share(editable.checked).then(show, (err) => {
+            editable.checked = !editable.checked;
+            fail(err);
+          });
       });
       dlg.querySelector('[data-copy]').addEventListener('click', () =>
         navigator.clipboard?.writeText(dlg.querySelector('.share-url').textContent).catch(fail),

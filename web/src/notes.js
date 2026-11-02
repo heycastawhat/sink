@@ -1360,18 +1360,22 @@ function wireScreen() {
     if (!screen.path || !screen.editor) return;
     await flush();
     const path = screen.path;
-    const link = (id) => `${location.origin}/s/${id}`;
+    const view = (s) =>
+      s.id && {
+        url: `${location.origin}/s/${s.id}`,
+        editable: s.editable,
+        edited: s.edited_by ? `Last edited through the link by ${s.edited_by}, ${relative(s.edited_at)}` : '',
+      };
     let shared = null;
     try {
-      const { id } = await api.shareOf(path);
-      shared = id ? link(id) : null;
+      shared = view(await api.shareOf(path));
     } catch (err) {
       return toast(err.message);
     }
     await shareNote({
       title: screen.path.split('/').pop().replace(/\.md$/i, ''),
       shared,
-      share: async () => link((await api.share(path)).id),
+      share: async (editable) => view(await api.share(path, editable)),
       unshare: () => api.unshare(path),
     });
   });

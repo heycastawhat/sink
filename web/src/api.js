@@ -35,6 +35,9 @@ export const api = {
   tokens: () => request('/auth/tokens'),
   createToken: (name) => request('/auth/tokens', json('POST', { name })),
   revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
+  people: () => request('/admin/users'),
+  allowPerson: (entry) => request('/admin/users/allowed', json('POST', { entry })),
+  disallowPerson: (entry) => request(`/admin/users/allowed?entry=${encodeURIComponent(entry)}`, { method: 'DELETE' }),
 
   notes: () => request('/notes'),
   searchNotes: (q) => request(`/notes?q=${encodeURIComponent(q)}&limit=100`),
@@ -44,7 +47,7 @@ export const api = {
     request(`/notes/file?${p(path)}`, { ...json('PUT', { content, base_hash: baseHash, ...extra }), ...init }),
   versions: (path) => request(`/notes/versions?${p(path)}`),
   shareOf: (path) => request(`/notes/share?${p(path)}`),
-  share: (path) => request('/notes/share', json('POST', { path })),
+  share: (path, editable) => request('/notes/share', json('POST', { path, editable })),
   unshare: (path) => request(`/notes/share?${p(path)}`, { method: 'DELETE' }),
   version: (path, id) => request(`/notes/versions/${id}?${p(path)}`),
   createNote: (body) => request('/notes', json('POST', body)),

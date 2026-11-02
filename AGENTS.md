@@ -7,7 +7,7 @@ the original design; this file is how the code fits together today and how to ch
 
 A self-hosted notes app: a Keep-style grid of markdown notes that open fullscreen in an Obsidian-style live-preview
 editor, plus todos (Obsidian Tasks syntax), Excalidraw boards, folders, backlinks, version history, share links,
-templates, a Google Keep importer, email in, an MCP server for AI assistants, and plugins. One user per install. The
+templates, a Google Keep importer, email in, an MCP server for AI assistants, and plugins. Each account has its own vault (`users.ts`); the owner's is the configured one. The
 vault is a folder of plain `.md` files (Obsidian-compatible); SQLite only holds an index and app state, so losing the
 database loses nothing a rescan can't rebuild.
 
@@ -37,7 +37,10 @@ database loses nothing a rescan can't rebuild.
   routes. `auth.ts` tokens (scopes `full`/`mcp`, optional expiry), cookie + bearer, CSRF origin check. `oidc.ts`
   sign-in. `oauth.ts` OAuth for MCP connectors (dynamic registration, PKCE, refresh rotation). `mcp.ts` MCP tools
   (all go through the REST API as the caller). `email.ts`/`html.ts` IMAP ingest. `plugins.ts` + `builtin/` plugin
-  host (daily notes, webhooks). `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
+  host (daily notes, webhooks). `users.ts` accounts: the owner keeps `SINK_NOTES_DIR` + the main DB (email in,
+  plugins); other accounts get a vault + DB under `SINK_USERS_DIR`. `app.ts` builds each account's `/api` routes
+  per vault; tokens, OAuth, `users` and `allowed_users` (who
+  may sign in, added by the owner in Settings → People; `routes/admin.ts`) live in the main DB. `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
 
 ### Web (`web/src/`)
 
@@ -54,7 +57,7 @@ database loses nothing a rescan can't rebuild.
   (zip read in the browser with `DecompressionStream`), `notion-import.js` (reuses its zip reader), `plugin-api.js` +
   `plugins/`.
 - Extra entry pages: `editor.html` + `embed-editor.js` (the Android WebView editor; talks over `window.SinkBridge`),
-  `share.html` + `share.js` (read-only shared note).
+  `share.html` + `share.js` (shared note; editable shares ask a name, autosave, and poll for others' edits).
 
 ### Android (`android/app/src/main/java/nz/joshp/sink/`)
 
@@ -92,7 +95,7 @@ small script against that data dir to call the API or set the `sink_session` coo
   vault). Migrations are append-only.
 - Never write to a note without its last-seen hash; a mismatch is a conflict, never an overwrite.
 - Anything public (share pages, `/api/public`) exposes only that note's text (no frontmatter) and the images it
-  embeds; assistants' `mcp` tokens can't manage tokens, empty the trash, share, or export.
+  embeds; an editable share writes only that note's body (frontmatter kept), with the usual hash check; assistants' `mcp` tokens can't manage tokens, empty the trash, share, or export.
 - The repo is public: keep personal details (hosts, domains, NAS paths) out of tracked files. Deployment-specific
   config lives in the git-ignored `docker-compose.override.yml`; private notes in `HANDOFF.local.md`.
 - Android: application id `nz.joshp.sink`. Release builds are signed in CI from repo secrets.

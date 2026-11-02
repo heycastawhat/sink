@@ -367,6 +367,19 @@ async function renderSettings() {
   <div id="connect-tokens" class="token-list"><m3e-loading-indicator></m3e-loading-indicator></div>
 </section>
 
+<section class="setting-card" id="people" hidden>
+  <h2>People</h2>
+  <p class="muted small">Who can sign in. Everyone gets their own notes; nobody can see anyone else's.</p>
+  <div class="setting-row">
+    <m3e-form-field variant="outlined" class="grow">
+      <label slot="label" for="people-entry">Email, user:name or sub:id</label>
+      <input id="people-entry" autocomplete="off" />
+    </m3e-form-field>
+    <m3e-button id="people-add" variant="tonal">${ic('person_add', 'icon')}Add</m3e-button>
+  </div>
+  <div id="people-list" class="token-list"></div>
+</section>
+
 <section class="setting-card">
   <div class="setting-row">
     <div class="grow"><div class="setting-title">Trash</div><div class="muted small">Put back or delete notes you've deleted.</div></div>
@@ -386,6 +399,7 @@ async function renderSettings() {
   </div>
 </section>`;
   renderTokens();
+  renderPeople();
   try {
     const { notes: all } = await api.notes();
     $('server-info').innerHTML = [
@@ -422,6 +436,60 @@ async function renderTokens() {
     $('connect-tokens').textContent = err.message;
   }
 }
+
+/** The owner's list of who may sign in, and the accounts that have. Hidden for everyone else. */
+async function renderPeople() {
+  try {
+    if (!(await api.me()).admin) return;
+    const { accounts, allowed, configured } = await api.people();
+    const ago = (ts) => (ts ? `${relativeDay(ts).toLowerCase()} ${timeOf(ts)}` : 'not yet');
+    const row = (icon, title, sub, action = '') => `<div class="token-row">
+  <span class="token-icon">${ic(icon)}</span>
+  <div class="grow"><div>${title}</div>${sub ? `<div class="muted small">${sub}</div>` : ''}</div>${action}
+</div>`;
+    const group = (title, rows, empty) =>
+      `<h3 class="token-group">${title}<span>${rows.length || ''}</span></h3>` + (rows.length ? rows.join('') : `<p class="muted small">${empty}</p>`);
+    const fixed = [...configured.users, ...configured.groups.map((g) => `group: ${g}`), ...(configured.anyone ? ['anyone the provider lets in'] : [])];
+    $('people-list').innerHTML =
+      group(
+        'Allowed',
+        [
+          ...fixed.map((e) => row('lock', esc(e), 'Set on the server')),
+          ...allowed.map((e) =>
+            row('person', esc(e), '', `<m3e-icon-button data-disallow="${esc(e)}" aria-label="Remove ${esc(e)}" title="Remove">${ic('close')}</m3e-icon-button>`),
+          ),
+        ],
+        'Nobody yet.',
+      ) +
+      group(
+        'Accounts',
+        accounts.map((a) =>
+          row(a.owner ? 'shield_person' : 'account_circle', esc(a.email ?? a.username ?? a.subject) + (a.owner ? ' <span class="here">Owner</span>' : ''), `Last signed in ${esc(ago(a.seen_at))}`),
+        ),
+        'Nobody has signed in.',
+      );
+    $('people').hidden = false;
+  } catch (err) {
+    $('people-list').textContent = err.message;
+    $('people').hidden = false;
+  }
+}
+
+async function addPerson() {
+  const entry = $('people-entry').value.trim();
+  if (!entry) return;
+  try {
+    await api.allowPerson(entry);
+    $('people-entry').value = '';
+    renderPeople();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+$('settings').addEventListener('keydown', (e) => {
+  if (e.target.id === 'people-entry' && e.key === 'Enter') addPerson();
+});
 
 $('settings').addEventListener('change', (e) => {
   if (e.target.id === 'haptics') setHaptics(e.target.checked);
@@ -479,8 +547,17 @@ $('settings').addEventListener('click', async (e) => {
     await api.revokeToken(revoke.dataset.revoke).catch((err) => toast(err.message));
     return renderTokens();
   }
+  const disallow = e.target.closest('[data-disallow]');
+  if (disallow) {
+    const ok = await askConfirm({ title: 'Remove this person?', body: 'They get signed out and can’t sign in again. Their notes stay on the server.', action: 'Remove', danger: true });
+    if (!ok) return;
+    await api.disallowPerson(disallow.dataset.disallow).catch((err) => toast(err.message));
+    return renderPeople();
+  }
   const id = e.target.closest('[id]')?.id;
-  if (id === 'connect-url-copy') {
+  if (id === 'people-add') {
+    addPerson();
+  } else if (id === 'connect-url-copy') {
     await navigator.clipboard.writeText($('connect-url').textContent);
     toast('Copied');
   } else if (id === 'connect-copy') {

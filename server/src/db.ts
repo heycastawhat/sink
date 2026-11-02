@@ -343,6 +343,27 @@ export const migrations: string[] = [
   ALTER TABLE todos ADD COLUMN scheduled TEXT;
   UPDATE notes SET mtime = 0;
   `,
+  // Share links can let anyone with the link edit the note's text; the last such edit remembers the name they gave.
+  `
+  ALTER TABLE shares ADD COLUMN editable INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE shares ADD COLUMN edited_by TEXT;
+  ALTER TABLE shares ADD COLUMN edited_at INTEGER;
+  `,
+  // Accounts (users.ts). dir '' is the owner, who keeps the main vault: whoever already has tokens, else the first
+  // to sign in. Tokens from before subjects were recorded are the owner's.
+  `
+  CREATE TABLE users (subject TEXT PRIMARY KEY, dir TEXT NOT NULL, created_at INTEGER NOT NULL);
+  INSERT INTO users SELECT COALESCE(subject, ''), '', created_at FROM tokens ORDER BY subject IS NULL, created_at LIMIT 1;
+  UPDATE tokens SET subject = (SELECT subject FROM users) WHERE subject IS NULL;
+  `,
+  // Who may sign in, managed in Settings on top of SINK_OIDC_ALLOWED_USERS; and who each account is, from their
+  // last sign-in, to show there and to sign them out when their entry goes.
+  `
+  CREATE TABLE allowed_users (entry TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+  ALTER TABLE users ADD COLUMN email TEXT;
+  ALTER TABLE users ADD COLUMN username TEXT;
+  ALTER TABLE users ADD COLUMN seen_at INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Database {

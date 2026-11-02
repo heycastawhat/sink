@@ -204,17 +204,25 @@ suspend fun Api.trashNote(path: String): String =
     call(authed(pathUrl("/api/notes/file", path)).delete().build()) { json.decodeFromString<Trashed>(it).trashedTo }
 
 @Serializable
-private data class ShareId(val id: String? = null)
+private data class ShareJson(
+    val id: String? = null,
+    val editable: Boolean = false,
+    @SerialName("edited_by") val editedBy: String? = null,
+    @SerialName("edited_at") val editedAt: Long? = null,
+)
 
-/** The note's share link (anyone can read it at /s/<id>), or null if it isn't shared. */
-suspend fun Api.shareLink(path: String): String? =
-    call(authed(pathUrl("/api/notes/share", path)).build()) { json.decodeFromString<ShareId>(it).id?.let { id -> absolute("/s/$id") } }
+/** A note's share link (anyone can read it at /s/<id>, and edit it if [editable]); [editedBy] made the last edit through it. */
+data class ShareLink(val url: String, val editable: Boolean, val editedBy: String?, val editedAt: Long?)
 
-/** Shares the note (or returns its existing link). */
-suspend fun Api.share(path: String): String =
-    call(request("/api/notes/share").post(jsonBody(buildJsonObject { put("path", path) })).build()) {
-        absolute("/s/" + json.decodeFromString<ShareId>(it).id!!)
-    }
+private fun Api.shareLink(body: String): ShareLink? =
+    json.decodeFromString<ShareJson>(body).let { s -> s.id?.let { ShareLink(absolute("/s/$it"), s.editable, s.editedBy, s.editedAt) } }
+
+/** The note's share link, or null if it isn't shared. */
+suspend fun Api.shareLink(path: String): ShareLink? = call(authed(pathUrl("/api/notes/share", path)).build()) { shareLink(it) }
+
+/** Shares the note (or returns its existing link), letting the link edit or not. */
+suspend fun Api.share(path: String, editable: Boolean): ShareLink =
+    call(request("/api/notes/share").post(jsonBody(buildJsonObject { put("path", path); put("editable", editable) })).build()) { shareLink(it)!! }
 
 /** Stops sharing the note: its link stops working. */
 suspend fun Api.unshare(path: String) {

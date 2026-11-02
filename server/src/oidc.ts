@@ -129,23 +129,28 @@ export class Oidc {
     };
   }
 
-  /**
-   * Each allowlist entry matches one kind of claim only, so a username someone picks at the provider can't pose as
-   * an email or subject: `you@example.com` / `email:…` = verified email, `user:name` = preferred_username (only safe
-   * where usernames are admin-assigned), `sub:…` or anything else = the provider's subject ID.
-   */
-  allowed(id: Identity): boolean {
-    const { allowedUsers, allowedGroups, allowAnyone } = this.cfg;
-    if (allowAnyone) return true;
-    const lower = (s?: string) => s?.toLowerCase();
-    const matches = (entry: string) => {
-      const [, kind, value] = /^(email|user|sub):(.*)$/i.exec(entry) ?? [null, entry.includes("@") ? "email" : "sub", entry];
-      const want = value!.toLowerCase();
-      if (kind!.toLowerCase() === "email") return !!id.email && lower(id.email) === want;
-      if (kind!.toLowerCase() === "user") return !!id.username && lower(id.username) === want;
-      return id.sub.toLowerCase() === want;
-    };
-    return allowedUsers.some(matches) || allowedGroups.some((g) => id.groups.includes(g));
+  /** Who may sign in by configuration; more can be let in from Settings (users.ts). */
+  get allowlist() {
+    return { users: this.cfg.allowedUsers, groups: this.cfg.allowedGroups, anyone: this.cfg.allowAnyone };
   }
 
+  /** Allowed by configuration, or by one of `extra` (entries added in Settings). */
+  allowed(id: Identity, extra: string[] = []): boolean {
+    const { allowedUsers, allowedGroups, allowAnyone } = this.cfg;
+    if (allowAnyone) return true;
+    return [...allowedUsers, ...extra].some((e) => matchesEntry(e, id)) || allowedGroups.some((g) => id.groups.includes(g));
+  }
+}
+
+/**
+ * Each allowlist entry matches one kind of claim only, so a username someone picks at the provider can't pose as an
+ * email or subject: `you@example.com` / `email:…` = verified email, `user:name` = preferred_username (only safe where
+ * usernames are admin-assigned), `sub:…` or anything else = the provider's subject ID.
+ */
+export function matchesEntry(entry: string, id: Pick<Identity, "sub" | "email" | "username">): boolean {
+  const [, kind, value] = /^(email|user|sub):(.*)$/i.exec(entry) ?? [null, entry.includes("@") ? "email" : "sub", entry];
+  const want = value!.toLowerCase();
+  if (kind!.toLowerCase() === "email") return !!id.email && id.email.toLowerCase() === want;
+  if (kind!.toLowerCase() === "user") return !!id.username && id.username.toLowerCase() === want;
+  return id.sub.toLowerCase() === want;
 }

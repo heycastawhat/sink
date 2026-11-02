@@ -211,7 +211,7 @@ private fun Card(title: String, content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun ToggleRow(icon: ImageVector?, title: String, sub: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+fun ToggleRow(icon: ImageVector?, title: String, sub: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
             IconBadge(icon)

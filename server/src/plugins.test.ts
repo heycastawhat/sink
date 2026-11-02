@@ -11,6 +11,7 @@ import { createApp } from "./app";
 import { daily } from "./builtin/daily";
 import { webhooksPlugin } from "./builtin/webhooks";
 import { localIso } from "./time";
+import { Users } from "./users";
 
 const PUBLIC = "https://sink.test";
 
@@ -29,10 +30,12 @@ async function setup(opts: { builtins?: BuiltinPlugin[]; env?: Record<string, st
   await host.load(opts.builtins ?? []);
   const auth = new Auth(db);
   const oidc = new Oidc({ issuer: "https://auth.test/", clientId: "x", clientSecret: "", allowedUsers: [], allowedGroups: [], allowAnyone: true });
+  const users = new Users(db, { db, vault }, { dir: mkdtempSync(join(tmpdir(), "sink-users-")) });
   const app = createApp({
     db,
     vault,
     plugins: host,
+    users,
     auth,
     oidc,
     config: { secureCookies: false, maxUploadBytes: 1024 * 1024, webDir: undefined, publicUrls: [PUBLIC], timeZone: "UTC" },
@@ -96,6 +99,11 @@ describe("plugin host", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "hello_shout", arguments: {} } }),
     });
     expect(((await mcp.json()) as any).result.content[0].text).toBe("HELLO");
+
+    // Plugins work on the owner's vault, so another account doesn't get them.
+    const other = s.auth.issueToken("test", "someone-else");
+    expect(((await (await s.req("GET", "/api/plugins", undefined, other)).json()) as any).plugins).toEqual([]);
+    expect((await s.req("GET", "/api/plugins/hello/seen", undefined, other)).status).toBe(404);
   });
 
   test("a broken plugin is skipped; disabled ones don't load", async () => {

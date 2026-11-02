@@ -17,6 +17,12 @@
   </head>
   <body>
     <main class="share">
+      <form id="share-name" class="share-bar" hidden>
+        <label for="share-name-input">You can edit this note. Your name, so the owner knows who changed it:</label>
+        <input id="share-name-input" name="name" maxlength="60" autocomplete="name" required />
+        <button type="submit">Start editing</button>
+      </form>
+      <p id="share-editing" class="share-bar" hidden><span id="share-status"></span> <button id="share-copy" type="button" hidden>Copy your version</button></p>
       <div id="editor" class="note-editor"></div>
       <p id="share-missing" class="share-missing" hidden>This note isn't shared any more, or the link is wrong.</p>
     </main>

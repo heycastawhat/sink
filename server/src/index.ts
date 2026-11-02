@@ -8,13 +8,15 @@ import { Vault } from "./notes";
 import { EmailIngest } from "./email";
 import { PluginHost } from "./plugins";
 import { builtinPlugins } from "./builtin";
+import { Users } from "./users";
 
 const db = openDb(config.dbPath);
 const vault = new Vault(db, config.notesDir, config.timeZone);
 for (const key of ["issuer", "clientId"] as const) {
   if (!config.oidc[key]) throw new Error(`Set SINK_OIDC_${key.replace(/[A-Z]/g, (c) => "_" + c).toUpperCase()}`);
 }
-if (!config.oidc.allowedUsers.length && !config.oidc.allowedGroups.length && !config.oidc.allowAnyone) {
+const addedInSettings = !!db.query("SELECT 1 FROM allowed_users").get();
+if (!config.oidc.allowedUsers.length && !config.oidc.allowedGroups.length && !config.oidc.allowAnyone && !addedInSettings) {
   throw new Error(
     "Nobody could sign in: set SINK_OIDC_ALLOWED_USERS (your username, sub or verified email) or SINK_OIDC_ALLOWED_GROUPS. " +
       "SINK_OIDC_ALLOW_ANY_USER=true lets every account at the provider in.",
@@ -30,7 +32,13 @@ const oidc = new Oidc(config.oidc);
 
 const plugins = new PluginHost(vault, { timeZone: config.timeZone, dir: config.pluginsDir, disabled: config.pluginsDisabled });
 await plugins.load(builtinPlugins());
-const app = createApp({ db, vault, plugins, auth, oidc, config });
+const users = new Users(db, { db, vault }, {
+  dir: config.usersDir,
+  timeZone: config.timeZone,
+  scanMs: config.notesScanSeconds * 1000,
+  backupKeep: config.backupKeep,
+});
+const app = createApp({ db, vault, plugins, users, auth, oidc, config });
 vault.start(config.notesScanSeconds * 1000);
 let email: EmailIngest | null = null;
 if (config.imap.host) {
@@ -49,7 +57,10 @@ if (config.imap.host) {
 }
 const backups = new Backups(db, config.backupDir, config.backupKeep);
 backups.start();
-const purgeTrash = () => vault.purgeTrash(config.trashDays).catch((err) => console.warn(`[notes] trash purge failed: ${err.message}`));
+const purgeTrash = () =>
+  Promise.all([vault.purgeTrash(config.trashDays), users.purgeTrash(config.trashDays)]).catch((err) =>
+    console.warn(`[notes] trash purge failed: ${err.message}`),
+  );
 void purgeTrash();
 const trashTimer = setInterval(purgeTrash, 60 * 60 * 1000);
 
@@ -67,6 +78,7 @@ console.log(
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     vault.stop();
+    users.stop();
     plugins.stop();
     void email?.stop();
     backups.stop();

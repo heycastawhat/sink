@@ -23,13 +23,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import nz.joshp.sink.data.Api
+import nz.joshp.sink.data.ShareLink
 import nz.joshp.sink.data.share
 import nz.joshp.sink.data.shareLink
 import nz.joshp.sink.data.unshare
 
 /**
- * Sharing a note as a read-only link anyone can open (no sign-in, no editing). Makes the link, hands it to
- * Android's share sheet, or stops it. Mirrors the web's dialog.
+ * Sharing a note as a link anyone can open without signing in, read-only unless editing is switched on. Makes the
+ * link, hands it to Android's share sheet, or stops it. Mirrors the web's dialog.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -38,10 +39,11 @@ fun ShareDialog(api: suspend () -> Api?, path: String, title: String, onDismiss:
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     var loading by remember { mutableStateOf(true) }
-    var link by remember { mutableStateOf<String?>(null) }
+    var link by remember { mutableStateOf<ShareLink?>(null) }
+    var editable by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(path) {
-        runCatching { api()?.shareLink(path) }.onSuccess { link = it }.onFailure { error = it.message }
+        runCatching { api()?.shareLink(path) }.onSuccess { link = it; editable = it?.editable ?: false }.onFailure { error = it.message }
         loading = false
     }
     fun send(url: String) {
@@ -62,21 +64,26 @@ fun ShareDialog(api: suspend () -> Api?, path: String, title: String, onDismiss:
         title = { Text("Share “$title”") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                val url = link
+                val l = link
                 Text(
-                    if (url == null) "Make a link anyone can open to read this note, without signing in. They can't edit it, see your other notes, or find it in search engines."
-                    else "Anyone with this link can read this note (not edit it). It shows the latest text.",
+                    if (l == null) "Make a link anyone can open to read this note, without signing in. They can't see your other notes, or find it in search engines."
+                    else "Anyone with this link can read this note. It shows the latest text.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                if (url != null) Text(url, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), modifier = Modifier.fillMaxWidth())
+                if (l != null) Text(l.url, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), modifier = Modifier.fillMaxWidth())
+                val edited = l?.editedBy?.let { by -> "\nLast edited through the link by $by, ${relativeTime(l.editedAt ?: 0)}" }.orEmpty()
+                // Before there's a link the switch only picks what Create link makes; after, it changes the link at once.
+                ToggleRow(null, "Anyone with the link can edit", "They give a name first. Earlier text stays in the note's history.$edited", editable, enabled = !loading) { on ->
+                    if (l == null) editable = on else run { a -> link = a.share(path, on); editable = on }
+                }
                 if (loading) LoadingIndicator()
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
-            val url = link
-            if (url == null) TextButton(enabled = !loading, onClick = { haptics.confirm(); run { a -> a.share(path).also { link = it; send(it) } } }) { Text("Create link") }
-            else TextButton(onClick = { send(url) }) { Text("Send link") }
+            val l = link
+            if (l == null) TextButton(enabled = !loading, onClick = { haptics.confirm(); run { a -> a.share(path, editable).also { link = it; send(it.url) } } }) { Text("Create link") }
+            else TextButton(onClick = { send(l.url) }) { Text("Send link") }
         },
         dismissButton = {
             if (link != null) TextButton(enabled = !loading, onClick = { haptics.reject(); run { a -> a.unshare(path); link = null } }) { Text("Stop sharing") }

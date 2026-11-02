@@ -7,12 +7,14 @@ import type { MiddlewareHandler } from "hono";
 import { noteRoutes } from "./routes/notes";
 import { publicShareRoutes, shareRoutes } from "./routes/share";
 import { eventRoutes } from "./routes/events";
+import { adminRoutes } from "./routes/admin";
 import { todoRoutes } from "./todos";
 import type { Vault } from "./notes";
 import { pluginFileType, type PluginHost } from "./plugins";
 import { handleMcp, type ApiFetch } from "./mcp";
 import { oauthRoutes } from "./oauth";
 import { cors } from "hono/cors";
+import type { Space, Users } from "./users";
 import type { Config } from "./config";
 import type { Oidc } from "./oidc";
 
@@ -44,11 +46,42 @@ export function createApp(deps: {
   db: Database;
   vault: Vault;
   plugins?: PluginHost;
+  // Without it every sign-in shares `vault` (one account per install, as before accounts).
+  users?: Users;
   auth: Auth;
   oidc: Oidc;
   config: Pick<Config, "secureCookies" | "maxUploadBytes" | "webDir" | "publicUrls"> & Partial<Pick<Config, "timeZone" | "trashDays">>;
 }) {
-  const { db, vault, plugins, auth, oidc, config } = deps;
+  const { db, vault, plugins, users, auth, oidc, config } = deps;
+  const owner: Space = { db, vault };
+  const spaceOf = (subject: string) => users?.for(subject) ?? owner;
+  const isOwner = (subject: string) => users?.isOwner(subject) ?? true;
+
+  // Each account's notes API, built once per vault; requests reach it with the caller's token details.
+  const spaceApis = new WeakMap<Space, Hono<AuthEnv>>();
+  const spaceApi = (space: Space) => {
+    let api = spaceApis.get(space);
+    if (api) return api;
+    api = new Hono<AuthEnv>().basePath("/api");
+    api.use("*", async (c, next) => {
+      const vars = c.env as AuthEnv["Variables"];
+      c.set("tokenId", vars.tokenId);
+      c.set("scope", vars.scope);
+      c.set("subject", vars.subject);
+      await next();
+    });
+    api.route("/", noteRoutes(space.vault, config.maxUploadBytes, config.trashDays));
+    api.route("/", todoRoutes(space.db, space.vault, config.timeZone ?? "UTC"));
+    api.route("/", shareRoutes(space.db, space.vault));
+    api.route("/", eventRoutes(space.vault));
+    api.notFound((c) => c.json({ error: "not found" }, 404));
+    api.onError((err, c) => {
+      console.error(err);
+      return c.json({ error: "internal error" }, 500);
+    });
+    spaceApis.set(space, api);
+    return api;
+  };
   const app = new Hono<AuthEnv>();
 
   // Same-origin resources, except the logo: other sites show it (connector screens in Claude and others).
@@ -63,19 +96,23 @@ export function createApp(deps: {
     return c.json({ ok: true });
   });
 
-  app.route("/api/auth", authRoutes(auth, oidc, { secureCookies: config.secureCookies, publicUrls: config.publicUrls }));
+  app.route("/api/auth", authRoutes(auth, oidc, { secureCookies: config.secureCookies, publicUrls: config.publicUrls, users }));
 
   const api = new Hono<AuthEnv>();
   api.use("*", requireAuth(auth, config.publicUrls));
-  api.route("/", noteRoutes(vault, config.maxUploadBytes, config.trashDays));
-  api.route("/", todoRoutes(db, vault, config.timeZone ?? "UTC"));
-  api.route("/", shareRoutes(db, vault));
-  api.route("/", eventRoutes(vault));
-  // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/.
-  api.get("/plugins", (c) => c.json({ plugins: plugins?.list() ?? [] }));
-  if (plugins) api.route("/plugins", plugins.routes);
+  if (users) api.route("/admin", adminRoutes(users, auth, oidc));
+  // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/. Plugins work on
+  // the owner's vault, so only the owner gets them.
+  api.get("/plugins", (c) => c.json({ plugins: isOwner(c.get("subject")) ? (plugins?.list() ?? []) : [] }));
+  if (plugins) {
+    api.use("/plugins/*", async (c, next) => (isOwner(c.get("subject")) ? next() : c.json({ error: "not found" }, 404)));
+    api.route("/plugins", plugins.routes);
+  }
+  api.all("*", (c) =>
+    spaceApi(spaceOf(c.get("subject"))).fetch(c.req.raw, { tokenId: c.get("tokenId"), scope: c.get("scope"), subject: c.get("subject") }),
+  );
   // Shared notes, readable without signing in. Before the signed-in API, which would answer 401.
-  app.route("/api/public", publicShareRoutes(db, vault));
+  app.route("/api/public", publicShareRoutes(() => users?.all() ?? [owner]));
   app.route("/api", api);
 
   // A plugin's client script, styles and assets. Signed in like the API: they're the owner's code, not public.
@@ -103,7 +140,8 @@ export function createApp(deps: {
   app.all("/mcp", async (c) => {
     // Bearer only (no session cookie), and a 401 that points clients at the OAuth metadata.
     const header = c.req.header("authorization") ?? "";
-    if (!header.startsWith("Bearer ") || !auth.check(header.slice(7))) {
+    const found = header.startsWith("Bearer ") ? auth.check(header.slice(7)) : null;
+    if (!found) {
       const origin = config.publicUrls.includes(requestOrigin(c)) ? requestOrigin(c) : config.publicUrls[0];
       return c.json({ error: "unauthorized" }, 401, {
         "www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
@@ -112,7 +150,8 @@ export function createApp(deps: {
     const api: ApiFetch = (path, init) =>
       Promise.resolve(app.request(path, { ...init, headers: { ...(init?.headers as Record<string, string>), authorization: header } }));
     const origin = config.publicUrls.includes(requestOrigin(c)) ? requestOrigin(c) : config.publicUrls[0]!;
-    return handleMcp(c.req.raw, api, config.timeZone ?? "UTC", plugins?.tools ?? [], origin);
+    const tools = isOwner(found.subject) ? (plugins?.tools ?? []) : [];
+    return handleMcp(c.req.raw, api, config.timeZone ?? "UTC", tools, origin);
   });
 
   if (config.webDir) {

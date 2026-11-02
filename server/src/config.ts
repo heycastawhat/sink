@@ -25,6 +25,8 @@ export const config = {
   // CIFS has no inotify, so edits made outside Sink (Obsidian, Finder) are found by rescanning.
   notesScanSeconds: Number(env("SINK_NOTES_SCAN_SECONDS", "30")),
   dbPath: join(dataDir, "sink.db"),
+  // Everyone but the owner (users.ts) gets a notes folder and database in here.
+  usersDir: resolve(env("SINK_USERS_DIR", join(dataDir, "users"))!),
   webDir: env("SINK_WEB_DIR") ? resolve(env("SINK_WEB_DIR")!) : undefined,
 
   // Every origin people reach Sink on (public tunnel URL first, then LAN). OIDC redirects only go back to these.

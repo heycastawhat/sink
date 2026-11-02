@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { newId, now } from "./db";
 import type { Oidc } from "./oidc";
+import type { Users } from "./users";
 import { clientIp, rateLimit } from "./ratelimit";
 
 export const SESSION_COOKIE = "sink_session";
@@ -40,11 +41,11 @@ export class Auth {
     return token;
   }
 
-  /** The token's id and scope, or null if it isn't one of ours. */
-  check(token: string): { id: string; scope: Scope } | null {
+  /** The token's id, scope and account, or null if it isn't one of ours. */
+  check(token: string): { id: string; scope: Scope; subject: string } | null {
     const row = this.db
-      .query<{ id: string; scope: Scope }, [string, number]>(
-        "SELECT id, scope FROM tokens WHERE token_hash = ? AND (expires_at IS NULL OR expires_at > ?)",
+      .query<{ id: string; scope: Scope; subject: string }, [string, number]>(
+        "SELECT id, scope, COALESCE(subject, '') AS subject FROM tokens WHERE token_hash = ? AND (expires_at IS NULL OR expires_at > ?)",
       )
       .get(sha256(token), now());
     if (!row) return null;
@@ -60,19 +61,25 @@ export class Auth {
     return this.db.query<{ subject: string | null }, [string]>("SELECT subject FROM tokens WHERE id = ?").get(tokenId)?.subject ?? null;
   }
 
-  revoke(tokenId: string) {
-    this.db.query("DELETE FROM tokens WHERE id = ?").run(tokenId);
+  revoke(tokenId: string, subject?: string) {
+    if (subject === undefined) this.db.query("DELETE FROM tokens WHERE id = ?").run(tokenId);
+    else this.db.query("DELETE FROM tokens WHERE id = ? AND subject = ?").run(tokenId, subject);
   }
 
-  listTokens() {
+  /** Signs an account out everywhere. */
+  revokeAll(subject: string) {
+    this.db.query("DELETE FROM tokens WHERE subject = ?").run(subject);
+  }
+
+  listTokens(subject: string) {
     return this.db
-      .query("SELECT id, name, subject, scope, created_at, last_used_at FROM tokens ORDER BY created_at DESC")
-      .all();
+      .query("SELECT id, name, subject, scope, created_at, last_used_at FROM tokens WHERE subject = ? ORDER BY created_at DESC")
+      .all(subject);
   }
 }
 
 export type Scope = "full" | "mcp";
-export type AuthEnv = { Variables: { tokenId: string; scope: Scope } };
+export type AuthEnv = { Variables: { tokenId: string; scope: Scope; subject: string } };
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -94,6 +101,7 @@ export function requireAuth(auth: Auth, publicUrls: string[]): MiddlewareHandler
     }
     c.set("tokenId", found.id);
     c.set("scope", found.scope);
+    c.set("subject", found.subject);
     await next();
   };
 }
@@ -140,7 +148,7 @@ const exchangeBody = z.object({
   verifier: z.string().min(43).max(128),
 });
 
-export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolean; publicUrls: string[] }) {
+export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolean; publicUrls: string[]; users?: Users }) {
   const app = new Hono<AuthEnv>();
   const pending = new Map<string, Pending>();
   const handbacks = new Map<string, Handback>();
@@ -219,10 +227,11 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
       console.warn(`[auth] oidc exchange failed: ${(err as Error).message}`);
       return fail("The sign-in provider didn't accept the login.", 502);
     }
-    if (!oidc.allowed(identity)) {
+    if (!oidc.allowed(identity, opts.users?.allowed())) {
       console.warn(`[auth] rejected ${identity.username ?? identity.sub}`);
       return fail("This account isn't allowed to use Sink.", 403);
     }
+    opts.users?.seen(identity);
 
     if (entry.client === "android") {
       const handback = randomString();
@@ -262,21 +271,23 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
   // Before sign-in: what the login button should say.
   app.get("/info", (c) => c.json({ provider: oidc.name }));
 
-  app.get("/me", authed, (c) => c.json({ ok: true, tokenId: c.get("tokenId") }));
+  // admin: the owner, who manages who else may sign in.
+  app.get("/me", authed, (c) =>
+    c.json({ ok: true, tokenId: c.get("tokenId"), admin: c.get("scope") === "full" && (opts.users?.isOwner(c.get("subject")) ?? false) }),
+  );
 
-  app.get("/tokens", authed, requireFullScope, (c) => c.json({ tokens: auth.listTokens() }));
+  app.get("/tokens", authed, requireFullScope, (c) => c.json({ tokens: auth.listTokens(c.get("subject")) }));
 
   // Named tokens for other clients (an MCP client like Claude Code); same account as the caller.
   // Tokens made here are for MCP clients like Claude Code, so they get the assistant scope.
   app.post("/tokens", authed, requireFullScope, async (c) => {
     const parsed = z.object({ name: z.string().trim().min(1).max(60) }).safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
-    const subject = auth.subjectOf(c.get("tokenId")) ?? "";
-    return c.json({ token: auth.issueToken(parsed.data.name, subject, "mcp") }, 201);
+    return c.json({ token: auth.issueToken(parsed.data.name, c.get("subject"), "mcp") }, 201);
   });
 
   app.delete("/tokens/:id", authed, requireFullScope, (c) => {
-    auth.revoke(c.req.param("id"));
+    auth.revoke(c.req.param("id"), c.get("subject"));
     return c.json({ ok: true });
   });
 

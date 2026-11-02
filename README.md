@@ -10,7 +10,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Your files:** one `.md` per note in a normal folder. Point Sink at an Obsidian vault, a NAS share or a
   Syncthing folder and both apps edit the same files. Deleted notes go to `.trash/`, like Obsidian;
   Undo or the Trash page puts them back.
-- **Share a note:** a read-only link anyone can open, no account needed. Stop sharing any time.
+- **Share a note:** a link anyone can open, no account needed: read-only, or let people with the link edit after
+  giving a name. Stop sharing any time.
 - **Version history:** earlier versions of every note, to read or restore.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Leaving Notion:** import its Markdown & CSV export from Settings: the page tree, links between pages, images, and
@@ -26,7 +27,9 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Plugins:** diagrams (Mermaid), math (KaTeX), daily notes and webhooks built in; add your own code blocks, slash
   commands, routes, assistant tools and automations.
 
-Single user per install: everyone runs their own.
+Accounts: everyone allowed to sign in gets their own private notes. The first account (whoever was already using
+Sink, else the first to sign in) is the owner: their notes are in `SINK_NOTES_DIR`, and email in and plugins work on
+them. Everyone else's notes and index are in `SINK_USERS_DIR` (default `data/users/<id>/`).
 
 ## Quick start
 
@@ -65,7 +68,8 @@ Then set `SINK_OIDC_ISSUER`, `SINK_OIDC_CLIENT_ID`, `SINK_OIDC_CLIENT_SECRET`, a
 - `user:you`: your username at the provider. Only use this if people can't pick their own usernames there
 - `sub:1234…` (or anything else): the provider's fixed ID for your account
 
-`SINK_OIDC_ALLOWED_GROUPS` works too, for groups an admin assigns. If the provider is shared with other people,
+Once you're in, add more people in Settings → People (the same kinds of entries); removing someone there signs them
+out. `SINK_OIDC_ALLOWED_GROUPS` works too, for groups an admin assigns. If the provider is shared with other people,
 don't use `SINK_OIDC_ALLOW_ANY_USER`.
 
 | Provider | Issuer URL looks like |

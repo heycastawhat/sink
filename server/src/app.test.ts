@@ -7,6 +7,7 @@ import { Auth, s256 } from "./auth";
 import { Oidc } from "./oidc";
 import { createApp } from "./app";
 import { Backups } from "./backup";
+import { Users } from "./users";
 import { pageText } from "./html";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
@@ -75,14 +76,17 @@ function makeSetup(allowedUsers: string[] = [], oidcExtra: { clientSecret?: stri
     },
     authentik.fetchImpl,
   );
+  const usersDir = mkdtempSync(join(tmpdir(), "sink-users-"));
+  const users = new Users(db, { db, vault }, { dir: usersDir });
   const app = createApp({
     db,
     vault,
+    users,
     auth,
     oidc,
     config: { secureCookies: false, maxUploadBytes: 5 * 1024 * 1024, webDir: undefined, publicUrls: [PUBLIC] },
   });
-  return { db, app, authentik, auth, vault, vaultDir };
+  return { db, app, authentik, auth, vault, vaultDir, users, usersDir };
 }
 
 /** Runs /oidc/start, plays authentik, returns the callback response. */
@@ -493,7 +497,7 @@ describe("oauth for mcp connectors", () => {
     expect((await listTools(tok.access_token)).status).toBe(200);
     expect((await setup.app.request("/oauth/token", form({ grant_type: "authorization_code", code: code2, client_id: client, code_verifier: verifier }))).status).toBe(400);
 
-    const names = setup.auth.listTokens().map((t: any) => t.name);
+    const names = setup.auth.listTokens("abc123").map((t: any) => t.name);
     expect(names).toContain("Claude (MCP)");
 
     const refreshed = (await (await setup.app.request("/oauth/token", form({ grant_type: "refresh_token", refresh_token: tok.refresh_token, client_id: client }))).json()) as any;
@@ -669,6 +673,41 @@ describe("notes", () => {
 
     await send(token, "DELETE", "/api/notes/share?path=Lisbon.md");
     expect((await setup.app.request(`/api/public/share/${share.id}`)).status).toBe(404);
+  });
+
+  test("editable share links: edit the body, keep frontmatter, conflicts, name recorded, can be turned off", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "", title: "Plan", content: "---\nsecret: yes\n---\n# Plan\n" });
+    const share = (await (await send(token, "POST", "/api/notes/share", { path: "Plan.md" })).json()) as any;
+    expect(share.editable).toBe(false);
+    const put = (body: object) =>
+      setup.app.request(`/api/public/share/${share.id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const read = async () => (await (await setup.app.request(`/api/public/share/${share.id}`)).json()) as any;
+    // Read-only: no hash handed out, and edits are refused.
+    expect((await read()).hash).toBeUndefined();
+    expect((await put({ content: "# Hacked\n", base_hash: "x", name: "Sam" })).status).toBe(404);
+
+    expect(((await (await send(token, "POST", "/api/notes/share", { path: "Plan.md", editable: true })).json()) as any).editable).toBe(true);
+    const pub = await read();
+    expect(pub.editable).toBe(true);
+    expect((await put({ content: "# Plan\n\nBy Sam\n", base_hash: pub.hash, name: "  " })).status).toBe(400);
+    const saved = await put({ content: "# Plan\n\nBy Sam\n", base_hash: pub.hash, name: "Sam" });
+    expect(saved.status).toBe(200);
+    expect(((await (await get(token, "/api/notes/file?path=Plan.md")).json()) as any).content).toBe("---\nsecret: yes\n---\n# Plan\n\nBy Sam\n");
+    const conflict = await put({ content: "# Plan\n\nStale\n", base_hash: pub.hash, name: "Alex" });
+    expect(conflict.status).toBe(409);
+    const current = ((await conflict.json()) as any).current;
+    expect(current.content).toBe("# Plan\n\nBy Sam\n");
+    expect(current.hash).toBe(((await saved.json()) as any).hash);
+    const info = (await (await get(token, "/api/notes/share?path=Plan.md")).json()) as any;
+    expect(info.edited_by).toBe("Sam");
+    expect(info.edited_at).toBeGreaterThan(0);
+    // The text Sam replaced is in the history.
+    const versions = ((await (await get(token, "/api/notes/versions?path=Plan.md")).json()) as any).items;
+    expect(((await (await get(token, `/api/notes/versions/${versions[0].id}?path=Plan.md`)).json()) as any).content).toBe("---\nsecret: yes\n---\n# Plan\n");
+
+    await send(token, "POST", "/api/notes/share", { path: "Plan.md", editable: false });
+    expect((await put({ content: "# Again\n", base_hash: current.hash, name: "Sam" })).status).toBe(404);
   });
 
   test("moving or renaming a note updates links to it", async () => {
@@ -1205,8 +1244,111 @@ describe("helpers", () => {
     db.close();
   });
 
+  test("upgrading makes whoever already signed in the owner, and their old tokens theirs", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "sink-migrate-")), "sink.db");
+    const old = new Database(path, { create: true, strict: true });
+    const before = migrations.findIndex((m) => m.includes("CREATE TABLE users"));
+    for (const m of migrations.slice(0, before)) old.exec(m);
+    old.exec(`PRAGMA user_version = ${before}`);
+    old.exec("INSERT INTO tokens (id, name, token_hash, created_at) VALUES ('t1', 'old', 'h1', 1)");
+    old.exec("INSERT INTO tokens (id, name, token_hash, created_at, subject) VALUES ('t2', 'phone', 'h2', 2, 'me')");
+    old.close();
+
+    const db = openDb(path);
+    expect(db.query("SELECT subject, dir FROM users").all()).toEqual([{ subject: "me", dir: "" }]);
+    expect(db.query("SELECT DISTINCT subject FROM tokens").all()).toEqual([{ subject: "me" }]);
+    db.close();
+  });
+
   test("fts query is sanitized", () => {
     expect(toFtsQuery(`wifi "pass" OR -x*`)).toBe(`"wifi"* "pass"* "OR"* "x"*`);
     expect(toFtsQuery("   ")).toBeNull();
+  });
+});
+
+describe("accounts", () => {
+  const send = (token: string, method: string, path: string, body?: unknown) =>
+    setup.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const titles = async (token: string) => ((await (await get(token, "/api/notes")).json()) as any).notes.map((n: any) => n.title);
+
+  test("the first account keeps the vault; the next gets its own", async () => {
+    const owner = await login();
+    const other = setup.auth.issueToken("test", "someone-else");
+    expect((await send(owner, "POST", "/api/notes", { title: "Mine" })).status).toBe(201);
+    expect((await send(other, "POST", "/api/notes", { title: "Theirs" })).status).toBe(201);
+    expect(await titles(owner)).toEqual(["Mine"]);
+    expect(await titles(other)).toEqual(["Theirs"]);
+    expect(existsSync(join(setup.vaultDir, "Mine.md"))).toBe(true);
+    expect(existsSync(join(setup.vaultDir, "Theirs.md"))).toBe(false);
+    expect((await get(other, "/api/notes/read?path=Mine.md")).status).toBe(404);
+    expect(setup.users.isOwner("abc123")).toBe(true);
+    expect(setup.users.isOwner("someone-else")).toBe(false);
+    // Reopened (a restart), each account still finds its own notes.
+    const again = new Users(setup.db, { db: setup.db, vault: setup.vault }, { dir: setup.usersDir });
+    expect(again.for("someone-else").vault.list().notes.map((n) => n.title)).toEqual(["Theirs"]);
+  });
+
+  test("tokens are listed and revoked per account", async () => {
+    const owner = await login();
+    const other = setup.auth.issueToken("Phone", "someone-else");
+    const listed = ((await (await get(other, "/api/auth/tokens")).json()) as any).tokens;
+    expect(listed.map((t: any) => t.name)).toEqual(["Phone"]);
+    const ownerTokenId = setup.auth.check(owner)!.id;
+    await send(other, "DELETE", `/api/auth/tokens/${ownerTokenId}`);
+    expect(setup.auth.check(owner)).not.toBeNull();
+  });
+
+  test("the owner lets people in from Settings, and taking them off signs them out", async () => {
+    setup = makeSetup(["sam@example.com"]);
+    const owner = await login();
+    expect(((await (await get(owner, "/api/auth/me")).json()) as any).admin).toBe(true);
+    // Someone not on the list can't sign in yet.
+    setup.authentik.state.user = { sub: "kim1", email: "kim@example.com", email_verified: true };
+    expect((await signIn()).callback.status).toBe(403);
+
+    expect((await send(owner, "POST", "/api/admin/users/allowed", { entry: "has space" })).status).toBe(400);
+    expect((await send(owner, "POST", "/api/admin/users/allowed", { entry: "kim@example.com" })).status).toBe(201);
+    const { callback } = await signIn();
+    expect(callback.status).toBe(302);
+    const kim = callback.headers.get("set-cookie")!.split(";")[0]!.split("=")[1]!;
+    expect(((await (await get(kim, "/api/auth/me")).json()) as any).admin).toBe(false);
+    expect((await get(kim, "/api/admin/users")).status).toBe(403);
+    expect((await send(kim, "POST", "/api/admin/users/allowed", { entry: "x@example.com" })).status).toBe(403);
+
+    const list = (await (await get(owner, "/api/admin/users")).json()) as any;
+    expect(list.allowed).toEqual(["kim@example.com"]);
+    expect(list.configured.users).toEqual(["sam@example.com"]);
+    expect(list.accounts.map((a: any) => [a.email, a.owner])).toEqual([[null, true], ["kim@example.com", false]]);
+
+    await send(owner, "DELETE", "/api/admin/users/allowed?entry=kim%40example.com");
+    expect((await get(kim, "/api/notes")).status).toBe(401);
+    expect((await get(owner, "/api/notes")).status).toBe(200);
+    expect((await signIn()).callback.status).toBe(403);
+  });
+
+  test("share links find the right account's note", async () => {
+    await get(await login(), "/api/notes");
+    const other = setup.auth.issueToken("test", "someone-else");
+    await send(other, "POST", "/api/notes", { title: "Shared", content: "hello from them" });
+    const share = (await (await send(other, "POST", "/api/notes/share", { path: "Shared.md" })).json()) as any;
+    const page = (await (await setup.app.request(`/api/public/share/${share.id}`)).json()) as any;
+    expect(page.content).toContain("hello from them");
+
+    // A visitor's edit goes to that account's vault, not the owner's.
+    await send(other, "POST", "/api/notes/share", { path: "Shared.md", editable: true });
+    const { hash } = (await (await setup.app.request(`/api/public/share/${share.id}`)).json()) as any;
+    const put = await setup.app.request(`/api/public/share/${share.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "edited by a visitor", base_hash: hash, name: "Visitor" }),
+    });
+    expect(put.status).toBe(200);
+    expect(((await (await get(other, "/api/notes/file?path=Shared.md")).json()) as any).content).toContain("edited by a visitor");
+    expect(existsSync(join(setup.vaultDir, "Shared.md"))).toBe(false);
+    expect(((await (await get(other, "/api/notes/share?path=Shared.md")).json()) as any).edited_by).toBe("Visitor");
   });
 });
