@@ -204,7 +204,7 @@ applyTheme();
 
 // ---------- routing ----------
 // Hash routes so reloads, the back button and links keep their place:
-// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new  #/todos  #/trash  #/settings
+// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new[?folder=F]  #/todos  #/trash  #/settings
 
 function parseHash() {
   const [path, query = ''] = (location.hash.replace(/^#/, '') || '/').split('?');
@@ -215,7 +215,7 @@ function parseHash() {
     const line = new URLSearchParams(query).get('line');
     return { ...base, note: rest.map(decodeURIComponent).join('/'), line: line == null ? null : Number(line) };
   }
-  if (first === 'new') return { ...base, draft: true };
+  if (first === 'new') return { ...base, draft: true, folder: new URLSearchParams(query).get('folder') ?? '' };
   if (['todos', 'trash', 'settings'].includes(first)) return { ...base, view: first };
   return base;
 }

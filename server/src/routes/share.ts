@@ -130,6 +130,11 @@ export function publicShareRoutes(spaces: () => Space[]) {
     if (!body.success) return c.json({ error: "invalid body" }, 400);
     const { body: text } = splitFrontmatter(note.content);
     const frontmatter = note.content.slice(0, note.content.length - text.length);
+    // Text that would read as frontmatter on a note with none would set its properties (`publish: true`, say).
+    if (!frontmatter && splitFrontmatter(body.data.content).yaml !== null) return c.json({ error: "the text can't start with properties" }, 400);
+    // The attachment route serves what the note embeds, so a visitor adding an embed could fetch any file in the vault.
+    const embeds = embedsOf(note.content);
+    if ([...embedsOf(body.data.content)].some((e) => !embeds.has(e))) return c.json({ error: "images can't be added to a shared note" }, 400);
     try {
       // Someone new editing keeps what was there as a version, so the owner can undo a visitor's changes.
       const keepVersion = share.edited_by !== body.data.name;

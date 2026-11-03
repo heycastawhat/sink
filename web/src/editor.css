@@ -32,6 +32,11 @@
   background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
 }
 
+.note-editor .cm-editor .cm-selectionMatch {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--md-sys-color-primary) 18%, transparent);
+}
+
 .note-editor .cm-placeholder {
   color: var(--md-sys-color-on-surface-variant);
 }

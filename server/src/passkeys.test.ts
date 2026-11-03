@@ -150,6 +150,23 @@ describe("passkeys", () => {
     expect((await s.req("POST", "/api/auth/passkey/login", { flow: opts3.flow, response: await kim.get(opts3.options) })).status).toBe(403);
   });
 
+  test("two registrations racing on one invite make one account", async () => {
+    const s = setup();
+    await s.asOwner("GET", "/api/notes");
+    const invite = (await (await s.asOwner("POST", "/api/admin/invites", { name: "Kim" })).json()) as any;
+    const token = new URL(invite.url).searchParams.get("invite")!;
+    const [a, b] = [await authenticator(), await authenticator()];
+    const ra = (await (await s.req("POST", "/api/auth/passkey/register/options", { invite: token })).json()) as any;
+    const rb = (await (await s.req("POST", "/api/auth/passkey/register/options", { invite: token })).json()) as any;
+    const [one, two] = await Promise.all([
+      s.req("POST", "/api/auth/passkey/register", { flow: ra.flow, invite: token, response: await a.create(ra.options) }),
+      s.req("POST", "/api/auth/passkey/register", { flow: rb.flow, invite: token, response: await b.create(rb.options) }),
+    ]);
+    expect([one.status, two.status].sort()).toEqual([200, 400]);
+    const people = (await (await s.asOwner("GET", "/api/admin/users")).json()) as any;
+    expect(people.allowed.filter((e: string) => e.startsWith("sub:passkey:"))).toHaveLength(1);
+  });
+
   test("invites can be cancelled, and only the owner makes them", async () => {
     const s = setup();
     await s.asOwner("GET", "/api/notes");

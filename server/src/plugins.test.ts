@@ -87,6 +87,8 @@ describe("plugin host", () => {
     expect((await s.req("GET", "/plugins/hello/..%2F..%2Fetc%2Fpasswd")).status).toBe(404);
     expect((await s.req("GET", "/plugins/hello/server.ts")).status).toBe(404); // not a client file type
     expect((await s.app.request("/plugins/hello/client.js")).status).toBe(401);
+    // The owner's plugins, so not for another account.
+    expect((await s.req("GET", "/plugins/hello/client.js", undefined, s.auth.issueToken("test", "someone-else"))).status).toBe(404);
 
     const mcp = await s.app.request("/mcp", {
       method: "POST",

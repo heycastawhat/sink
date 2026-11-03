@@ -438,6 +438,17 @@ describe("oauth for mcp connectors", () => {
     return new URL(res.headers.get("location")!);
   }
 
+  test("a consent can only be answered by the account it was shown to", async () => {
+    const reg = (await (await register({ redirect_uris: ["https://claude.ai/cb"] })).json()) as any;
+    const q = new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: "https://claude.ai/cb", code_challenge: s256(verifier), code_challenge_method: "S256" });
+    const attacker = `sink_session=${setup.auth.issueToken("web", "someone-else")}`;
+    const request = (await (await setup.app.request(`/oauth/authorize?${q}`, { headers: { cookie: attacker } })).text()).match(/name="request" value="([^"]+)"/)![1]!;
+    const victim = `sink_session=${await login()}`;
+    const res = await setup.app.request("/oauth/authorize", form({ request, decision: "allow" }, { cookie: victim }));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
   test("hardening: no redirect before consent, access tokens expire, registration can't be used up", async () => {
     // A registered client with an attacker's redirect URI: bad requests show a page, never bounce there.
     const reg = (await (await register({ redirect_uris: ["https://evil.example/phish"] })).json()) as any;
@@ -709,6 +720,88 @@ describe("notes", () => {
 
     await send(token, "POST", "/api/notes/share", { path: "Plan.md", editable: false });
     expect((await put({ content: "# Again\n", base_hash: current.hash, name: "Sam" })).status).toBe(404);
+  });
+
+  test("a share link goes into the trash with its note, and comes back with it", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "", title: "Ideas", content: "# Ideas\n" });
+    const share = (await (await send(token, "POST", "/api/notes/share", { path: "Ideas.md", editable: true })).json()) as any;
+    await send(token, "DELETE", q("Ideas.md"));
+    expect((await setup.app.request(`/api/public/share/${share.id}`)).status).toBe(404);
+    // A new note with the old name doesn't inherit the link (or the history).
+    await send(token, "POST", "/api/notes", { folder: "", title: "Ideas", content: "# Ideas\n\nPrivate.\n" });
+    expect((await setup.app.request(`/api/public/share/${share.id}`)).status).toBe(404);
+    expect(((await (await get(token, "/api/notes/share?path=Ideas.md")).json()) as any).id).toBeNull();
+
+    const restored = (await (await send(token, "POST", "/api/notes/trash/restore", { path: "Ideas.md" })).json()) as any;
+    expect(restored.path).toBe("Ideas 1.md");
+    expect(((await (await get(token, "/api/notes/share?path=Ideas%201.md")).json()) as any).id).toBe(share.id);
+    expect(((await (await setup.app.request(`/api/public/share/${share.id}`)).json()) as any).content).toBe("# Ideas\n");
+
+    // Deleted for good, the link goes too.
+    await send(token, "DELETE", q("Ideas 1.md"));
+    await send(token, "DELETE", "/api/notes/trash?path=Ideas%201.md");
+    expect(setup.db.query("SELECT count(*) AS n FROM shares").get()).toEqual({ n: 0 });
+  });
+
+  test("the trash purge keeps the history of notes it can still restore", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "", title: "Old", content: "# Old\n" });
+    const day = 24 * 60 * 60 * 1000;
+    setup.db.query("INSERT INTO versions (path, at, content) VALUES (?, ?, ?)").run("Old.md", Date.now() - 60 * day, "# Older\n");
+    await send(token, "DELETE", q("Old.md"));
+    await setup.vault.purgeTrash(30);
+    expect(setup.db.query("SELECT count(*) AS n FROM versions").get()).toEqual({ n: 1 });
+    await setup.vault.purgeTrash(30, Date.now() + 31 * day);
+    expect(setup.db.query("SELECT count(*) AS n FROM versions").get()).toEqual({ n: 0 });
+  });
+
+  test("an editable share can't add images or properties", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "", title: "Open", content: "# Open\n\n![[map.png]]\n" });
+    writeFileSync(file("secret.png"), "png");
+    await send(token, "POST", "/api/notes/scan");
+    const share = (await (await send(token, "POST", "/api/notes/share", { path: "Open.md", editable: true })).json()) as any;
+    const put = (content: string, base_hash: string) =>
+      setup.app.request(`/api/public/share/${share.id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, base_hash, name: "Sam" }) });
+    const { hash } = (await (await setup.app.request(`/api/public/share/${share.id}`)).json()) as any;
+    expect((await put("# Open\n\n![[map.png]]\n![](secret.png)\n", hash)).status).toBe(400);
+    expect((await setup.app.request(`/api/public/share/${share.id}/attachment?name=secret.png`)).status).toBe(404);
+    expect((await put("---\npublish: true\n---\n# Open\n", hash)).status).toBe(400);
+    // Taking an image out is fine.
+    expect((await put("# Open\n", hash)).status).toBe(200);
+  });
+
+  test("two saves on the same version: one wins, the other is a conflict", async () => {
+    const token = await login();
+    const { hash } = (await (await send(token, "POST", "/api/notes", { folder: "", title: "Race", content: "# Race\n" })).json()) as any;
+    const statuses = (await Promise.all(["# Race\n\nA\n", "# Race\n\nB\n"].map((content) => send(token, "PUT", q("Race.md"), { content, base_hash: hash })))).map((r) => r.status);
+    expect(statuses.sort()).toEqual([200, 409]);
+  });
+
+  test("an assistant's token can't publish a note", async () => {
+    const token = await login();
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    await send(token, "POST", "/api/notes", { folder: "", title: "Diary", content: "# Diary\n" });
+    expect((await send(mcp, "PATCH", "/api/notes/meta?path=Diary.md", { publish: true })).status).toBe(403);
+    expect((await send(mcp, "PATCH", "/api/notes/meta?path=Diary.md", { pinned: true })).status).toBe(200);
+    const pinned = ((await (await get(token, q("Diary.md"))).json()) as any).hash;
+    expect((await send(mcp, "PUT", q("Diary.md"), { content: "---\npublish: true\n---\n# Diary\n", base_hash: pinned })).status).toBe(403);
+    expect((await send(mcp, "POST", "/api/notes", { folder: "", title: "Out", content: "---\npublish: true\n---\n# Out\n" })).status).toBe(403);
+    // A note you published stays editable by it.
+    await send(token, "PATCH", "/api/notes/meta?path=Diary.md", { publish: true });
+    const published = ((await (await get(token, q("Diary.md"))).json()) as any);
+    expect((await send(mcp, "PUT", q("Diary.md"), { content: published.content + "\nMore.\n", base_hash: published.hash })).status).toBe(200);
+  });
+
+  test("a file asked for by path is that file, even at the top level", async () => {
+    const token = await login();
+    mkdirSync(file("attachments"));
+    writeFileSync(file("diagram.png"), "top");
+    writeFileSync(file("attachments/diagram.png"), "attached");
+    await send(token, "POST", "/api/notes/scan");
+    expect(await (await get(token, "/api/notes/attachment?path=diagram.png")).text()).toBe("top");
+    expect(await (await get(token, "/api/notes/attachment?name=diagram.png")).text()).toBe("attached");
   });
 
   test("moving or renaming a note updates links to it", async () => {
@@ -1110,6 +1203,8 @@ describe("todos", () => {
       "- [ ] Haircut 🔁 every 4 weeks when done 🛫 2026-11-23 📅 2026-11-27",
     );
     expect(nextOccurrence("- [ ] Water plants 🔁 every 3 days", "2026-10-30")).toBe("- [ ] Water plants 🔁 every 3 days");
+    // Dated only by its reminder: that moves on too.
+    expect(nextOccurrence("- [ ] Call mum 🔁 every week (@2026-10-30 18:00)", "2026-11-01")).toBe("- [ ] Call mum 🔁 every week (@2026-11-06 18:00)");
     expect(nextOccurrence("- [ ] One-off 📅 2026-10-30", "2026-10-30")).toBeNull();
   });
 
@@ -1345,6 +1440,7 @@ describe("accounts", () => {
     expect((await send(owner, "PUT", "/api/publish", { handle: "Not OK!" })).status).toBe(400);
     expect((await send(owner, "PUT", "/api/publish", { handle: "Josh" })).status).toBe(200);
     expect((await send(other, "PUT", "/api/publish", { handle: "josh" })).status).toBe(409);
+    expect((await send(other, "PUT", "/api/publish", { handle: "owner" })).status).toBe(409);
     expect(((await (await setup.app.request("/api/public/pages/owner")).json()) as any).handle).toBe("josh");
 
     // Nothing published yet: an empty page, and no way to read a note by guessing its path.

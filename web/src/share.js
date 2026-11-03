@@ -71,8 +71,12 @@ async function doSave() {
   } else if (res?.status === 409 && body?.current) {
     // Someone else saved first: their text wins, and ours stays copyable so nothing is lost.
     Object.assign(state, { hash: body.current.hash, saved: body.current.content });
-    if (body.current.content === text) return status('Saved');
-    state.mine = text;
+    if (body.current.content === text) {
+      if (dirty()) state.timer = setTimeout(save, SAVE_DELAY);
+      return status('Saved');
+    }
+    // Everything in the editor, including what was typed while the save was out.
+    state.mine = editor.getText();
     editor.setText(body.current.content);
     status('Someone else changed this note, so your last edit wasn’t saved');
     $('share-copy').hidden = false;

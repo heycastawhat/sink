@@ -290,7 +290,7 @@ export function nextOccurrence(raw: string, today: string): string | null {
   const rule = /🔁\uFE0F?\s*([^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(^]*)/u.exec(rest)?.[1]?.trim();
   if (!rule) return null;
   const whenDone = /\s+when done$/i.test(rule);
-  const base = [/📅\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /⏳\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /🛫\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u]
+  const base = [/📅\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /⏳\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /🛫\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /\(@(\d{4}-\d{2}-\d{2})/u]
     .map((re) => re.exec(rest)?.[1])
     .find(Boolean);
   const next = nextDate(rule.replace(/\s+when done$/i, ""), whenDone || !base ? today : base);

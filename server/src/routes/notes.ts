@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { extname } from "node:path";
 import { z } from "zod";
 import type { AuthEnv } from "../auth";
-import { cleanPath, COLORS, toFtsQuery, VaultError, type Vault } from "../notes";
+import { cleanPath, COLORS, parseNote, toFtsQuery, VaultError, type Vault } from "../notes";
 import { ZipWriter } from "../zip";
 
 const TYPES: Record<string, string> = {
@@ -58,6 +58,11 @@ export async function attachmentResponse(vault: Vault, path: string): Promise<Re
 }
 
 export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) {
+  /** Whether an assistant's save would put a note on the public page that isn't there already (`publish: true` frontmatter). */
+  const publishes = async (c: Context<AuthEnv>, path: string | null, content: string) =>
+    c.get("scope") !== "full" &&
+    parseNote(path ?? "new.md", content).publish &&
+    !(path && (await vault.read(path).then((n) => n.publish, () => false)));
   const app = new Hono<AuthEnv>();
 
   /** Vault errors become their status; the 409 on a stale save carries the file as it is now. */
@@ -122,6 +127,7 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const q = pathQuery.safeParse(c.req.query());
       const body = saveBody.safeParse(await c.req.json().catch(() => null));
       if (!q.success || !body.success) return c.json({ error: "invalid request" }, 400);
+      if (await publishes(c, q.data.path, body.data.content)) return c.json({ error: "not allowed with this token" }, 403);
       return c.json(await vault.write(q.data.path, body.data.content, body.data.base_hash, { keepVersion: body.data.keep_version }));
     }),
   );
@@ -134,6 +140,9 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
         .object({ pinned: z.boolean().optional(), publish: z.boolean().optional(), searchable: z.boolean().optional(), color: z.enum(COLORS as [string, ...string[]]).nullable().optional() })
         .safeParse(await c.req.json().catch(() => null));
       if (!q.success || !body.success) return c.json({ error: "invalid request" }, 400);
+      // Publishing is sharing with everyone: not for assistants' tokens, as sharing isn't.
+      if (c.get("scope") !== "full" && (body.data.publish !== undefined || body.data.searchable !== undefined))
+        return c.json({ error: "not allowed with this token" }, 403);
       return c.json(await vault.setMeta(q.data.path, body.data));
     }),
   );
@@ -143,6 +152,7 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const body = createBody.safeParse(await c.req.json().catch(() => null));
       if (!body.success) return c.json({ error: "invalid body" }, 400);
       const { folder, title, content } = body.data;
+      if (await publishes(c, null, content)) return c.json({ error: "not allowed with this token" }, 403);
       return c.json(await vault.create(folder, title, content), 201);
     }),
   );
@@ -205,8 +215,8 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
   // Images and files notes point at, by vault path or by the bare name a `![[embed]]` uses.
   app.get("/notes/attachment", (c) =>
     run(c, async () => {
-      const ref = c.req.query("path") ?? c.req.query("name");
-      const path = ref ? vault.resolveFile(ref) : null;
+      const [byPath, name] = [c.req.query("path"), c.req.query("name")];
+      const path = byPath ? vault.resolveFile(byPath, { exact: true }) : name ? vault.resolveFile(name) : null;
       if (!path) return c.json({ error: "not found" }, 404);
       return attachmentResponse(vault, path);
     }),
