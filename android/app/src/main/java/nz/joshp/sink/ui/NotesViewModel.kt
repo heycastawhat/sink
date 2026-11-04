@@ -335,31 +335,34 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
      * Changes a note from its card, then reloads. Returns an error message for the snackbar, or null. Not while edits
      * to it are still queued on the phone: they were made against the file as it was, so they'd come back a conflict.
      */
-    private suspend fun cardChange(path: String, block: suspend (Api) -> Unit): String? {
+    private suspend fun cardChange(path: String, conflict: String = "Someone else changed this note. Try again.", block: suspend (Api) -> Unit): String? {
         if (store.pending(path) != null) return "This note has edits still on their way to the server. Try again once they're saved."
         val api = api() ?: return "Signed out"
         val error = runCatching { block(api) }.exceptionOrNull()
         refresh()
         return when {
             error == null -> null
-            error is ApiException && error.code == 409 -> "A note with that name is already there"
+            error is ApiException && error.code == 409 -> conflict
             error is ApiException -> error.message ?: "Couldn't change the note"
             else -> "You're offline. That needs the server."
         }
     }
 
     /** Pin or colour from the card; the card changes at once rather than after the round trip. */
-    suspend fun setCardMeta(path: String, pin: Boolean? = null, color: String? = null, clearColor: Boolean = false): String? =
-        cardChange(path) { api ->
+    suspend fun setCardMeta(path: String, pin: Boolean? = null, color: String? = null, clearColor: Boolean = false): String? {
+        val before = _state.value.notes
+        return cardChange(path) { api ->
             _state.update { s ->
                 s.copy(notes = s.notes.map { if (it.path == path) it.copy(pinned = pin ?: it.pinned, color = if (clearColor) null else color ?: it.color) else it })
             }
-            api.noteMeta(path, pin, color, clearColor)
+            // Offline, refresh() can't fix the list, so put the card back as it was.
+            runCatching { api.noteMeta(path, pin, color, clearColor) }.onFailure { _state.update { s -> s.copy(notes = before) }; throw it }
             store.saveNote(api.note(path))
         }
+    }
 
     /** Moves a note to [dest], a full path ending in .md. Archive is a move into (or out of) Archive/. */
-    suspend fun moveCard(path: String, dest: String): String? = if (dest == path) null else cardChange(path) { api ->
+    suspend fun moveCard(path: String, dest: String): String? = if (dest == path) null else cardChange(path, "A note with that name is already there") { api ->
         api.moveNote(path, dest)
         store.forget(path)
         renameOpened(path, dest)

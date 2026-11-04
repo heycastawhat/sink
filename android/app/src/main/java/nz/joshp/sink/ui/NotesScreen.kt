@@ -409,7 +409,12 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                 haptics.confirm()
                 val name = n.path.substringAfterLast('/')
                 val archived = n.path.startsWith("Archive/", ignoreCase = true)
-                act { vm.moveCard(n.path, if (archived) name else "Archive/$name") ?: if (archived) "Unarchived" else "Archived" }
+                val dest = if (archived) name else "Archive/$name"
+                scope.launch {
+                    vm.moveCard(n.path, dest)?.let { snackbar.showSnackbar(it); return@launch }
+                    val result = snackbar.showSnackbar(if (archived) "Unarchived" else "Archived", actionLabel = "Undo")
+                    if (result == SnackbarResult.ActionPerformed) vm.moveCard(dest, n.path)?.let { snackbar.showSnackbar(it) }
+                }
             },
             onDelete = { cardMenu = null; haptics.reject(); act { vm.trashCard(n.path) } },
             onDismiss = { cardMenu = null },

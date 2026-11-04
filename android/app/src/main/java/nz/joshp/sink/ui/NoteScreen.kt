@@ -61,6 +61,10 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -1024,10 +1028,11 @@ fun Swatch(name: String?, selected: Boolean, onClick: () -> Unit) {
             .clip(CircleShape)
             .background(if (name == null) Color.Transparent else noteTint(name, MaterialTheme.colorScheme.surfaceContainerLow, 0.55f))
             .border(2.dp, ring, CircleShape)
-            .clickable(onClick = onClick),
+            .selectable(selected, role = Role.RadioButton, onClick = onClick)
+            .semantics { contentDescription = name ?: "No colour" },
         Alignment.Center,
     ) {
-        if (name == null) Icon(Icons.Outlined.FormatColorReset, "No colour", Modifier.size(18.dp))
+        if (name == null) Icon(Icons.Outlined.FormatColorReset, null, Modifier.size(18.dp))
     }
 }
 
