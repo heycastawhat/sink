@@ -210,6 +210,19 @@ function popInNewCards() {
   shownCards = now;
 }
 
+// Each card spans as many 2px grid rows as it is tall (margin included); re-measured when an image loads or the
+// column width changes.
+const cardSizes = new ResizeObserver((entries) => {
+  for (const { target, borderBoxSize } of entries) {
+    const margin = parseFloat(getComputedStyle(target).marginBottom);
+    target.style.gridRowEnd = `span ${Math.ceil((borderBoxSize[0].blockSize + margin) / 2)}`;
+  }
+});
+function masonry() {
+  cardSizes.disconnect();
+  for (const card of document.querySelectorAll('#notes-pinned .note-card, #notes-grid .note-card')) cardSizes.observe(card);
+}
+
 function renderGrid() {
   const root = $('notes');
   if (!root || root.hidden) return;
@@ -235,6 +248,7 @@ function renderGrid() {
   $('notes-pinned').innerHTML = pinned.map(cardHtml).join('');
   $('notes-grid').innerHTML = others.map(cardHtml).join('');
   popInNewCards();
+  masonry();
 
   const empty = state.loaded && !list.length;
   $('notes-empty').hidden = !empty;
