@@ -293,6 +293,26 @@ describe("auth", () => {
   });
 });
 
+describe("web app", () => {
+  test("the service worker is always rechecked, hashed assets kept for good", async () => {
+    const webDir = mkdtempSync(join(tmpdir(), "sink-web-"));
+    mkdirSync(join(webDir, "assets"));
+    writeFileSync(join(webDir, "index.html"), "<!doctype html>");
+    writeFileSync(join(webDir, "sw.js"), "");
+    writeFileSync(join(webDir, "assets/main-abc.js"), "");
+    const app = createApp({
+      db: setup.db,
+      vault: setup.vault,
+      auth: setup.auth,
+      oidc: new Oidc({ issuer: ISSUER, clientId: "c", clientSecret: "", allowedUsers: [], allowedGroups: [], allowAnyone: true }),
+      config: { secureCookies: false, maxUploadBytes: 1024, webDir, publicUrls: [PUBLIC] },
+    });
+    expect((await app.request("/sw.js")).headers.get("cache-control")).toBe("no-cache");
+    expect((await app.request("/assets/main-abc.js")).headers.get("cache-control")).toContain("immutable");
+    expect((await app.request("/")).headers.get("cache-control")).toBe("no-cache");
+  });
+});
+
 describe("mcp", () => {
   let rpcId = 0;
   const rpc = async (token: string | null, method: string, params: unknown = {}) => {

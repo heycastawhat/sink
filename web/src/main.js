@@ -775,3 +775,4 @@ notes.initNotes({ toast, navigate: (hash) => (location.hash = hash) });
 notes.wireNotes();
 
 boot();
+if ('serviceWorker' in navigator && !import.meta.env.DEV) navigator.serviceWorker.register('/sw.js');
