@@ -191,6 +191,8 @@ export function createApp(deps: {
     app.get("/public", serveStatic({ root: config.webDir, path: "public.html" }));
     app.get("/public/*", serveStatic({ root: config.webDir, path: "public.html" }));
     app.use("/*", serveStatic({ root: config.webDir }));
+    // An asset from an older deploy: a 404, not index.html, which would be cached for good under the asset's name.
+    app.get("/assets/*", (c) => c.notFound());
     // SPA fallback.
     // `path` is joined to `root`; on its own it's read relative to the working directory, not webDir.
     app.get("*", serveStatic({ root: config.webDir, path: "index.html" }));
