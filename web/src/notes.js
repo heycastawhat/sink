@@ -212,9 +212,10 @@ function popInNewCards() {
 
 // Each card spans as many 2px grid rows as it is tall (margin included); re-measured when an image loads or the
 // column width changes.
+// The margin is read once per batch: reading it after each write would force a style recalc per card.
 const cardSizes = new ResizeObserver((entries) => {
+  const margin = parseFloat(getComputedStyle(entries[0].target).marginBottom);
   for (const { target, borderBoxSize } of entries) {
-    const margin = parseFloat(getComputedStyle(target).marginBottom);
     target.style.gridRowEnd = `span ${Math.ceil((borderBoxSize[0].blockSize + margin) / 2)}`;
   }
 });

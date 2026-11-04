@@ -12,7 +12,13 @@ html {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   -webkit-text-size-adjust: 100%;
-  overscroll-behavior: none;
+}
+
+/* Installed app only: in a browser tab this would also turn off pull-to-refresh. */
+@media (display-mode: standalone) {
+  html {
+    overscroll-behavior: none;
+  }
 }
 
 body {

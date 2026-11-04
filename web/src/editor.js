@@ -764,7 +764,9 @@ function pasteLink(e, view) {
   if (!url || !/^(https?:\/\/|mailto:)\S+$/i.test(url)) return false;
   const { from, to } = view.state.selection.main;
   const text = view.state.sliceDoc(from, to);
-  if (view.state.selection.ranges.length > 1 || !text || text.includes('\n')) return false;
+  // Not over a URL (that's a replacement), across brackets (they'd break the link), or in code or frontmatter.
+  if (view.state.selection.ranges.length > 1 || !text || /[\n[\]]/.test(text) || /^\w+:\/\//.test(text)) return false;
+  if (inCode(view.state, from) || from < frontmatterEnd(view.state)) return false;
   e.preventDefault();
   const insert = `[${text}](${url})`;
   view.dispatch({
