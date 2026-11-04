@@ -36,6 +36,7 @@ import nz.joshp.sink.data.createNote
 import nz.joshp.sink.data.fillTemplate
 import nz.joshp.sink.data.note
 import nz.joshp.sink.data.moveNote
+import nz.joshp.sink.data.noteMeta
 import nz.joshp.sink.data.restoreFolder
 import nz.joshp.sink.data.trashNote
 import nz.joshp.sink.data.notes
@@ -328,6 +329,46 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }.exceptionOrNull()
         refresh()
         return error?.let { "Couldn't restore: ${it.message}" }
+    }
+
+    /**
+     * Changes a note from its card, then reloads. Returns an error message for the snackbar, or null. Not while edits
+     * to it are still queued on the phone: they were made against the file as it was, so they'd come back a conflict.
+     */
+    private suspend fun cardChange(path: String, block: suspend (Api) -> Unit): String? {
+        if (store.pending(path) != null) return "This note has edits still on their way to the server. Try again once they're saved."
+        val api = api() ?: return "Signed out"
+        val error = runCatching { block(api) }.exceptionOrNull()
+        refresh()
+        return when {
+            error == null -> null
+            error is ApiException && error.code == 409 -> "A note with that name is already there"
+            error is ApiException -> error.message ?: "Couldn't change the note"
+            else -> "You're offline. That needs the server."
+        }
+    }
+
+    /** Pin or colour from the card; the card changes at once rather than after the round trip. */
+    suspend fun setCardMeta(path: String, pin: Boolean? = null, color: String? = null, clearColor: Boolean = false): String? =
+        cardChange(path) { api ->
+            _state.update { s ->
+                s.copy(notes = s.notes.map { if (it.path == path) it.copy(pinned = pin ?: it.pinned, color = if (clearColor) null else color ?: it.color) else it })
+            }
+            api.noteMeta(path, pin, color, clearColor)
+            store.saveNote(api.note(path))
+        }
+
+    /** Moves a note to [dest], a full path ending in .md. Archive is a move into (or out of) Archive/. */
+    suspend fun moveCard(path: String, dest: String): String? = if (dest == path) null else cardChange(path) { api ->
+        api.moveNote(path, dest)
+        store.forget(path)
+        renameOpened(path, dest)
+    }
+
+    suspend fun trashCard(path: String): String? = cardChange(path) { api ->
+        val trashPath = api.trashNote(path)
+        store.forget(path)
+        trashed(path, trashPath)
     }
 
     fun linkTargets(): List<Pair<String, String>> =

@@ -1016,7 +1016,7 @@ private fun NoteActionsSheet(board: Boolean, color: String?, saved: Boolean, arc
 }
 
 @Composable
-private fun Swatch(name: String?, selected: Boolean, onClick: () -> Unit) {
+fun Swatch(name: String?, selected: Boolean, onClick: () -> Unit) {
     val ring = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     Box(
         Modifier
