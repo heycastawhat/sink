@@ -106,7 +106,8 @@ export function createBoard({ parent, text, onChange, attachmentUrl, upload, onE
       if (files.has(id) || uploading.has(id)) continue;
       uploading.add(id);
       try {
-        const blob = await (await fetch(f.dataURL)).blob();
+        // Decoded by hand: the page's CSP (connect-src 'self') stops fetch() reading a data: URL.
+        const blob = new Blob([Uint8Array.from(atob(f.dataURL.split(',')[1]), (c) => c.charCodeAt(0))]);
         const ext = (f.mimeType.split('/')[1] ?? 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
         const { path } = await upload(new File([blob], `Pasted Image ${id.slice(0, 8)}.${ext}`, { type: f.mimeType }));
         files.set(id, path.split('/').pop());
