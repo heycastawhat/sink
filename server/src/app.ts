@@ -172,7 +172,7 @@ export function createApp(deps: {
       if (c.req.path.startsWith("/api/") || c.res.headers.has("cache-control")) return;
       const type = c.res.headers.get("content-type") ?? "";
       if (c.req.path.startsWith("/assets/")) c.header("cache-control", "public, max-age=31536000, immutable");
-      else if (type.includes("text/html") || c.req.path.endsWith(".webmanifest")) c.header("cache-control", "no-cache");
+      else if (type.includes("text/html") || c.req.path.endsWith(".webmanifest") || c.req.path === "/sw.js") c.header("cache-control", "no-cache");
     });
     // A shared note's page; it loads the note from /api/public/share/<id>. Not for search engines, and it doesn't
     // tell the sites its links go to where the reader came from.

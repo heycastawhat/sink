@@ -1,4 +1,5 @@
 {
+  "id": "/",
   "name": "Sink",
   "short_name": "Sink",
   "description": "Self-hosted notes: markdown, todos and whiteboards.",
