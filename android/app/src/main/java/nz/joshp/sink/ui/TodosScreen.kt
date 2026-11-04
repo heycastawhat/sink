@@ -73,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -271,14 +272,19 @@ private fun EmptyHint() {
     Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("All clear", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
         Spacer(Modifier.size(6.dp))
-        Text("Add one above, or write - [ ] thing in any note.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Add one below, or write - [ ] thing in any note.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     }
 }
 
 @Composable
 private fun GroupHead(name: String, count: Int, modifier: Modifier = Modifier, action: @Composable () -> Unit = {}) {
     Row(modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(name, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+        // Overdue in the error colour, so it reads as needing attention at a glance.
+        Text(
+            name,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+            color = if (name == "Overdue") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        )
         Spacer(Modifier.width(8.dp))
         Text("$count", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.weight(1f))

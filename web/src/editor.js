@@ -758,6 +758,26 @@ function toggleTask(view, pos) {
   return true;
 }
 
+// Pasting a URL over selected text links the text instead of replacing it (as Obsidian and GitHub do).
+function pasteLink(e, view) {
+  const url = e.clipboardData?.getData('text/plain').trim();
+  if (!url || !/^(https?:\/\/|mailto:)\S+$/i.test(url)) return false;
+  const { from, to } = view.state.selection.main;
+  const text = view.state.sliceDoc(from, to);
+  // Not over a URL (that's a replacement), across brackets (they'd break the link), or in code or frontmatter.
+  if (view.state.selection.ranges.length > 1 || !text || /[\n[\]]/.test(text) || /^\w+:\/\//.test(text)) return false;
+  if (inCode(view.state, from) || from < frontmatterEnd(view.state)) return false;
+  e.preventDefault();
+  const insert = `[${text}](${url})`;
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + insert.length },
+    userEvent: 'input.paste',
+    scrollIntoView: true,
+  });
+  return true;
+}
+
 /**
  * Builds an editor in `parent`.
  *  doc            initial text
@@ -898,7 +918,7 @@ export function createEditor(opts) {
           },
           paste(e, view) {
             const files = [...(e.clipboardData?.files ?? [])];
-            if (!files.length) return false;
+            if (!files.length) return pasteLink(e, view);
             e.preventDefault();
             insertFiles(view, files);
             return true;

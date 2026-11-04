@@ -35,6 +35,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.Unarchive
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import nz.joshp.sink.data.NOTE_COLORS
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
@@ -139,6 +147,9 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     var moving by remember { mutableStateOf(false) }
     var filterMenu by remember { mutableStateOf(false) }
     var byTitle by rememberSaveable { mutableStateOf(false) }
+    // The note whose card was long-pressed, for its quick actions; and that note, when moving it.
+    var cardMenu by remember { mutableStateOf<NoteMeta?>(null) }
+    var movingNote by remember { mutableStateOf<NoteMeta?>(null) }
     val pullUp = rememberPullUpToCreate { onNew("") }
     val haptics = rememberHaptics()
     // Runs a folder action and shows its error, if any.
@@ -155,8 +166,9 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
         }
     }
 
+    val onCardMenu = { n: NoteMeta -> cardMenu = n }
+
     val hideFoldered by vm.hideFoldered.collectAsStateWithLifecycle()
-    // Search always covers everything; home can leave filed notes to their folders (Settings).
     // Search covers everything; browsing can leave filed notes to their own folders (home and every folder alike).
     val inFolder = { n: NoteMeta ->
         when {
@@ -247,8 +259,8 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                         },
                         when {
                             state.query.isNotBlank() -> "No notes mention “${state.query}”."
-                            inside -> "Tap the pencil to write a note in this folder."
-                            else -> "Tap the pencil to write one. It's saved as a markdown file on your server."
+                            inside -> "Tap + or pull up to write a note in this folder."
+                            else -> "Tap + or pull up to write one. It's saved as a markdown file on your server."
                         },
                     )
                     // Laid out from the bottom up, where a thumb reaches: folders, then Recent, pinned notes, and the
@@ -287,10 +299,10 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                             }
                         }
                         if (pinned.isNotEmpty()) {
-                            items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen, vm::cardImage, Modifier.animateItem()) }
+                            items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen, onCardMenu, vm::cardImage, Modifier.animateItem()) }
                             item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
-                        items(others, key = { it.path }) { NoteCard(it, onOpen, vm::cardImage, Modifier.animateItem()) }
+                        items(others, key = { it.path }) { NoteCard(it, onOpen, onCardMenu, vm::cardImage, Modifier.animateItem()) }
                         if (pinned.isNotEmpty() && others.isNotEmpty()) {
                             item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         } else if (unfiledHome && others.isNotEmpty() && (subfolders.isNotEmpty() || showRecent)) {
@@ -384,6 +396,48 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
         PullUpDrawer(pullUp)
     }
 
+    cardMenu?.let { n ->
+        // Read fresh, so a pin or colour just changed shows as changed.
+        val current = state.notes.firstOrNull { it.path == n.path } ?: n
+        CardActionsSheet(
+            current,
+            onPin = { haptics.toggle(!current.pinned); act { vm.setCardMeta(n.path, pin = !current.pinned) } },
+            onColor = { c -> haptics.confirm(); act { if (c == null) vm.setCardMeta(n.path, clearColor = true) else vm.setCardMeta(n.path, color = c) } },
+            onMove = { cardMenu = null; movingNote = current },
+            onArchive = {
+                cardMenu = null
+                haptics.confirm()
+                val name = n.path.substringAfterLast('/')
+                val archived = n.path.startsWith("Archive/", ignoreCase = true)
+                val dest = if (archived) name else "Archive/$name"
+                scope.launch {
+                    vm.moveCard(n.path, dest)?.let { snackbar.showSnackbar(it); return@launch }
+                    val result = snackbar.showSnackbar(if (archived) "Unarchived" else "Archived", actionLabel = "Undo")
+                    if (result == SnackbarResult.ActionPerformed) vm.moveCard(dest, n.path)?.let { snackbar.showSnackbar(it) }
+                }
+            },
+            onDelete = { cardMenu = null; haptics.reject(); act { vm.trashCard(n.path) } },
+            onDismiss = { cardMenu = null },
+        )
+    }
+    movingNote?.let { n ->
+        FolderPickerSheet(
+            title = "Move “${n.title}” to",
+            folders = state.folders,
+            current = n.folder,
+            onPick = { parent ->
+                movingNote = null
+                act { vm.moveCard(n.path, listOf(parent, n.path.substringAfterLast('/')).filter { it.isNotEmpty() }.joinToString("/")) }
+            },
+            onNewFolder = { path ->
+                val (made, error) = vm.createFolderAt(path)
+                error?.let { snackbar.showSnackbar(it) }
+                made
+            },
+            onDismiss = { movingNote = null },
+        )
+    }
+
     if (naming) {
         NameDialog(
             title = if (inside) "New folder in ${state.folder.substringAfterLast('/')}" else "New folder",
@@ -421,7 +475,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
 }
 
 @Composable
-private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, loadImage: suspend (String) -> ImageBitmap?, modifier: Modifier = Modifier) {
+private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMeta) -> Unit, loadImage: suspend (String) -> ImageBitmap?, modifier: Modifier = Modifier) {
     val press = remember { MutableInteractionSource() }
     val firstLine = n.excerpt.orEmpty().trimStart().lineSequence().firstOrNull().orEmpty()
     // A note with no heading is named after its first line (Keep-style); showing both would repeat it.
@@ -434,7 +488,7 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, loadImage: suspend (
             .clip(RoundedCornerShape(16.dp))
             .background(noteTint(n.color))
             .border(1.dp, outline, RoundedCornerShape(16.dp))
-            .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(n.path) },
+            .combinedClickable(interactionSource = press, indication = LocalIndication.current, onLongClickLabel = "Note actions", onLongClick = { onLongPress(n) }) { onOpen(n.path) },
     ) {
         // The note's first image across the top, as Keep does; nothing until (unless) it loads.
         if (n.image != null && n.snippet == null) {
@@ -474,6 +528,57 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, loadImage: suspend (
                     n.tags.take(2).forEach { Pill("#$it") }
                 }
             }
+        }
+    }
+}
+
+/**
+ * A card's quick actions on long press, so a note can be pinned, coloured, filed or binned without opening it: colour
+ * first (boards have none, as on the web), then the actions, Delete last. Pin and colour leave the sheet open.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CardActionsSheet(
+    n: NoteMeta,
+    onPin: () -> Unit,
+    onColor: (String?) -> Unit,
+    onMove: () -> Unit,
+    onArchive: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
+            Text(
+                n.title,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
+            )
+            if (!n.isBoard) LazyRow(
+                contentPadding = PaddingValues(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(bottom = 8.dp),
+            ) {
+                item { Swatch(null, n.color == null) { onColor(null) } }
+                items(NOTE_COLORS.size) { i -> Swatch(NOTE_COLORS[i], n.color == NOTE_COLORS[i]) { onColor(NOTE_COLORS[i]) } }
+            }
+            @Composable
+            fun Item(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, danger: Boolean = false, onClick: () -> Unit) = Row(
+                Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                val error = MaterialTheme.colorScheme.error
+                Icon(icon, null, tint = if (danger) error else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(label, style = MaterialTheme.typography.bodyLarge, color = if (danger) error else MaterialTheme.colorScheme.onSurface)
+            }
+            Item(if (n.pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (n.pinned) "Unpin" else "Pin", onClick = onPin)
+            Item(Icons.AutoMirrored.Outlined.DriveFileMove, "Move to folder", onClick = onMove)
+            val archived = n.path.startsWith("Archive/", ignoreCase = true)
+            Item(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive", onClick = onArchive)
+            Item(Icons.Outlined.Delete, "Delete", danger = true, onClick = onDelete)
         }
     }
 }

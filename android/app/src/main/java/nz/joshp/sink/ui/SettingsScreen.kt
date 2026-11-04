@@ -37,6 +37,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -181,14 +185,18 @@ fun SettingsScreen(
 
             Card("Account") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Dns, null, tint = MaterialTheme.colorScheme.primary)
+                    IconBadge(Icons.Outlined.Dns)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text("Server", style = MaterialTheme.typography.titleSmall)
                         Text(serverUrl, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                OutlinedButton(onClick = { haptics.reject(); scope.launch { vm.logout() } }) {
+                OutlinedButton(
+                    onClick = { haptics.reject(); scope.launch { vm.logout() } },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                ) {
                     Icon(Icons.AutoMirrored.Outlined.Logout, null)
                     Spacer(Modifier.width(8.dp))
                     Text("Sign out")
@@ -202,9 +210,7 @@ fun SettingsScreen(
 private fun Card(title: String, content: @Composable ColumnScope.() -> Unit) {
     Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
-            }
+            Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
             content()
         }
     }
@@ -212,7 +218,18 @@ private fun Card(title: String, content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 fun ToggleRow(icon: ImageVector?, title: String, sub: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    val haptics = rememberHaptics()
+    // The whole row flips the switch, not just the switch itself: a much bigger target, and one announcement for TalkBack.
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .toggleable(checked, enabled = enabled, role = Role.Switch) {
+                haptics.toggle(it)
+                onChange(it)
+            }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         if (icon != null) {
             IconBadge(icon)
             Spacer(Modifier.width(12.dp))
@@ -222,13 +239,9 @@ fun ToggleRow(icon: ImageVector?, title: String, sub: String, checked: Boolean, 
             Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.width(12.dp))
-        val haptics = rememberHaptics()
         Switch(
             checked = checked,
-            onCheckedChange = {
-                haptics.toggle(it)
-                onChange(it)
-            },
+            onCheckedChange = null,
             // The check in the thumb is Material 3's cue for "on" without relying on colour.
             thumbContent = if (checked) ({ Icon(Icons.Outlined.Check, null, Modifier.size(SwitchDefaults.IconSize)) }) else null,
             enabled = enabled,
