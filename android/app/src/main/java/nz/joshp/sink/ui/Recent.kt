@@ -52,9 +52,10 @@ import java.util.Date
 /** A note in the Recent row: when it was last touched, and whether that was this phone opening it or an edit anywhere. */
 data class Recent(val note: NoteMeta, val at: Long, val opened: Boolean)
 
-/** The notes opened here or edited anywhere most lately, newest first. */
+/** The notes opened here or edited anywhere most lately, newest first. Pinned notes have their own row. */
 fun recentNotes(notes: List<NoteMeta>, opened: Map<String, Long>, count: Int = 8): List<Recent> =
     notes
+        .filter { !it.pinned }
         .map { n ->
             val o = opened[n.path] ?: 0L
             Recent(n, maxOf(n.mtime, o), o > n.mtime)
@@ -195,7 +196,7 @@ private fun RecentCard(r: Recent, onOpen: (String) -> Unit, modifier: Modifier =
             else Excerpt(n.excerpt.orEmpty(), small = true)
         }
         Text(
-            "You ${if (r.opened) "opened" else "edited"} · ${shortTime(r.at)}",
+            "You ${if (r.opened) "opened" else "edited"} · ${relativeTime(r.at)}",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
