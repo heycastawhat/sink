@@ -13,11 +13,12 @@ async function openToday(sink, ctx) {
 
 export default function setup(sink) {
   sink.gridAction({ id: 'today', label: "Today's note", icon: 'today', run: (ctx) => openToday(sink, ctx) });
-  sink.command({ id: 'today', name: "Link to today's note", run: (ctx) => ctx.insert(`[[${isoDate(new Date())}]]`) });
-  sink.command({ id: 'date', name: "Today's date", run: (ctx) => ctx.insert(isoDate(new Date())) });
+  sink.command({ id: 'today', name: "Link to today's note", icon: 'today', run: (ctx) => ctx.insert(`[[${isoDate(new Date())}]]`) });
+  sink.command({ id: 'date', name: "Today's date", icon: 'calendar_today', run: (ctx) => ctx.insert(isoDate(new Date())) });
   sink.command({
     id: 'time',
     name: 'The time now',
+    icon: 'schedule',
     run: (ctx) => ctx.insert(new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })),
   });
 }

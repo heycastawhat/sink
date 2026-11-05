@@ -74,7 +74,7 @@ export default function setup(sink) {
 | | |
 |---|---|
 | `sink.codeBlock(lang, render)` | Renders ` ```lang ` blocks. `render(source, el, { dark })` fills `el` (it may be async). The block shows rendered while the cursor is elsewhere and as text while you edit it, like Obsidian. |
-| `sink.command({ id, name, run })` | A slash command: type `/id` in a note. `run(ctx)` gets `ctx.insert(text)`, `ctx.text()` (the whole note) and `ctx.view` (the [CodeMirror](https://codemirror.net) view). |
+| `sink.command({ id, name, icon, run })` | A slash command: type `/id` in a note. `icon` is an optional [Material Symbols](https://fonts.google.com/icons) name shown in the menu. `run(ctx)` gets `ctx.insert(text)`, `ctx.text()` (the whole note) and `ctx.view` (the [CodeMirror](https://codemirror.net) view). |
 | `sink.gridAction({ id, label, icon, run })` | A button next to "Take a note…" on the web. `icon` is a [Material Symbols](https://fonts.google.com/icons) name; `run(ctx)` gets `ctx.openNote(path)` and `ctx.toast(message)`. |
 | `sink.api(path, init)` | `fetch` for your own server routes (`/api/plugins/<id>/<path>`), signed in. In the Android editor only `GET` works. |
 

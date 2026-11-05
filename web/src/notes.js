@@ -119,20 +119,40 @@ export async function setQuery(q) {
  */
 const IMAGE_LINE = /^\s*(?:(?:!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\))\s*)+$/;
 
-function excerptHtml(text) {
-  const out = [];
+/** About how many characters fit on a card line: a guess at how many lines wrapped text takes. */
+const LINE_CHARS = 30;
+
+/**
+ * At most about `lines` lines: text is clamped (ending in …) to what's left, and a table, quote or code block that
+ * doesn't fit whole is left out with everything after it, so a card never ends half way through one.
+ */
+function excerptHtml(text, lines = 8) {
+  // Each line as { group, cost, html(clamp) }; the lines of one table, quote or code block share a group.
+  const items = [];
+  let group = 0;
+  let kind = null;
+  const add = (k, cost, html) => {
+    if (!k || k !== kind) group++;
+    kind = k;
+    items.push({ group, cost, html });
+  };
+  const cost = (s) => Math.max(1, Math.ceil(s.length / LINE_CHARS));
+  const clamped = (html) => (n) => `<span class="cl" style="--clamp:${n}">${html}</span>`;
   let fenced = false;
   for (const raw of (text ?? '').split('\n')) {
-    if (out.length === 10) break;
     if (/^\s*(```|~~~)/.test(raw)) {
       fenced = !fenced;
+      if (fenced) kind = null;
       continue;
     }
     if (fenced) {
-      if (raw.trim()) out.push(`<span class="ln code">${esc(raw)}</span>`);
+      if (raw.trim()) add('code', 1, () => `<span class="ln code">${esc(raw)}</span>`);
       continue;
     }
-    if (!raw.trim() || /^%%/.test(raw) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(raw) || IMAGE_LINE.test(raw)) continue;
+    if (!raw.trim() || /^%%/.test(raw) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(raw) || IMAGE_LINE.test(raw)) {
+      kind = null;
+      continue;
+    }
     // Tabs, or every two spaces, are one level of nesting.
     const lead = /^[\t ]*/.exec(raw)[0];
     const depth = Math.min(4, [...lead].reduce((d, c) => d + (c === '\t' ? 2 : 1), 0) >> 1);
@@ -142,39 +162,94 @@ function excerptHtml(text) {
     if (/^\|.*\|\s*$/.test(l)) {
       if (/^\|[\s:|-]+\|\s*$/.test(l)) continue;
       const cells = tableCells(l).map((c) => `<span>${inlineHtml(c)}</span>`);
-      out.push(`<span class="ln tr">${cells.join('')}</span>`);
+      add('table', 1, () => `<span class="ln tr">${cells.join('')}</span>`);
       continue;
     }
     const task = /^[-*+]\s+\[(.)\]\s+(.*)$/.exec(l);
     if (task) {
-      out.push(`<span class="ln task${task[1] === ' ' ? '' : ' done'}"${indent}>${ic(task[1] === ' ' ? 'check_box_outline_blank' : 'check_box')}<span>${inlineHtml(task[2])}</span></span>`);
+      const text = clamped(inlineHtml(task[2]));
+      add(null, cost(task[2]), (n) => `<span class="ln task${task[1] === ' ' ? '' : ' done'}"${indent}>${ic(task[1] === ' ' ? 'check_box_outline_blank' : 'check_box')}${text(n)}</span>`);
       continue;
     }
     const heading = /^(#{1,6})\s+(.*)$/.exec(l);
     if (heading) {
-      out.push(`<span class="ln h h${Math.min(heading[1].length, 3)}">${inlineHtml(heading[2])}</span>`);
+      const text = clamped(inlineHtml(heading[2]));
+      add(null, cost(heading[2]), (n) => `<span class="ln h h${Math.min(heading[1].length, 3)}">${text(n)}</span>`);
       continue;
     }
     const quote = /^>\s?(.*)$/.exec(l);
     if (quote) {
       // Callout header `[!tip] Title` reads as just the title (or the type when there isn't one).
       const body = quote[1].replace(/^\[!(\w+)\][+-]?\s*(.*)$/, (_, type, title) => title || type[0].toUpperCase() + type.slice(1));
-      if (body.trim()) out.push(`<span class="ln quote"${indent}>${inlineHtml(body)}</span>`);
+      const text = clamped(inlineHtml(body));
+      if (body.trim()) add('quote', cost(body), (n) => `<span class="ln quote"${indent}>${text(n)}</span>`);
       continue;
     }
     const bullet = /^[-*+]\s+(.*)$/.exec(l);
     const numbered = /^(\d+[.)])\s+(.*)$/.exec(l);
-    if (bullet) out.push(`<span class="ln li"${indent}><span class="mk">•</span><span>${inlineHtml(bullet[1])}</span></span>`);
-    else if (numbered) out.push(`<span class="ln li"${indent}><span class="mk">${esc(numbered[1])}</span><span>${inlineHtml(numbered[2])}</span></span>`);
-    else out.push(`<span class="ln"${indent}>${inlineHtml(l)}</span>`);
+    const [mark, rest] = bullet ? ['•', bullet[1]] : numbered ? [numbered[1], numbered[2]] : [null, l];
+    const text = clamped(inlineHtml(rest));
+    add(null, cost(rest), (n) => (mark ? `<span class="ln li"${indent}><span class="mk">${esc(mark)}</span>${text(n)}</span>` : `<span class="ln"${indent}>${text(n)}</span>`));
+  }
+  const out = [];
+  let left = lines;
+  for (let i = 0, j; i < items.length && left > 0; i = j) {
+    for (j = i; j < items.length && items[j].group === items[i].group; ) j++;
+    const run = items.slice(i, j);
+    if (run.length > 1 && run.reduce((sum, it) => sum + it.cost, 0) > left) break;
+    for (const it of run) {
+      out.push(it.html(left));
+      left -= it.cost;
+    }
   }
   return out.join('');
+}
+
+/**
+ * A search hit's snippet (matches in [brackets], from SQLite) formatted like a card excerpt, matches highlighted.
+ * Brackets that are markdown (task boxes, callouts, [[links]], [text](url)) aren't read as matches.
+ */
+function snippetHtml(n) {
+  // A table row the snippet cuts off part way would show as raw pipes.
+  const [first, ...rest] = n.snippet
+    .replace(/(?<![-*+] |(?<!\[)\[)\[(?!!)([^[\]\n]+)\](?!\(|\](?!\]))/g, '\u0003$1\u0004')
+    .replace(/\n\s*\|[^\n]*[^|\s]$/, '')
+    .split('\n');
+  const plain = first.replace(/[\u0003\u0004]/g, '').replace(/^#+\s*/, '').trim();
+  return excerptHtml((plain === n.title ? rest : [first, ...rest]).join('\n')).replace(/\u0003/g, '<mark>').replace(/\u0004/g, '</mark>');
+}
+
+/**
+ * Clamped excerpt text ends on a whole word ("labore…"); the browser's own ellipsis falls wherever the line runs out
+ * ("labore e…", "labore …"). Plain text only: formatted lines keep the browser's.
+ */
+let fontsWait = null;
+function trimClamped(root) {
+  // Measured with a fallback font, the cut would land differently from load to load: redo it once the fonts are in.
+  if (document.fonts.status !== 'loaded') {
+    fontsWait ??= document.fonts.ready.then(() => {
+      fontsWait = null;
+      renderGrid();
+    });
+  }
+  for (const el of root.querySelectorAll('.cl')) {
+    if (el.children.length || el.scrollHeight <= el.clientHeight + 1) continue;
+    const words = el.textContent.split(' ');
+    let [lo, hi] = [1, words.length - 1];
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      el.textContent = words.slice(0, mid).join(' ').replace(/[\s,.;:–—-]+$/, '') + '…';
+      if (el.scrollHeight <= el.clientHeight + 1) lo = mid;
+      else hi = mid - 1;
+    }
+    el.textContent = words.slice(0, lo).join(' ').replace(/[\s,.;:–—-]+$/, '') + '…';
+  }
 }
 
 function cardHtml(n) {
   const board = /\.excalidraw\.md$/i.test(n.path);
   const folder = folderOf(n.path);
-  const body = n.snippet ? esc(n.snippet).replace(/\[([^\]]+)\]/g, '<mark>$1</mark>') : excerptHtml(n.excerpt);
+  const body = n.snippet ? snippetHtml(n) : excerptHtml(n.excerpt);
   // A note with no heading is named after its first line (Keep-style); showing both would repeat it.
   const firstLine = (n.excerpt ?? '').trimStart().split('\n')[0];
   const showTitle = board || n.snippet || n.title !== fileName(n.path) || !firstLine.startsWith(n.title);
@@ -185,7 +260,7 @@ function cardHtml(n) {
   ${showTitle ? `<h3 class="note-title">${board ? ic('draw') : ''}${esc(n.title)}</h3>` : ''}
   ${board ? '' : `<div class="note-body">${body}</div>`}
   <div class="note-foot">
-    ${folder ? `<span class="note-folder">${ic('folder')}${esc(folder)}</span>` : ''}
+    ${folder && folder !== state.folder ? `<span class="note-folder">${ic('folder')}${esc(folder)}</span>` : ''}
     ${(n.tags ?? []).slice(0, 3).map((t) => `<span class="note-tag">#${esc(t)}</span>`).join('')}
     <span class="note-time">${relative(n.mtime)}</span>
   </div>
@@ -248,6 +323,8 @@ function renderGrid() {
   $('notes-others-head').hidden = !pinned.length || !others.length;
   $('notes-pinned').innerHTML = pinned.map(cardHtml).join('');
   $('notes-grid').innerHTML = others.map(cardHtml).join('');
+  trimClamped($('notes-pinned'));
+  trimClamped($('notes-grid'));
   popInNewCards();
   masonry();
 
@@ -279,8 +356,9 @@ function renderFolderBar() {
   const parts = state.folder ? state.folder.split('/') : [];
   const item = (path, label, icon, current) =>
     `<m3e-breadcrumb-item data-crumb="${esc(path)}" data-drop-folder="${esc(path)}"${current ? ' current="page"' : ''}>${ic(icon, 'icon')}${esc(label)}</m3e-breadcrumb-item>`;
+  // Only the way back up: the title names the folder you're in, so it isn't repeated as a last crumb.
   $('folder-crumbs').innerHTML =
-    item('', 'Notes', 'home', false) + parts.map((name, i) => item(parts.slice(0, i + 1).join('/'), name, 'folder', i === parts.length - 1)).join('');
+    item('', 'Notes', 'home', false) + parts.slice(0, -1).map((name, i) => item(parts.slice(0, i + 1).join('/'), name, 'folder', false)).join('');
   $('folder-crumbs').hidden = !parts.length;
   const btn = (act, icon, label) =>
     `<m3e-icon-button data-folder-act="${act}" aria-label="${label}" title="${label}">${ic(icon)}</m3e-icon-button>`;
@@ -299,7 +377,7 @@ function renderFolderBar() {
   ${ic('folder')}<span class="folder-name">${esc(f.split('/').pop())}</span><span class="folder-count">${n || ''}</span></a>`;
     })
     .join('');
-  $('folder-tiles').hidden = !children.length;
+  $('folder-tiles').hidden = $('folder-tiles-head').hidden = !children.length;
 }
 
 /** "Hide notes in folders from the home grid": home then shows only loose notes; folders hold the rest. */
@@ -351,14 +429,6 @@ const opened = {
   },
 };
 
-function when(ts) {
-  const d = new Date(ts);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return sameDay
-    ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-    : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
-}
-
 /** Whether the Recent row on home is folded away; remembered per device. */
 const recentPrefs = {
   get shut() {
@@ -389,7 +459,9 @@ function renderRecentStrip() {
   root.hidden = !show;
   if (!show) return;
   const opens = opened.read();
+  // Pinned notes have their own row just below; here they'd read as duplicates.
   const items = state.notes
+    .filter((n) => !n.pinned)
     .map((n) => {
       const o = opens[n.path] ?? 0;
       return { n, at: Math.max(o, n.mtime), how: o > n.mtime ? 'opened' : 'edited' };
@@ -406,11 +478,12 @@ ${
         .map(
           ({ n, at, how }) => `<a class="recent-card${n.color ? ` c-${n.color}` : ''}" href="${noteHash(n.path)}">
   <span class="recent-card-head">${ic(board(n) ? 'draw' : 'description')}<span class="recent-title">${esc(n.title)}</span></span>
-  <span class="recent-preview">${board(n) ? `<span class="recent-board">${ic('draw')}</span>` : excerptHtml(n.excerpt)}</span>
-  <span class="recent-foot">You ${how} · ${esc(when(at))}</span></a>`,
+  <span class="recent-preview">${board(n) ? `<span class="recent-board">${ic('draw')}</span>` : excerptHtml(n.excerpt, 4)}</span>
+  <span class="recent-foot">You ${how} · ${esc(relative(at))}</span></a>`,
         )
         .join('')}</div>`
 }`;
+  trimClamped(root);
   root.classList.toggle('shut', shut);
 }
 
@@ -803,8 +876,8 @@ function mountEditor(text) {
   screen.editor = createEditor({
     parent: $('note-editor'),
     doc: text,
-    placeholder: 'Note',
     onChange: () => {
+      showFileName();
       setStatus('Editing…');
       clearTimeout(screen.timer);
       screen.timer = setTimeout(save, SAVE_DELAY);
@@ -852,8 +925,17 @@ function applyLook() {
   const archived = /^archive\//i.test(screen.path ?? '');
   $('note-archive').querySelector('m3e-icon').setAttribute('name', archived ? 'unarchive' : 'archive');
   $('note-archive').querySelector('span').textContent = archived ? 'Unarchive' : 'Archive';
-  $('note-crumb').textContent = screen.path ? folderOf(screen.path) || 'Notes' : 'New note';
+  // Where the note lives (or will), drafts included: the same crumb before and after the first save.
+  $('note-crumb').textContent = screen.folder || 'Notes';
+  showFileName();
   for (const b of $('note-colors').querySelectorAll('[data-color]')) b.classList.toggle('on', (b.dataset.color || null) === screen.color);
+}
+
+/** A note that doesn't start with a heading has no title on the page: show its name above it, as Obsidian does. */
+function showFileName() {
+  const body = (screen.editor?.getText() ?? '').replace(/^---\n[\s\S]*?\n---(\n|$)/, '').trimStart();
+  $('note-filename').hidden = !screen.path || isBoardPath(screen.path) || /^#\s/.test(body);
+  $('note-filename').textContent = screen.path ? fileName(screen.path) : '';
 }
 
 let openSeq = 0;
@@ -871,7 +953,7 @@ export async function openNote(path, { line } = {}) {
   try {
     const note = await api.note(path);
     if (seq !== openSeq) return;
-    Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
+    Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color, fresh: false });
     opened.touch(note.path);
     let text = note.content;
     // Unsaved edits from last time, made on this exact version: bring them back.
@@ -1061,7 +1143,7 @@ export async function openDraft({ text = draftText, folder = state.folder } = {}
   draftText = '';
   await closeEditor();
   showScreen();
-  Object.assign(screen, { path: null, folder, hash: null, saved: '', pinned: false, color: null });
+  Object.assign(screen, { path: null, folder, hash: null, saved: '', pinned: false, color: null, fresh: true });
   mountEditor(text);
   applyLook();
   setStatus('');
@@ -1096,14 +1178,18 @@ function save() {
   return screen.saving;
 }
 
+/** Nothing written yet: only whitespace, a bare heading mark, or a /command being typed. */
+const blank = (text) => !text.replace(/(^|\s)\/[\w-]*$/, '').replace(/^#+[ \t]*$/gm, '').trim();
+
 async function doSave() {
   if (!screen.editor) return;
   const text = screen.editor.getText();
   if (text === screen.saved) return setStatus('Saved');
+  // A draft becomes a file only once it has some words.
+  if (!screen.path && blank(text)) return setStatus('');
   setStatus('Saving…');
   try {
     if (!screen.path) {
-      if (!text.trim()) return;
       const heading = /^#\s+(.+)$/m.exec(text)?.[1];
       const title = heading ?? text.trim().split('\n')[0].replace(/^[-*+]\s+(\[.\]\s+)?|^#+\s+/g, '').slice(0, 60);
       const created = await api.createNote({ folder: screen.folder, title, content: text });
@@ -1249,6 +1335,8 @@ async function closeEditor() {
   clearInterval(screen.poll);
   await flush();
   if (dirty() && screen.path) stashUnsaved();
+  // A note started here and emptied again before leaving isn't one: don't leave an empty "Untitled" behind.
+  else if (screen.fresh && screen.path && blank(screen.editor.getText())) await api.trashNote(screen.path).catch(() => {});
   screen.editor.destroy();
   screen.editor = null;
   screen.path = null;
@@ -1306,10 +1394,12 @@ function wireScreen() {
     screen.editor.focus(true);
   });
   $('note-screen').addEventListener('keydown', (e) => {
-    // Excalidraw uses Escape itself (leave a tool, deselect), so it never closes a board.
-    if (e.key === 'Escape' && !document.querySelector('.cm-tooltip-autocomplete') && !isBoardPath(screen.path)) {
+    // Excalidraw uses Escape itself (leave a tool, deselect), so it never closes a board. When the editor used it
+    // (closing its / or [[ menu, which is gone from the page by now) it's handled; an open palette closes first.
+    if (e.key === 'Escape' && !e.defaultPrevented && !isBoardPath(screen.path)) {
       e.preventDefault();
-      back();
+      if (!$('note-colors').hidden) $('note-colors').hidden = true;
+      else back();
     }
     if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -1317,7 +1407,16 @@ function wireScreen() {
     }
   });
   $('note-pin').addEventListener('click', () => setMeta({ pinned: !screen.pinned }));
-  $('note-palette').addEventListener('click', () => ($('note-colors').hidden = !$('note-colors').hidden));
+  $('note-palette').addEventListener('click', () => {
+    const colors = $('note-colors');
+    // On wider screens it's a popover under the button (see style.css); phones show it as a row under the bar.
+    const r = $('note-palette').getBoundingClientRect();
+    Object.assign(colors.style, { top: `${r.bottom + 4}px`, right: `${Math.max(8, innerWidth - r.right - 8)}px` });
+    colors.hidden = !colors.hidden;
+  });
+  document.addEventListener('click', (e) => {
+    if (!$('note-colors').hidden && !e.target.closest('#note-colors, #note-palette')) $('note-colors').hidden = true;
+  });
   $('note-colors').innerHTML =
     `<button data-color="" class="note-swatch none" aria-label="No colour">${ic('format_color_reset')}</button>` +
     COLORS.map((c) => `<button data-color="${c}" class="note-swatch c-${c}" aria-label="${c}" title="${c}"></button>`).join('');
@@ -1397,6 +1496,7 @@ function wireScreen() {
       toast(`Moved to ${dest ? dest.split('/').pop() : 'Notes'}`);
     }
   });
+  $('note-filename').addEventListener('click', () => $('note-rename').click());
   $('note-rename').addEventListener('click', async () => {
     await flush();
     if (!screen.path) return toast('Write something first');
@@ -1698,7 +1798,7 @@ function todoRow(t) {
       ${t.path === 'Todo.md' ? '' : `<a class="todo-note" href="${noteHash(t.path, t.line)}">${ic('description')}${esc(t.note_title)}</a>`}
     </span>
   </div>
-  ${done ? '' : `<m3e-icon-button class="todo-when" data-when aria-label="Reschedule" title="Reschedule">${ic('event_upcoming')}</m3e-icon-button>`}
+  ${done || t.due === todoState.today ? '' : `<m3e-icon-button class="todo-when" data-when aria-label="Reschedule" title="Reschedule">${ic('edit_calendar')}</m3e-icon-button>`}
 </li>`;
 }
 
@@ -1828,17 +1928,71 @@ function wireTodos() {
     if (e.target.closest('[data-edit]')) editTodoAt(t);
     else if (e.target.closest('[data-when]')) rescheduleTodo(t);
   });
+  // `.unset` lets the CSS hide the native "mm/dd/yyyy" until a picker is focused or has a value. On phones the
+  // pickers are opened from buttons in the text field, and what they hold is shown as chips (always visible).
+  const addDay = (day) => new Date(new Date(`${day}T12:00`).getTime() + 864e5).toLocaleDateString('sv');
+  const syncPickers = () => {
+    const today = todoState.today || new Date().toLocaleDateString('sv');
+    const date = $('todo-date').value;
+    const time = $('todo-time').value;
+    for (const id of ['todo-date', 'todo-time']) $(id).classList.toggle('unset', !$(id).value);
+    const chip = (id, icon, label) => `<button type="button" class="todo-chip" data-clear="${id}">${ic(icon)}${esc(label)}${ic('close')}</button>`;
+    $('todo-chips').innerHTML =
+      (date ? chip('todo-date', 'calendar_today', date === today ? 'Today' : date === addDay(today) ? 'Tomorrow' : new Date(`${date}T00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })) : '') +
+      (time ? chip('todo-time', 'schedule', new Date(`2000-01-01T${time}`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) : '');
+    $('todo-chips').hidden = !date && !time;
+  };
+  // A reminder time alone means "today at that time", or tomorrow if it has already passed. The date field is filled in
+  // so the form shows what will happen; `autoDate` remembers it wasn't the user's choice, to take it back with the time.
+  let autoDate = false;
+  const timeChanged = () => {
+    const time = $('todo-time').value;
+    if (time && !$('todo-date').value) {
+      const now = new Date();
+      const today = todoState.today || now.toLocaleDateString('sv');
+      const passed = time <= now.toTimeString().slice(0, 5);
+      $('todo-date').value = passed ? addDay(today) : today;
+      autoDate = true;
+    } else if (!time && autoDate) {
+      $('todo-date').value = '';
+      autoDate = false;
+    }
+    syncPickers();
+  };
+  // Nothing to add yet: show it as disabled rather than as an enabled button that silently does nothing.
+  const syncAdd = () => ($('todo-add').disabled = !$('todo-text').value.trim());
+  syncAdd();
+  $('todo-form').addEventListener('input', (e) => {
+    if (e.target.id === 'todo-date') autoDate = false;
+    syncPickers();
+    syncAdd();
+  });
+  $('todo-form').addEventListener('change', (e) => (e.target.id === 'todo-time' ? timeChanged() : syncPickers()));
+  $('todo-form').addEventListener('click', (e) => {
+    const pick = e.target.closest('[data-pick]');
+    if (pick) return $(pick.dataset.pick).showPicker?.();
+    const clear = e.target.closest('[data-clear]');
+    if (clear) {
+      $(clear.dataset.clear).value = '';
+      autoDate = false;
+      if (clear.dataset.clear === 'todo-time') $('todo-date').value = '';
+      syncPickers();
+    }
+  });
   $('todo-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = $('todo-text').value.trim();
     if (!text) return;
     const due = $('todo-date').value || undefined;
-    const time = (due && $('todo-time').value) || undefined;
+    const time = $('todo-time').value || undefined;
     try {
       const added = await api.addTodo({ text, due, time, natural: true });
       if (added.due && !due) toast(addedMessage(added));
       $('todo-text').value = '';
       $('todo-date').value = $('todo-time').value = '';
+      autoDate = false;
+      syncPickers();
+      syncAdd();
       loadTodos();
     } catch (err) {
       toast(err.message);

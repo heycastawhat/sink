@@ -9,12 +9,12 @@ export const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastI
 
 /**
  * Inline markdown as card HTML: links as their (link-coloured) text, embeds and Tasks fields dropped, and bold, italic, strikethrough,
- * `code` and ==highlight== kept as formatting. Escapes first, so the formatting is the only markup.
+ * `code`, ==highlight== and #tags kept as formatting. Escapes first, so the formatting is the only markup.
  */
 export function inlineHtml(s) {
   const plain = s
     .replace(/!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/\[\[([^\]|]+)\|?([^\]]*)\]\]/g, (_, a, b) => `\u0001${b || a}\u0002`)
+    .replace(/\[\[([^\]|]+)\|?([^\]]*)\]\]/g, (_, a, b) => `\u0001${b || a.replace(/#.*/, '')}\u0002`)
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '\u0001$1\u0002')
     .replace(/[📅⏳🛫✅➕❌]️?\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)|[⏫🔼🔽🔺⏬]️?|🔁️?\s*every[^📅⏳🛫✅➕❌\n]*/gu, '')
     .trim();
@@ -26,6 +26,7 @@ export function inlineHtml(s) {
     .replace(/(^|[^*\w])\*([^*\s][^*]*)\*(?!\w)|(^|\W)_([^_\s][^_]*)_(?!\w)/g, (_, p1, a, p2, b) => `${p1 ?? p2}<i>${a ?? b}</i>`)
     .replace(/~~([^~]+)~~/g, '<s>$1</s>')
     .replace(/==([^=]+)==/g, '<mark>$1</mark>')
+    .replace(/(^|\s)(#[\p{L}_][\p{L}\p{N}_/-]*)/gu, '$1<span class="ln-tag">$2</span>')
     .replace(/\u0001([^\u0002]*)\u0002/g, '<span class="ln-link">$1</span>');
   return html.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${code[i]}</code>`);
 }

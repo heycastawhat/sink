@@ -65,7 +65,6 @@ window.sink = {
     editor = createEditor({
       parent: document.getElementById('editor'),
       doc: text,
-      placeholder: 'Note',
       onChange: (t) => {
         clearTimeout(timer);
         timer = setTimeout(() => bridge.changed(t), 250);

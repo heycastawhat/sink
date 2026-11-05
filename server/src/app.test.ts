@@ -13,7 +13,7 @@ import { pageText } from "./html";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
-import { Vault, sha256, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery, firstImage } from "./notes";
+import { Vault, cardText, sha256, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery, firstImage } from "./notes";
 import { localIso, localTime, utcOffset } from "./time";
 import { editTodo, nextDate, nextOccurrence, parseQuick, parseTodos, setDone, setStatus, todoLine } from "./todos";
 
@@ -631,6 +631,14 @@ describe("notes", () => {
     expect((((await after.json()) as any).items as { path: string }[]).map((i) => i.path).sort()).toEqual(["Links.md", "Table.md"]);
   });
 
+  test("version previews drop list, task, quote and callout markers", async () => {
+    const token = await login();
+    const created = (await (await send(token, "POST", "/api/notes", { title: "Tasks", content: "# Tasks\n\n- [ ] one\n1. two\n> three\n> [!tip] four\n" })).json()) as any;
+    await send(token, "PUT", q("Tasks.md"), { content: "# Tasks\n", base_hash: created.hash, keep_version: true });
+    const items = ((await (await get(token, `/api/notes/versions?path=Tasks.md`)).json()) as any).items;
+    expect(items[0].preview).toBe("one two three four");
+  });
+
   test("version history: one per sitting, newest first, survives a rename, restorable", async () => {
     const token = await login();
     const created = (await (await send(token, "POST", "/api/notes", { title: "Essay", content: "# Essay\n\nv1\n" })).json()) as any;
@@ -919,6 +927,13 @@ describe("notes", () => {
     expect(hits.items.map((n: any) => n.path)).toEqual([a.path]);
     expect(hits.items[0].snippet).toContain("[soil]");
     expect((await get(token, q("Ideas/Nope.md"))).status).toBe(404);
+  });
+
+  test("card excerpts drop the title and end on a whole line", () => {
+    expect(cardText("# Idea\n\nbody\n- item", "Idea")).toBe("body\n- item");
+    const long = "x".repeat(390);
+    expect(cardText(`${long}\n\n- Build a thing`, "t")).toBe(long);
+    expect(cardText("y".repeat(500), "t")).toBe("y".repeat(400));
   });
 
   test("keep-style pin, colour and card excerpts live in frontmatter", async () => {
