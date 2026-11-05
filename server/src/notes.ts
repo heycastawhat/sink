@@ -271,7 +271,9 @@ export function firstImage(body: string): string | null {
 export function cardText(body: string, title: string): string {
   const lines = body.replace(/^\s+/, "").split("\n");
   if (lines[0]?.replace(/^#+\s*/, "").trim() === title) lines.shift();
-  return lines.join("\n").trim().slice(0, 400);
+  const text = lines.join("\n").trim();
+  // Cut at a line end when there is one, so a card doesn't end on half a word ("- Bui").
+  return text.length <= 400 ? text : text.slice(0, 400).replace(/\n[^\n]*$/, "").trimEnd();
 }
 
 export class Vault {
@@ -609,11 +611,12 @@ export class Vault {
       .all(path)
       .map((v) => ({
         ...v,
-        // Its words, not its title (which every version shares): body lines without headings, run together.
+        // Its words, not its title (which every version shares): body lines without headings or list, task,
+        // quote and callout markers, run together.
         preview: splitFrontmatter(v.preview)
           .body.split("\n")
           .filter((l) => l.trim() && !/^#{1,6}\s/.test(l))
-          .map((l) => l.trim())
+          .map((l) => l.trim().replace(/^(?:[-*+]\s+(?:\[.\]\s+)?|\d+[.)]\s+|>\s*(?:\[!\w+\][+-]?\s*)?)/, ""))
           .join(" ")
           .slice(0, 160),
       }));
