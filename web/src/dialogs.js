@@ -1,6 +1,6 @@
 // Small modal dialogs on the native <dialog> element: a text prompt and a folder picker.
 
-import { esc } from './util.js';
+import { esc, inlineHtml } from './util.js';
 
 const ic = (name, slot) => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}></m3e-icon>`;
 
@@ -31,7 +31,8 @@ function open(html, wire) {
     dlg.addEventListener('mousedown', (e) => e.target === dlg && done(null));
     const afterOpen = wire(dlg, done);
     dlg.showModal();
-    afterOpen?.();
+    // A form field renders its slot a moment after it's attached; until then its input can't take focus.
+    Promise.all([...dlg.querySelectorAll('m3e-form-field')].map((f) => customElements.whenDefined(f.localName).then(() => f.updateComplete))).then(() => afterOpen?.());
   });
 }
 
@@ -293,7 +294,7 @@ export function pickVersion({ versions, load, when }) {
       ? versions
           .map(
             (v) => `<button type="button" class="picker-row version-row" data-id="${v.id}">
-  ${ic('history')}<span class="version-main"><span class="version-when">${esc(when(v.at))}</span><span class="version-preview">${esc(v.preview || 'Empty')}</span></span></button>`,
+  ${ic('history')}<span class="version-main"><span class="version-when">${esc(when(v.at))}</span><span class="version-preview">${v.preview ? inlineHtml(v.preview) : 'Empty'}</span></span><m3e-icon name="chevron_right" class="version-go"></m3e-icon></button>`,
           )
           .join('')
       : '<p class="muted version-empty">No earlier versions yet. They start once you edit this note.</p>'
@@ -316,6 +317,8 @@ export function pickVersion({ versions, load, when }) {
       const show = (reading) => {
         list.hidden = reading;
         text.hidden = backBtn.hidden = okBtn.hidden = !reading;
+        // Back and Restore are the choices then (Escape still closes), so the row fits a phone.
+        dlg.querySelector('[data-cancel]').hidden = reading;
       };
       list.addEventListener('click', async (e) => {
         const row = e.target.closest('[data-id]');
@@ -361,7 +364,7 @@ export function pickFolder({ title, folders, current = '', exclude = null, actio
   <div class="picker-list" role="listbox"></div>
   <p class="dialog-error" hidden></p>
   <div class="dialog-actions">
-    <m3e-button data-new variant="text">${ic('create_new_folder')}New folder</m3e-button>
+    <m3e-button data-new variant="text" aria-label="New folder">${ic('create_new_folder', 'icon')}New<span class="wide-only"> folder</span></m3e-button>
     <span class="spacer"></span>
     <m3e-button data-cancel variant="text">Cancel</m3e-button>
     <m3e-button data-ok variant="filled">${esc(action)}</m3e-button>

@@ -2,6 +2,12 @@
   box-sizing: border-box;
 }
 
+/* Selected text in the app's colours (fields, dialogs, the editor), not the system's. */
+::selection {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
 html,
 body {
   margin: 0;
@@ -124,7 +130,7 @@ a {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   padding: 40px 28px 28px;
   border-radius: 36px;
   background: var(--sheet);
@@ -133,11 +139,13 @@ a {
 }
 
 .login-card .wordmark {
+  margin: 6px 0 4px;
   font-size: 40px;
+  line-height: 1.1;
 }
 
 .login-card p {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .login-card m3e-button {
@@ -147,6 +155,7 @@ a {
 .login-logo {
   width: 88px;
   height: 88px;
+  margin-bottom: 4px;
   filter: drop-shadow(0 6px 16px color-mix(in srgb, var(--md-sys-color-shadow) 25%, transparent));
 }
 
@@ -274,6 +283,8 @@ a {
   padding: 0 28px 48px;
   border-radius: var(--radius-sheet);
   background: var(--sheet);
+  /* Light mode's sheet is close to the sidebar's colour; a hairline keeps the edge in both themes. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--md-sys-color-outline-variant) 60%, transparent);
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -287,8 +298,13 @@ a {
   gap: 12px;
   margin: 0 -28px;
   padding: 22px 28px 12px;
-  background: color-mix(in srgb, var(--sheet) 90%, transparent);
-  backdrop-filter: blur(16px);
+  background: var(--sheet);
+  transition: box-shadow 160ms ease;
+}
+
+/* Opaque, so scrolled content doesn't smear through; a hairline appears once something is underneath. */
+.main-head.scrolled {
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent);
 }
 
 .title-row {
@@ -317,7 +333,6 @@ a {
 
 .search {
   flex: 1;
-  max-width: 720px;
 }
 
 /* ---------- shared ---------- */
@@ -355,8 +370,14 @@ a {
 
 .empty-shape {
   --m3e-shape-size: 112px;
-  --m3e-shape-container-color: var(--md-sys-color-tertiary-container);
+  --m3e-shape-container-color: var(--md-sys-color-secondary-container);
   margin-bottom: 16px;
+}
+
+/* Dark mode: the sheet is a deep tint, so cards on it need a higher surface step to read as cards. */
+[data-dark] .setting-card,
+[data-dark] .trash-row {
+  background: var(--md-sys-color-surface-container-high);
 }
 
 /* ---------- trash ---------- */
@@ -364,14 +385,36 @@ a {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: 760px;
-  padding-top: 8px;
+  padding-top: 0;
 }
 
 .trash-head {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+@media (max-width: 743px) {
+  .trash-head {
+    flex-wrap: wrap;
+  }
+
+  #trash-info {
+    flex-basis: 100%;
+  }
+
+  /* The text button's own inset is pulled out so its icon lines up with the helper text above. */
+  #trash-empty {
+    margin-left: -22px;
+  }
+}
+
+/* Text buttons have inner padding; pull it out so the label's edge meets the list's. Not on phones, where the
+   page margin is narrower than the pull and the overflow makes mobile browsers zoom the page out. */
+@media (min-width: 744px) {
+  #trash-empty {
+    margin-right: -20px;
+  }
 }
 
 .trash-list {
@@ -432,17 +475,20 @@ a {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 760px;
   padding-top: 8px;
 }
 
 .setting-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   padding: 20px 22px;
   border-radius: 24px;
   background: var(--md-sys-color-surface-container-low);
+}
+
+.setting-card.compact {
+  gap: 2px;
 }
 
 .setting-card h2 {
@@ -493,8 +539,13 @@ a {
 .setting-row {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px 24px;
   flex-wrap: wrap;
+}
+
+.setting-card > .setting-row + .setting-row {
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline-variant) 45%, transparent);
 }
 
 .setting-title {
@@ -523,11 +574,15 @@ a {
   transform: scale(1.1);
 }
 
+.swatch:focus-visible {
+  outline: 0;
+}
+
 .swatch.on {
   border-radius: 10px;
   box-shadow:
-    0 0 0 3px var(--md-sys-color-surface-container-low),
-    0 0 0 5px var(--c);
+    0 0 0 2px var(--md-sys-color-surface-container-low),
+    0 0 0 4px var(--c);
 }
 
 .copy-row {
@@ -556,9 +611,36 @@ a {
   word-break: break-all;
 }
 
+.token-panel [slot='header'] {
+  white-space: normal;
+}
+
 .token-panel {
   --m3e-expansion-panel-container-color: transparent;
+  --m3e-expansion-panel-content-padding: 0 24px 8px;
+  /* Pull the header's own 24px inset out so it lines up with the card's other rows. */
+  margin-left: -24px;
 }
+
+.token-panel .setting-row {
+  margin-top: 12px;
+}
+
+.setting-card > p.muted:not(.small) {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* A form field's host is taller than its 56px box (room for the floated label); line the button up with the box. */
+.setting-row:has(> m3e-form-field) {
+  align-items: flex-start;
+}
+
+.setting-row > m3e-form-field + m3e-button {
+  margin-top: 8px;
+}
+
+
 
 .token-list {
   display: flex;
@@ -719,14 +801,16 @@ a {
   }
 
   .shell[data-view='settings'] .fab-menu,
-  .shell[data-view='trash'] .fab-menu {
+  .shell[data-view='trash'] .fab-menu,
+  .shell[data-view='todos'] .fab-menu {
     display: none !important;
   }
 
   .main {
     margin: 0;
-    padding: 0 16px calc(160px + env(safe-area-inset-bottom));
+    padding: 0 16px calc(200px + env(safe-area-inset-bottom));
     border-radius: 0;
+    box-shadow: none;
     overflow: visible;
   }
 
@@ -751,9 +835,14 @@ a {
     padding: 18px;
   }
 
-  /* Label on its own line, control underneath. */
+  /* Label on its own line, control underneath, except switches and text fields with a button, which stay beside it. */
   .setting-row > .grow {
     flex-basis: 100%;
+  }
+
+  .setting-row:has(> m3e-switch) > .grow,
+  .setting-row:has(> m3e-button) > m3e-form-field.grow {
+    flex-basis: 0;
   }
 }
 
@@ -792,7 +881,7 @@ m3e-theme {
 /* Keep's "Take a note…" */
 /* Same column as the search bar above it. */
 .take-note {
-  width: min(720px, 100%);
+  width: 100%;
   padding: 4px 6px 4px 18px;
   border-radius: 14px;
   background: var(--md-sys-color-surface-container-low);
@@ -978,13 +1067,20 @@ m3e-theme {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 240px;
   overflow: hidden;
   color: var(--md-sys-color-on-surface);
   font-size: 14px;
   line-height: 1.45;
   overflow-wrap: anywhere;
-  mask-image: linear-gradient(to bottom, #000 200px, transparent);
+}
+
+/* Excerpt text, cut to the lines it was given (excerptHtml) with an ellipsis. */
+.ln .cl {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--clamp, 1);
 }
 
 .note-body:empty {
@@ -1173,12 +1269,62 @@ body.note-open {
   color: var(--md-sys-color-error);
 }
 
+/* Phones: the back arrow says enough; the save status gets the room and gives way to the icons. */
+@media (max-width: 743px) {
+  .note-crumb {
+    display: none;
+  }
+
+  .note-status {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* All eleven swatches on one row (a second row of two looked broken), scrolling if a screen is narrower still. */
+  /* Dialog actions keep to one row: shorter labels, and text buttons at M3's 12px side padding. */
+  .wide-only {
+    display: none;
+  }
+
+  .dialog-actions m3e-button[variant='text'] {
+    --m3e-button-small-leading-space: 12px;
+    --m3e-button-small-trailing-space: 12px;
+  }
+
+  .note-screen .note-colors {
+    flex-wrap: nowrap;
+    justify-content: safe flex-end;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .note-colors .note-swatch {
+    flex: none;
+    width: 28px;
+    height: 28px;
+  }
+}
+
 .note-colors {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   padding: 0 16px 10px;
+}
+
+@media (min-width: 744px) {
+  .note-colors {
+    position: fixed;
+    z-index: 60;
+    flex-wrap: nowrap;
+    padding: 10px;
+    border-radius: 20px;
+    background: var(--md-sys-color-surface-container-high);
+    box-shadow: 0 8px 28px color-mix(in srgb, var(--md-sys-color-shadow) 24%, transparent);
+  }
 }
 
 .note-swatch {
@@ -1214,6 +1360,34 @@ body.note-open {
   padding: 12px 28px calc(40vh + env(safe-area-inset-bottom));
 }
 
+/* Sized like the editor's H1 (17px × 1.8), a little lighter: the name, not part of the text. */
+.note-filename {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 12px 28px 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-on-surface);
+  font: 600 30px/1.3 'Roboto Flex', system-ui, sans-serif;
+  letter-spacing: -0.01em;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.note-filename[hidden] {
+  display: none;
+}
+
+@media (max-width: 743px) {
+  .note-filename {
+    padding: 4px 18px 8px;
+    font-size: 28px;
+  }
+}
+
 /* Linked mentions, under the note. The editor keeps its tall bottom padding (room to type into) only when alone. */
 .note-editor:has(+ .note-links:not([hidden])) {
   padding-bottom: 48px;
@@ -1226,6 +1400,12 @@ body.note-open {
   max-width: 760px;
   margin: 0 auto;
   padding: 16px 28px calc(30vh + env(safe-area-inset-bottom));
+}
+
+/* The rule above Linked mentions spans the text column, not the padding around it. */
+.note-links::before {
+  content: '';
+  margin: -16px 0 8px;
   border-top: 1px solid var(--md-sys-color-outline-variant);
 }
 
@@ -1246,13 +1426,14 @@ body.note-open {
   gap: 4px;
   padding: 10px 14px;
   border-radius: 14px;
-  background: var(--md-sys-color-surface-container-low);
+  /* A tint over whatever's behind (the page, a coloured note), so the card shows in both themes. */
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
   color: var(--md-sys-color-on-surface);
   text-decoration: none;
 }
 
 .backlink:hover {
-  background: var(--md-sys-color-surface-container);
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 10%, transparent);
 }
 
 .backlink-title {
@@ -1281,11 +1462,27 @@ body.note-open {
   text-overflow: ellipsis;
 }
 
-.backlink-line mark {
+.backlink-line mark,
+.backlink-line .ln-link {
   border-radius: 4px;
   background: color-mix(in srgb, var(--md-sys-color-primary) 18%, transparent);
   color: var(--md-sys-color-primary);
   font-weight: 500;
+}
+
+/* A long linking line: whole on wide screens, from near its link on phones (backlinks.js). */
+.backlink-line .bl-near {
+  display: none;
+}
+
+@media (max-width: 743px) {
+  .backlink-line .bl-full {
+    display: none;
+  }
+
+  .backlink-line .bl-near {
+    display: inline;
+  }
 }
 
 @media (max-width: 743px) {
@@ -1302,8 +1499,8 @@ body.note-open {
   margin-left: auto;
   padding: 0 5px;
   border-radius: 9px;
-  background: var(--md-sys-color-error);
-  color: var(--md-sys-color-on-error);
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
   font-size: 11px;
   font-weight: 700;
   line-height: 18px;
@@ -1336,10 +1533,10 @@ body.note-open {
 }
 
 .todos {
+  padding-bottom: 24px;
   display: flex;
   flex-direction: column;
   gap: 22px;
-  max-width: 760px;
 }
 
 .todo-form {
@@ -1347,6 +1544,12 @@ body.note-open {
   align-items: center;
   gap: 8px;
   padding-top: 8px;
+}
+
+/* One corner for every outlined field in the app (settings, todos, dialogs): M3's medium step, clearly rounded next
+   to the pill buttons. It can't go past 12px: the field's leading outline segment is only 12px wide. */
+m3e-form-field {
+  --m3e-outlined-form-field-container-shape: var(--md-sys-shape-corner-medium, 12px);
 }
 
 .todo-field {
@@ -1365,10 +1568,74 @@ body.note-open {
   --m3e-form-field-font-size: 15px;
 }
 
+.todo-pick {
+  display: none;
+}
+
+.todo-chips {
+  display: none;
+}
+
+.todo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font: inherit;
+  font-size: 13px;
+  --m3e-icon-size: 16px;
+}
+
+/* The field's box is 56px at the top of a taller host (room for the floated label); centre the button on the box. */
+.todo-form m3e-button[disabled] {
+  opacity: 0.55;
+}
+
+#todo-add {
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
 .todo-form input {
   min-width: 0;
-  color: inherit;
+  color: var(--md-sys-color-on-surface);
   font: inherit;
+}
+
+/* Native pickers, dressed as the M3 fields around them: the empty "mm/dd/yyyy" hides until focus or a value
+   (`.unset` is kept in sync by notes.js), and the indicator is a tinted m3e-style icon. */
+.todo-form input.unset:not(:focus)::-webkit-datetime-edit {
+  opacity: 0;
+}
+
+.todo-form input::-webkit-calendar-picker-indicator {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: var(--md-sys-color-on-surface-variant);
+  -webkit-mask: center / 22px no-repeat;
+  mask: center / 22px no-repeat;
+  opacity: 1;
+  cursor: pointer;
+}
+
+.todo-form input[type='date']::-webkit-calendar-picker-indicator {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M200-80q-33 0-56.5-23.5T120-160v-560q0-33 23.5-56.5T200-800h40v-80h80v80h320v-80h80v80h40q33 0 56.5 23.5T840-720v560q0 33-23.5 56.5T760-80H200Zm0-80h560v-400H200v400Zm0-480h560v-80H200v80Zm0 0v-80 80Z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M200-80q-33 0-56.5-23.5T120-160v-560q0-33 23.5-56.5T200-800h40v-80h80v80h320v-80h80v80h40q33 0 56.5 23.5T840-720v560q0 33-23.5 56.5T760-80H200Zm0-80h560v-400H200v400Zm0-480h560v-80H200v80Zm0 0v-80 80Z'/%3E%3C/svg%3E");
+}
+
+.todo-form input[type='time']::-webkit-calendar-picker-indicator {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='m612-292 56-56-148-148v-184h-80v216l172 172ZM480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-400Zm0 320q133 0 226.5-93.5T800-480q0-133-93.5-226.5T480-800q-133 0-226.5 93.5T160-480q0 133 93.5 226.5T480-160Z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='m612-292 56-56-148-148v-184h-80v216l172 172ZM480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-400Zm0 320q133 0 226.5-93.5T800-480q0-133-93.5-226.5T480-800q-133 0-226.5 93.5T160-480q0 133 93.5 226.5T480-160Z'/%3E%3C/svg%3E");
+}
+
+.todo-group + .todo-group {
+  margin-top: 24px;
 }
 
 .todo-group ul,
@@ -1532,17 +1799,48 @@ button.due:hover {
     font-size: 16px;
   }
 
+  /* Phones: the text field carries calendar and clock buttons that open the native pickers; the real inputs stay
+     in the DOM (invisible) and a chosen value shows as a chip, so nothing jumps and no value is ever hidden. */
   .todo-form {
-    flex-wrap: wrap;
+    position: relative;
+    align-items: start;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'text add' 'chips chips';
   }
 
   .todo-field-text {
-    flex-basis: 100%;
+    grid-area: text;
   }
 
-  .todo-field:not(.todo-field-text) {
-    flex: 1;
-    width: auto;
+  #todo-add {
+    grid-area: add;
+  }
+
+  .todo-form > :nth-child(n + 2):nth-child(-n + 3) {
+    position: absolute;
+    top: 56px;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .todo-pick {
+    display: inline-flex;
+  }
+
+  .todo-chips {
+    grid-area: chips;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .todo-chips[hidden] {
+    display: none;
   }
 }
 
@@ -1577,8 +1875,9 @@ button.due:hover {
 
 .folder-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 10px;
+  /* Same columns and gap as the Recent row; auto-fit stretches a few tiles across the whole width. */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
 }
 
 .folder-tile {
@@ -1690,6 +1989,30 @@ body.dragging-note [data-drop-folder] {
   background: color-mix(in srgb, var(--md-sys-color-scrim, #000) 40%, transparent);
 }
 
+/* Dark mode: shadows and a 40% scrim barely show on a dark page, so dim harder and give raised surfaces (dialogs,
+   menus, the palette, the editor's / menu) a step up and a hairline edge. */
+[data-dark] .sink-dialog::backdrop {
+  background: color-mix(in srgb, var(--md-sys-color-scrim, #000) 65%, transparent);
+}
+
+[data-dark] .sink-dialog,
+[data-dark] .new-menu,
+[data-dark] .cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--md-sys-color-surface-container-highest);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent),
+    0 12px 40px color-mix(in srgb, #000 50%, transparent);
+}
+
+@media (min-width: 744px) {
+  [data-dark] .note-colors {
+    background: var(--md-sys-color-surface-container-highest);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent),
+      0 12px 40px color-mix(in srgb, #000 50%, transparent);
+  }
+}
+
 .sink-dialog-body {
   display: flex;
   flex-direction: column;
@@ -1763,9 +2086,25 @@ body.dragging-note [data-drop-folder] {
 
 .version-main {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+/* A list of one or two shouldn't leave a tall empty box above Close. */
+.version-dialog .picker-list {
+  min-height: 0;
+}
+
+/* The folder list starts a step below the title, as other dialogs' bodies do. */
+.sink-dialog h2 + .picker-list {
+  margin-top: 6px;
+}
+
+.version-row .version-go {
+  align-self: center;
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .version-when {
@@ -1773,11 +2112,12 @@ body.dragging-note [data-drop-folder] {
 }
 
 .version-preview {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--md-sys-color-on-surface-variant);
   font-size: 13px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .version-empty {
@@ -1921,23 +2261,19 @@ body.dragging-note [data-drop-folder] {
 .recent-preview {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  height: 96px;
-  padding: 10px 12px;
+  height: calc(4 * 19px);
+  padding: 0 4px;
   overflow: hidden;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 70%, var(--md-sys-color-surface-container-high));
   color: var(--md-sys-color-on-surface-variant);
-  font-size: 12px;
-  line-height: 1.45;
-  -webkit-mask-image: linear-gradient(#000 70%, transparent);
-  mask-image: linear-gradient(#000 70%, transparent);
+  font-size: 13px;
+  line-height: 19px;
+  overflow-wrap: anywhere;
 }
 
+/* Lines wrap but every line is the same height and nothing adds space between them, so the box (four lines tall)
+   always cuts between lines, never through one. */
 .recent-preview .ln {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  flex: none;
 }
 
 .recent-preview .task {
@@ -1982,7 +2318,7 @@ body.dragging-note [data-drop-folder] {
   z-index: 60;
   display: flex;
   flex-direction: column;
-  min-width: 200px;
+  min-width: 168px;
   padding: 6px;
   border-radius: 16px;
   background: var(--md-sys-color-surface-container-high);
@@ -2013,6 +2349,17 @@ body.dragging-note [data-drop-folder] {
 
 .new-item m3e-icon {
   color: var(--md-sys-color-primary);
+}
+
+.menu-divider {
+  margin: 4px 8px;
+  border: 0;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+#note-delete,
+#note-delete m3e-icon {
+  color: var(--md-sys-color-error);
 }
 
 /* ---------- quick switcher (Cmd/Ctrl+K) ---------- */
@@ -2108,16 +2455,18 @@ body.dragging-note [data-drop-folder] {
 .switcher-hint {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
   align-items: center;
-  padding: 6px 12px 2px;
+  padding: 8px 12px 4px;
+  font-size: 13px;
 }
 
 .switcher-hint kbd {
-  padding: 1px 6px;
-  border-radius: 5px;
+  padding: 2px 7px;
+  border-radius: 6px;
   background: var(--md-sys-color-surface-container-highest);
-  font: 12px ui-monospace, Menlo, monospace;
+  color: var(--md-sys-color-on-surface);
+  font: 13px ui-monospace, Menlo, monospace;
 }
 
 @media (max-width: 743px) {
@@ -2291,6 +2640,33 @@ m3e-button.danger {
   }
 }
 
+/* Phone speed-dial: dim the page so the labels don't fight the cards behind them. */
+m3e-fab-menu::backdrop {
+  /* A wash of the page colour rather than black, which is invisible on a dark page. */
+  background: color-mix(in srgb, var(--md-sys-color-surface) 72%, transparent);
+}
+
+/* M3's inverse surface is a bright bar in dark mode; a raised surface sits better with the rest of the palette. */
+m3e-snackbar {
+  --m3e-snackbar-container-shape: 14px;
+  background: none;
+  --m3e-snackbar-container-color: var(--md-sys-color-surface-container-highest);
+  --m3e-snackbar-supporting-text-color: var(--md-sys-color-on-surface);
+  --m3e-snackbar-action-text-color: var(--md-sys-color-primary);
+  filter: drop-shadow(0 4px 12px color-mix(in srgb, var(--md-sys-color-shadow) 30%, transparent));
+}
+
+/* Above the phone tab bar and, where there is one, the FAB (88px up, 80px tall). */
+@media (max-width: 743px) {
+  m3e-snackbar {
+    --m3e-snackbar-margin: calc(184px + env(safe-area-inset-bottom));
+  }
+
+  m3e-theme:has(.shell:is([data-view='settings'], [data-view='trash'], [data-view='todos'])) m3e-snackbar {
+    --m3e-snackbar-margin: calc(92px + env(safe-area-inset-bottom));
+  }
+}
+
 /* Empty-state shapes breathe. */
 .empty-shape {
   animation: shape-in 600ms var(--ease-spring) backwards;
@@ -2327,5 +2703,21 @@ m3e-button.danger {
     animation-delay: 0ms !important;
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Resting labels read as labels (not as typed text); focus colours stay with the field. */
+m3e-form-field:not(:focus-within) > label[slot='label'] {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* Reschedule is a secondary action: quieter than the row text, and smaller on phones where it's always visible. */
+.todo-when {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+@media (hover: none) {
+  .todo-when {
+    --m3e-icon-size: 20px;
   }
 }

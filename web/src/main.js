@@ -14,7 +14,7 @@ import '@m3e/web/breadcrumb';
 import '@m3e/web/expansion-panel';
 import '@m3e/web/switch';
 import '@m3e/web/checkbox';
-import { M3eSnackbar } from '@m3e/web/snackbar';
+import '@m3e/web/snackbar';
 import { api, Unauthorized } from './api.js';
 import * as notes from './notes.js';
 import { loadPlugins } from './plugin-api.js';
@@ -28,11 +28,19 @@ import { acceptInvite, inviteName, passkeysWork, signInWithPasskey } from './pas
 
 const $ = (id) => document.getElementById(id);
 const ic = (name, slot, more = '') => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}${more}></m3e-icon>`;
-/** `action` + `onAction` add a button (Undo) to the snackbar. */
-const toast = (msg, { action, onAction, ...opts } = {}) =>
-  action
-    ? M3eSnackbar.open(msg, action, { duration: 6000, ...opts, actionCallback: onAction })
-    : M3eSnackbar.open(msg, { duration: 3000, ...opts });
+/** `action` + `onAction` add a button (Undo) to the snackbar. Built here rather than with M3eSnackbar.open so it sits
+ * inside <m3e-theme> and picks up the theme's colours (open() appends to <body>, outside them). */
+const toast = (msg, { action, onAction, duration = action ? 6000 : 3000 } = {}) => {
+  const bar = Object.assign(document.createElement('m3e-snackbar'), { duration, action });
+  bar.append(msg);
+  bar.addEventListener('toggle', (e) => {
+    if (e.newState !== 'closed') return;
+    setTimeout(() => bar.remove(), 300);
+    if (bar.isActionTaken) onAction?.();
+  });
+  $('theme').append(bar);
+  bar.open = true;
+};
 
 const storage = {
   get(key) {
@@ -198,9 +206,12 @@ function applyTheme() {
   const accent = storage.get('accent') ?? ACCENTS[0].color;
   theme.setAttribute('scheme', scheme);
   theme.setAttribute('color', accent);
+  // CSS can't see the manual scheme override, and a few surfaces need different steps in dark mode.
+  theme.toggleAttribute('data-dark', scheme === 'dark' || (scheme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches));
   document.querySelector('meta[name="theme-color"]').content = accent;
 }
 applyTheme();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 
 // ---------- routing ----------
 // Hash routes so reloads, the back button and links keep their place:
@@ -389,9 +400,9 @@ async function renderSettings() {
   <h2>Public page</h2>
   <p class="muted small">Notes you choose (Share → Show on my public page) are listed here for anyone to read. Nothing else is.</p>
   <div class="setting-row">
-    <m3e-form-field variant="outlined" class="grow">
+    <m3e-form-field variant="outlined" class="grow" hide-subscript>
       <label slot="label" for="public-handle">Name in the address</label>
-      <input id="public-handle" autocomplete="off" maxlength="30" placeholder="e.g. josh" />
+      <input id="public-handle" autocomplete="off" maxlength="30" />
     </m3e-form-field>
     <m3e-button id="public-save" variant="tonal">Save</m3e-button>
   </div>
@@ -411,7 +422,7 @@ async function renderSettings() {
     <span slot="header">Claude Code, or anything that wants a token</span>
     <p class="muted small">The URL above works with <code>claude mcp add --transport http</code>. For a fixed header instead, make a token:</p>
     <div class="setting-row">
-      <m3e-form-field variant="outlined" class="grow">
+      <m3e-form-field variant="outlined" class="grow" hide-subscript>
         <label slot="label" for="connect-name">Name</label>
         <input id="connect-name" value="Claude Code" />
       </m3e-form-field>
@@ -434,8 +445,8 @@ async function renderSettings() {
   <h2>People</h2>
   <p class="muted small">Who can sign in. Everyone gets their own notes; nobody can see anyone else's.</p>
   <div class="setting-row">
-    <m3e-form-field variant="outlined" class="grow">
-      <label slot="label" for="people-entry">Email, user:name or sub:id</label>
+    <m3e-form-field variant="outlined" class="grow" hide-subscript>
+      <label slot="label" for="people-entry">Email or user:name</label>
       <input id="people-entry" autocomplete="off" />
     </m3e-form-field>
     <m3e-button id="people-add" variant="tonal">${ic('person_add', 'icon')}Add</m3e-button>
@@ -444,7 +455,7 @@ async function renderSettings() {
     <span slot="header">Invite someone with a passkey</span>
     <p class="muted small">For people without an account at your sign-in provider. They get a link that works once, for 7 days, and make a passkey with it.</p>
     <div class="setting-row">
-      <m3e-form-field variant="outlined" class="grow">
+      <m3e-form-field variant="outlined" class="grow" hide-subscript>
         <label slot="label" for="invite-name">Their name</label>
         <input id="invite-name" autocomplete="off" maxlength="60" />
       </m3e-form-field>
@@ -458,9 +469,10 @@ async function renderSettings() {
   <div id="people-list" class="token-list"></div>
 </section>
 
-<section class="setting-card">
+<section class="setting-card compact">
+  <h2>Trash</h2>
   <div class="setting-row">
-    <div class="grow"><div class="setting-title">Trash</div><div class="muted small">Put back or delete notes you've deleted.</div></div>
+    <div class="grow muted small">Put back or delete notes you've deleted.</div>
     <m3e-button id="open-trash" variant="tonal">${ic('delete', 'icon')}Open trash</m3e-button>
   </div>
 </section>
@@ -470,10 +482,11 @@ async function renderSettings() {
   <div id="server-info" class="facts"></div>
 </section>
 
-<section class="setting-card">
+<section class="setting-card compact">
+  <h2>Sign out</h2>
   <div class="setting-row">
-    <div class="grow"><div class="setting-title">Sign out of this browser</div><div class="muted small">Other devices stay signed in.</div></div>
-    <m3e-button id="logout" variant="outlined">${ic('logout', 'icon')}Sign out</m3e-button>
+    <div class="grow muted small">Signs out this browser. Other devices stay signed in.</div>
+    <m3e-button id="logout" variant="tonal">${ic('logout', 'icon')}Sign out</m3e-button>
   </div>
 </section>`;
   renderTokens();
@@ -502,7 +515,7 @@ async function renderTokens() {
     const row = (t) => `<div class="token-row">
   <span class="token-icon">${ic(isAssistant(t) ? 'hub' : 'devices')}</span>
   <div class="grow"><div>${esc(t.name.replace(/ \(MCP\)$/, ''))}${t.id === me.tokenId ? ' <span class="here">This browser</span>' : ''}</div>
-  <div class="muted small">Last used ${esc(ago(t.last_used_at))}</div></div>
+  <div class="muted small">${t.last_used_at ? `Last used ${esc(ago(t.last_used_at))}` : 'Never used'}</div></div>
   ${t.id === me.tokenId ? '' : `<m3e-icon-button data-revoke="${esc(t.id)}" aria-label="Revoke ${esc(t.name)}" title="Revoke">${ic('close')}</m3e-icon-button>`}
 </div>`;
     const group = (title, items, empty) =>
@@ -557,7 +570,7 @@ async function renderPeople() {
       group(
         'Accounts',
         accounts.map((a) =>
-          row(a.owner ? 'shield_person' : 'account_circle', esc(a.email ?? a.username ?? a.subject) + (a.owner ? ' <span class="here">Owner</span>' : ''), `Last signed in ${esc(ago(a.seen_at))}`),
+          row(a.owner ? 'shield_person' : 'account_circle', esc(a.email ?? a.username ?? a.subject) + (a.owner ? ' <span class="here">Owner</span>' : ''), a.seen_at ? `Last signed in ${esc(ago(a.seen_at))}` : 'Never signed in'),
         ),
         'Nobody has signed in.',
       );
@@ -746,7 +759,6 @@ $('add-btn').addEventListener('click', (e) => {
   const open = $('new-menu').hidden;
   closeNewMenus();
   if (!open) return;
-  // Under the button, in the sidebar.
   const r = $('add-btn').getBoundingClientRect();
   Object.assign($('new-menu').style, { left: `${r.left}px`, top: `${r.bottom + 6}px` });
   $('new-menu').hidden = false;
@@ -770,6 +782,10 @@ document.addEventListener('keydown', (e) => {
     $('add-btn').focus();
   }
 });
+
+const markScrolled = () => document.querySelector('.main-head').classList.toggle('scrolled', $('main').scrollTop + scrollY > 4);
+$('main').addEventListener('scroll', markScrolled, { passive: true });
+addEventListener('scroll', markScrolled, { passive: true });
 
 notes.initNotes({ toast, navigate: (hash) => (location.hash = hash) });
 notes.wireNotes();

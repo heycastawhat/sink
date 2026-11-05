@@ -124,9 +124,25 @@ body.board .note-editor {
   text-overflow: ellipsis;
 }
 
-.backlink-line mark {
+.backlink-line mark,
+.backlink-line .ln-link {
   border-radius: 4px;
   background: color-mix(in srgb, var(--md-sys-color-primary) 18%, transparent);
   color: var(--md-sys-color-primary);
   font-weight: 500;
+}
+
+/* A long linking line: whole on wide screens, from near its link on phones (backlinks.js). */
+.backlink-line .bl-near {
+  display: none;
+}
+
+@media (max-width: 743px) {
+  .backlink-line .bl-full {
+    display: none;
+  }
+
+  .backlink-line .bl-near {
+    display: inline;
+  }
 }

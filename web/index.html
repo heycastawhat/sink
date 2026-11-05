@@ -13,7 +13,12 @@
     <meta name="format-detection" content="telephone=no" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link
-      href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wdth,wght@8..144,25..151,100..1000&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wdth,wght@8..144,25..151,100..1000&display=swap"
+      rel="stylesheet"
+    />
+    <!-- block, not swap: until the symbols arrive, icons would show as their ligature names ("add", "folder") -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/src/style.css" />
@@ -98,6 +103,7 @@
             </div>
             <!-- Home only: what you opened or edited lately, like Drive's suggested files. -->
             <section id="notes-recent" class="recent-strip" hidden></section>
+            <h2 id="folder-tiles-head" class="notes-head" hidden>Folders</h2>
             <div id="folder-tiles" class="folder-tiles" aria-label="Folders"></div>
             <h2 id="notes-pinned-head" class="notes-head" hidden>Pinned</h2>
             <div id="notes-pinned" class="note-grid"></div>
@@ -118,16 +124,21 @@
                 <m3e-icon slot="prefix" name="add_task"></m3e-icon>
                 <label slot="label" for="todo-text">Add a todo</label>
                 <input id="todo-text" autocomplete="off" />
+                <span slot="suffix" class="todo-pick">
+                  <m3e-icon-button type="button" data-pick="todo-date" aria-label="Due date" title="Due date"><m3e-icon name="calendar_today"></m3e-icon></m3e-icon-button>
+                  <m3e-icon-button type="button" data-pick="todo-time" aria-label="Remind at" title="Remind at"><m3e-icon name="schedule"></m3e-icon></m3e-icon-button>
+                </span>
               </m3e-form-field>
-              <m3e-form-field variant="outlined" class="todo-field" float-label="always" hide-subscript>
+              <m3e-form-field variant="outlined" class="todo-field" hide-subscript>
                 <label slot="label" for="todo-date">Due</label>
-                <input id="todo-date" type="date" />
+                <input id="todo-date" type="date" class="unset" />
               </m3e-form-field>
-              <m3e-form-field variant="outlined" class="todo-field" float-label="always" hide-subscript>
+              <m3e-form-field variant="outlined" class="todo-field" hide-subscript>
                 <label slot="label" for="todo-time">Remind at</label>
-                <input id="todo-time" type="time" />
+                <input id="todo-time" type="time" class="unset" />
               </m3e-form-field>
               <m3e-button type="submit" variant="filled" id="todo-add">Add</m3e-button>
+              <div id="todo-chips" class="todo-chips" hidden></div>
             </form>
             <div id="todo-list"></div>
             <m3e-button id="todo-done-toggle" variant="text" size="small">Show done</m3e-button>
@@ -184,10 +195,11 @@
             <button class="new-item" role="menuitem" id="note-archive"><m3e-icon name="archive"></m3e-icon><span>Archive</span></button>
             <button class="new-item" role="menuitem" id="note-history"><m3e-icon name="history"></m3e-icon><span>Version history</span></button>
             <button class="new-item" role="menuitem" id="note-download"><m3e-icon name="download"></m3e-icon><span>Download .md</span></button>
+            <hr class="menu-divider" />
             <button class="new-item" role="menuitem" id="note-delete"><m3e-icon name="delete"></m3e-icon><span>Delete</span></button>
           </div>
           <div id="note-colors" class="note-colors" hidden></div>
-          <div class="note-scroll"><div id="note-editor" class="note-editor"></div><section id="note-links" class="note-links" hidden aria-label="Linked mentions"></section></div>
+          <div class="note-scroll"><button type="button" id="note-filename" class="note-filename" title="Rename" hidden></button><div id="note-editor" class="note-editor"></div><section id="note-links" class="note-links" hidden aria-label="Linked mentions"></section></div>
         </section>
 
       </div>

@@ -196,7 +196,9 @@ class PropertiesWidget extends WidgetType {
       if (kv) rows.push([kv[1], kv[2] ? [kv[2]] : []]);
       else if (item && rows.length) rows[rows.length - 1][1].push(item[1]);
     }
-    for (const [key, values] of rows) {
+    // The app shows these itself (the note's colour, the pin), so they'd only be noise here; they stay in the YAML.
+    const shown = rows.filter(([key]) => key !== 'color' && key !== 'pinned');
+    for (const [key, values] of shown) {
       const row = document.createElement('div');
       row.className = 'cm-prop';
       const k = document.createElement('span');
@@ -217,6 +219,7 @@ class PropertiesWidget extends WidgetType {
       box.append(row);
     }
     if (!rows.length) box.textContent = 'Properties';
+    else if (!shown.length) box.hidden = true;
     return box;
   }
   ignoreEvent() {
@@ -390,6 +393,7 @@ const CORE_COMMANDS = [
   {
     id: 'template',
     name: 'Insert a template',
+    icon: 'note_stack',
     // The app picks it (opts.pickTemplate); pages without templates (a shared note) skip it.
     available: (opts) => !!opts.pickTemplate,
     run: async (ctx, opts) => {
@@ -400,6 +404,7 @@ const CORE_COMMANDS = [
   {
     id: 'table',
     name: 'Table',
+    icon: 'table',
     // On its own line, with a blank line before it so markdown reads it as a table, caret in the first header.
     run: (ctx) => {
       const { state } = ctx.view;
@@ -496,12 +501,37 @@ const looseTask = EditorView.inputHandler.of((view, from, to, text) => {
   return true;
 });
 
+/** What an empty note shows: a title line (see titleFirst below) and a hint for the rest. */
+function newNoteHint() {
+  const el = document.createElement('span');
+  el.innerHTML = '<span class="cm-hint-title">Title</span><span>Start writing, or type / for commands</span>';
+  return el;
+}
+
 // A note's first line is its title: typing into an empty note starts a heading, unless what's typed starts
 // other markup (a list, quote, table, embed, slash command…).
 const titleFirst = EditorState.transactionFilter.of((tr) => {
   if (tr.startState.doc.length || !tr.isUserEvent('input.type') || !/^[^\s#\-*+>|`!\[/%=<~_\d]/u.test(tr.newDoc.sliceString(0, 1))) return tr;
   return [tr, { changes: { from: 0, insert: '# ' }, sequential: true }];
 });
+
+/** Enter after a new note's title leaves a blank line under it, the gap a saved note shows between title and text. */
+function enterAfterTitle(view) {
+  const { doc, selection } = view.state;
+  const { head, empty } = selection.main;
+  if (doc.lines !== 1 || !empty || head !== doc.length || !/^#\s+\S/.test(doc.line(1).text)) return false;
+  view.dispatch({ changes: { from: head, insert: '\n\n' }, selection: { anchor: head + 2 }, userEvent: 'input', scrollIntoView: true });
+  return true;
+}
+
+/** A slash command's icon in the menu, on pages that have the icon set (the app; not a shared note's page). */
+function commandIcon(completion) {
+  if (!completion.icon || !customElements.get('m3e-icon')) return null;
+  const el = document.createElement('m3e-icon');
+  el.setAttribute('name', completion.icon);
+  el.className = 'cm-completionIcon-sink';
+  return el;
+}
 
 /** What a slash command gets to work with. */
 function commandContext(view, opts) {
@@ -570,7 +600,8 @@ function livePreview(opts) {
             for (let n = first; n <= last; n++) if (active.has(n)) blockActive = true;
             for (let n = first; n <= last; n++) {
               const line = state.doc.line(n);
-              const cls = `cm-codeblock${n === first ? ' cm-codeblock-first' : ''}${n === last ? ' cm-codeblock-last' : ''}`;
+              const fence = !blockActive && (n === first || (n === last && /^\s*(```|~~~)/.test(line.text)));
+              const cls = `cm-codeblock${n === first ? ' cm-codeblock-first' : ''}${n === last ? ' cm-codeblock-last' : ''}${fence ? ' cm-codeblock-fence' : ''}`;
               add(line.from, line.from, Decoration.line({ class: cls }));
             }
             if (!blockActive) {
@@ -701,7 +732,9 @@ function livePreview(opts) {
       for (const m of text.matchAll(/(^|[\s(])(#[\p{L}\p{N}_\-/]*[\p{L}_\-/][\p{L}\p{N}_\-/]*)/gu)) {
         const start = base + m.index + m[1].length;
         if (inCode(state, start) || state.sliceDoc(start, start + 2) === '# ') continue;
-        add(start, start + m[2].length, Decoration.mark({ class: 'cm-tag' }));
+        // Punctuation right after a tag sits against the chip, not a padding's width away ("#ideas." not "#ideas .").
+        const tight = /[.,;:!?)]/.test(state.sliceDoc(start + m[2].length, start + m[2].length + 1));
+        add(start, start + m[2].length, Decoration.mark({ class: tight ? 'cm-tag cm-tag-tight' : 'cm-tag' }));
       }
     }
 
@@ -802,21 +835,38 @@ export function createEditor(opts) {
 
   // Typing "/" at the start of a line or after a space offers the editor's own commands (/table) and plugin ones
   // (/mermaid, /today, …).
+  // Ranked by hand rather than CodeMirror's fuzzy match (which put /today above /template for "ta" and lit up
+  // scattered letters): a command that starts with what's typed, then one whose name has a word that does, then
+  // the letters in order. Only a prefix is highlighted.
   const completeCommands = (ctx) => {
     const m = ctx.matchBefore(/(?:^|\s)\/[\w-]*$/);
     if (!m) return null;
     const slash = m.from + m.text.indexOf('/');
+    const typed = ctx.state.sliceDoc(slash + 1, ctx.pos).toLowerCase();
+    const rank = (c) => {
+      if (c.id.toLowerCase().startsWith(typed)) return 0;
+      if (c.name.toLowerCase().split(/\W+/).some((w) => w.startsWith(typed))) return 1;
+      let i = 0;
+      for (const ch of c.id.toLowerCase()) if (ch === typed[i]) i++;
+      return i === typed.length ? 2 : -1;
+    };
+    const commands = [...CORE_COMMANDS.filter((c) => !c.available || c.available(opts)), ...registry.commands]
+      .map((c) => ({ c, r: rank(c) }))
+      .filter(({ r }) => r >= 0)
+      .sort((a, b) => a.r - b.r || a.c.id.localeCompare(b.c.id));
     return {
       from: slash,
-      options: [...CORE_COMMANDS.filter((c) => !c.available || c.available(opts)), ...registry.commands].map((c) => ({
+      filter: false,
+      getMatch: (completion) => (typed && completion.label.toLowerCase().startsWith(`/${typed}`) ? [1, typed.length + 1] : []),
+      options: commands.map(({ c }) => ({
         label: `/${c.id}`,
         detail: c.name,
+        icon: c.icon ?? 'bolt',
         apply: (view, _completion, from, to) => {
           view.dispatch({ changes: { from, to, insert: '' } });
           Promise.resolve(c.run(commandContext(view, opts), opts)).catch((err) => opts.onError?.(err));
         },
       })),
-      validFor: /^\/[\w-]*$/,
     };
   };
 
@@ -843,6 +893,9 @@ export function createEditor(opts) {
     root: document,
     state: EditorState.create({
       doc: opts.doc ?? '',
+      // Not at 0: a caret there counts as being in the frontmatter, which would show it as raw YAML until the first
+      // tap (touch screens don't focus the note on open).
+      selection: { anchor: (opts.doc ?? '').length },
       extensions: [
         history(),
         // Tabs indent, as in Obsidian, so nested lists line up in both apps; editor.css makes each one wide enough to read.
@@ -862,11 +915,11 @@ export function createEditor(opts) {
         titleFirst,
         pluginBlocks,
         tables,
-        autocompletion({ override: [completeLinks, completeCommands], icons: false }),
-        placeholderExt(opts.placeholder ?? 'Note'),
+        autocompletion({ override: [completeLinks, completeCommands], icons: false, addToOptions: [{ render: commandIcon, position: 20 }] }),
+        placeholderExt(opts.placeholder ?? (opts.readOnly ? '' : newNoteHint())),
         ...(opts.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
         // Tab takes the highlighted suggestion ([[link]] or /command); with no menu open it indents as usual.
-        keymap.of([{ key: 'Tab', run: acceptCompletion }]),
+        keymap.of([{ key: 'Tab', run: acceptCompletion }, { key: 'Enter', run: enterAfterTitle }]),
         keymap.of([...closeBracketsKeymap, ...markdownKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
         // writingsuggestions: no macOS/Chrome predicted words greyed in after the cursor (they look like note text).
         EditorView.contentAttributes.of({ spellcheck: 'true', autocapitalize: 'sentences', writingsuggestions: 'false', 'aria-label': 'Note text' }),

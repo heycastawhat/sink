@@ -13,6 +13,7 @@ export default function setup(sink) {
   sink.command({
     id: 'mermaid',
     name: 'Diagram',
+    icon: 'account_tree',
     run: (ctx) => ctx.insert('```mermaid\nflowchart LR\n  Idea --> Note --> Done\n```\n'),
   });
 }

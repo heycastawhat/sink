@@ -8,6 +8,7 @@ export default function setup(sink) {
   sink.command({
     id: 'math',
     name: 'Equation',
+    icon: 'function',
     run: (ctx) => ctx.insert('```math\ne^{i\\pi} + 1 = 0\n```\n'),
   });
 }
