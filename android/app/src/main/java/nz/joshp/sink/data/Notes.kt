@@ -182,6 +182,12 @@ suspend fun Api.createNote(folder: String, title: String, content: String): Note
     return call(request("/api/notes").post(jsonBody(body)).build()) { json.decodeFromString(it) }
 }
 
+/** The server fetches the page and saves its article as a note (the web clipper). */
+suspend fun Api.clipUrl(url: String): NoteMeta {
+    val body = buildJsonObject { put("url", url) }
+    return call(request("/api/clip").post(jsonBody(body)).build()) { json.decodeFromString(it) }
+}
+
 /** Pin and colour; `clearColor` sends `color: null`. */
 suspend fun Api.noteMeta(path: String, pinned: Boolean? = null, color: String? = null, clearColor: Boolean = false): NoteMeta {
     val body = buildJsonObject {

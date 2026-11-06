@@ -77,13 +77,16 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import nz.joshp.sink.SinkApp
 import nz.joshp.sink.capture.SharedFiles
+import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.Update
 import nz.joshp.sink.data.Updates
 import nz.joshp.sink.data.Session
+import nz.joshp.sink.data.clipUrl
 import nz.joshp.sink.data.SignIn
 import nz.joshp.sink.ui.theme.SinkTheme
 import java.io.File
@@ -133,7 +136,10 @@ class MainActivity : ComponentActivity() {
         handleDebugSignIn(intent)
         openNote.value = noteTarget(intent)
         // Not again when the activity is recreated (rotation): the files were already copied and opened.
-        if (savedInstanceState == null) handleSharedFiles(intent)
+        if (savedInstanceState == null) {
+            handleSharedFiles(intent)
+            handleSharedLink(intent)
+        }
 
         setContent {
             val dynamic by settings.dynamicColor.collectAsState(initial = false)
@@ -173,7 +179,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun noteTarget(intent: Intent): NoteTarget? = when {
-        SharedFiles.uris(intent).isNotEmpty() -> null
+        SharedFiles.uris(intent).isNotEmpty() || sharedLink(intent) != null -> null
         intent.action == Intent.ACTION_SEND -> {
             sharedText(intent).takeIf { it.isNotEmpty() }?.let { NoteTarget(null, text = it) }
         }
@@ -189,6 +195,27 @@ class MainActivity : ComponentActivity() {
         handleDebugSignIn(intent)
         noteTarget(intent)?.let { openNote.value = it }
         handleSharedFiles(intent)
+        handleSharedLink(intent)
+    }
+
+    /** Text shared from another app that is nothing but a web address. */
+    private fun sharedLink(intent: Intent): String? =
+        if (intent.action != Intent.ACTION_SEND) null
+        else intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf { Regex("https?://\\S+").matches(it) }
+
+    /** A shared link is clipped on the server and the note opens; if that fails it becomes a plain note holding the link. */
+    private fun handleSharedLink(intent: Intent) {
+        val url = sharedLink(intent) ?: return
+        val fallback = sharedText(intent)
+        android.widget.Toast.makeText(this, "Clipping…", android.widget.Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val session = (application as SinkApp).settings.session.first()
+            val result = if (session == null) Result.failure(Exception("Signed out")) else runCatching { Api(session).clipUrl(url) }
+            result.onSuccess { openNote.value = NoteTarget(it.path) }.onFailure {
+                android.widget.Toast.makeText(this@MainActivity, "Couldn't clip: ${it.message}", android.widget.Toast.LENGTH_LONG).show()
+                openNote.value = NoteTarget(null, text = fallback)
+            }
+        }
     }
 
     /** Shared text: the subject (a page title, say) as its heading. */
