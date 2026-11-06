@@ -1,7 +1,15 @@
 package nz.joshp.sink.ui
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.View
+import android.view.ViewTreeObserver
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
+import androidx.annotation.RequiresApi
+import androidx.compose.ui.graphics.graphicsLayer
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -42,6 +50,9 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -95,11 +106,9 @@ import nz.joshp.sink.data.SignIn
 import nz.joshp.sink.ui.theme.SinkTheme
 import java.io.File
 
-private data class Tab(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
-
 private val TABS = listOf(
-    Tab("notes", "Notes", Icons.AutoMirrored.Outlined.StickyNote2, Icons.AutoMirrored.Filled.StickyNote2),
-    Tab("todos", "Todos", Icons.Outlined.Checklist, Icons.Filled.Checklist),
+    NavPlace("notes", "Notes", Icons.AutoMirrored.Outlined.StickyNote2, Icons.AutoMirrored.Filled.StickyNote2),
+    NavPlace("todos", "Todos", Icons.Outlined.Checklist, Icons.Filled.Checklist),
 )
 
 /**
@@ -136,6 +145,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // A fresh start has the system splash to lift away (and an entrance to play under it); a recreation has neither.
+        if (savedInstanceState == null && Build.VERSION.SDK_INT >= 31) holdSplash() else Entrance.finish()
         val settings = (application as SinkApp).settings
         val openSettings = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)
         handleSignIn(intent)
@@ -155,12 +166,54 @@ class MainActivity : ComponentActivity() {
             val lastServer by settings.lastServerUrl.collectAsState(initial = null)
 
             SinkTheme(dynamicColor = dynamic, mode = mode) {
+                if (session != Loading) firstScreenReady = true
                 when (val s = session) {
                     Loading -> Unit
                     null -> LoginScreen(settings, lastServer, signingIn.value, signInError.value)
                     else -> LoggedIn(s, openSettings)
                 }
             }
+        }
+    }
+
+    /** Whether we know yet who's signed in, so the splash can go to a real screen rather than a blank one. */
+    @Volatile private var firstScreenReady = false
+
+    /**
+     * Keeps the splash up until its drop has landed (and we know which screen to show, for [SPLASH_MAX_MS] at most),
+     * then lifts it away: the drop swells as it fades and the splash clears as the app's entrance plays ([Entrance]).
+     */
+    @RequiresApi(31)
+    private fun holdSplash() {
+        val now = SystemClock.uptimeMillis()
+        // The drop starts falling as the splash window goes up, which for a cold start is about when the process did.
+        val processStart = android.os.Process.getStartUptimeMillis()
+        val start = if (now - processStart < SPLASH_MIN_MS) processStart else now
+        val content = findViewById<View>(android.R.id.content)
+        content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                val shown = SystemClock.uptimeMillis() - start
+                if (!(firstScreenReady && shown >= SPLASH_MIN_MS) && shown < SPLASH_MAX_MS) return false
+                content.viewTreeObserver.removeOnPreDrawListener(this)
+                return true
+            }
+        })
+        splashScreen.setOnExitAnimationListener { view ->
+            Entrance.hide()
+            view.iconView?.animate()
+                ?.scaleX(1.6f)?.scaleY(1.6f)?.alpha(0f)
+                ?.setDuration(320)
+                ?.setInterpolator(AccelerateInterpolator(1.5f))
+                ?.start()
+            view.animate()
+                .alpha(0f)
+                .setStartDelay(80)
+                .setDuration(300)
+                .setInterpolator(DecelerateInterpolator())
+                .withEndAction { view.remove() }
+                .start()
+            // Once the splash has started to clear, so the entrance is seen.
+            view.postDelayed({ Entrance.play() }, 80)
         }
     }
 
@@ -318,15 +371,18 @@ class MainActivity : ComponentActivity() {
         val openNoteAt = { path: String, line: Int? -> open(NoteTarget(path, line)) }
         // A predictive back gesture out of a note: a tick as it passes halfway, past which the note is mostly gone.
         val haptics = rememberHaptics()
+        // And the tabs come back as soon as the gesture heads for a screen that has them, so they're there as the page
+        // under it rises, not only once it's let go (they go again if the gesture is cancelled).
+        var backToTabs by remember { mutableStateOf(false) }
         val backs = LocalNavigationEventDispatcherOwner.current?.navigationEventDispatcher
         LaunchedEffect(backs) {
             var past = false
             backs?.transitionState?.collect { s ->
-                val back = s as? NavigationEventTransitionState.InProgress
-                val now = back != null && back.direction == NavigationEventTransitionState.TRANSITIONING_BACK &&
-                    back.latestEvent.progress >= 0.5f && nav.currentBackStackEntry?.destination?.route?.startsWith("note?") == true
+                val back = (s as? NavigationEventTransitionState.InProgress)?.takeIf { it.direction == NavigationEventTransitionState.TRANSITIONING_BACK }
+                val now = back != null && back.latestEvent.progress >= 0.5f && nav.currentBackStackEntry?.destination?.route?.startsWith("note?") == true
                 if (now && !past) haptics.threshold()
                 past = now
+                backToTabs = back != null && TABS.any { it.route == nav.previousBackStackEntry?.destination?.route }
             }
         }
         // Screen changes use the theme's expressive motion (read here: the transition lambdas aren't composable).
@@ -373,7 +429,15 @@ class MainActivity : ComponentActivity() {
           Box(Modifier.fillMaxSize()) {
             // Screens draw to the bottom edge; the tabs float over them (each screen leaves room, see toolbarClearance).
             // Notes grow out of the card tapped (when there's one on screen) and shrink back into it.
-            SharedTransitionLayout(Modifier.fillMaxSize()) {
+            // After a splash, the page rises into place and the tabs slide up after it.
+            val entrance = rememberEntrance()
+            SharedTransitionLayout(
+                Modifier.fillMaxSize().graphicsLayer {
+                    val p = entrancePart(entrance(), 0, Entrance.PAGE_END_MS)
+                    alpha = p
+                    translationY = (1f - p) * 48.dp.toPx()
+                },
+            ) {
             val morph = remember(this) { CardMorph(this) }
             CompositionLocalProvider(LocalCardMorph provides morph.takeIf { !wide }) {
             NavHost(
@@ -382,17 +446,43 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxSize(),
                 // A note rises over the screen it came from, which settles back a little; tabs fade through.
                 enterTransition = {
-                    if (isNote(targetState)) slideInVertically(motion.defaultSpatialSpec()) { it / 10 } + fadeIn(motion.defaultEffectsSpec())
+                    BackMotion.predictive = false
+                    if (isNote(targetState)) slideInVertically(BackMotion.open()) { it / 12 } + fadeIn(tween(260, easing = LinearOutSlowInEasing))
                     else fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f)
                 },
                 exitTransition = {
-                    if (isNote(targetState)) fadeOut(motion.defaultEffectsSpec()) + scaleOut(motion.defaultSpatialSpec(), targetScale = 0.96f)
+                    if (isNote(targetState)) fadeOut(tween(300)) + scaleOut(BackMotion.open(), targetScale = 0.96f)
                     else fadeOut(motion.fastEffectsSpec())
                 },
-                popEnterTransition = { fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f) },
+                popEnterTransition = {
+                    BackMotion.predictive = false
+                    fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f)
+                },
                 popExitTransition = {
                     if (isNote(initialState)) slideOutVertically(motion.defaultSpatialSpec()) { it / 10 } + fadeOut(motion.fastEffectsSpec())
                     else fadeOut(motion.fastEffectsSpec())
+                },
+                // A back gesture out of a note or Settings: the page shrinks and drifts with the finger (away from the
+                // edge it came from), its corners rounding, and only fades in the last stretch, so it reads as the
+                // page being pushed away rather than vanishing; the screen under it rises back into place. All of it
+                // tracks the gesture 1:1, and letting go carries it on from there. (A card the note came from takes
+                // the note's bounds instead: see morphBounds.)
+                predictivePopEnterTransition = {
+                    BackMotion.predictive = true
+                    scaleIn(BackMotion.track(), initialScale = 0.94f) + fadeIn(BackMotion.track(), initialAlpha = 0.5f)
+                },
+                predictivePopExitTransition = { edge ->
+                    BackMotion.predictive = true
+                    if (!isNote(initialState)) fadeOut(BackMotion.track())
+                    else {
+                        // Pulled down from its top, it sinks with the finger; from an edge, it drifts away from it (edge 0
+                        // is the left, NavigationEvent.EDGE_LEFT: the page drifts right, and vice versa).
+                        val drift = if (edge == 0) 1 else -1
+                        scaleOut(BackMotion.track(), targetScale = 0.86f) +
+                            (if (BackMotion.downward) slideOutVertically(BackMotion.track()) { h -> h / 4 }
+                            else slideOutHorizontally(BackMotion.track()) { w -> drift * w / 12 }) +
+                            fadeOut(BackMotion.late(0.6f))
+                    }
                 },
             ) {
                 composable("notes") {
@@ -465,18 +555,32 @@ class MainActivity : ComponentActivity() {
             }
             // The tabs slide away when a note opens over them and come back with the list.
             AnimatedVisibility(
-                visible = showBar,
+                visible = showBar || backToTabs,
                 enter = slideInVertically(motion.defaultSpatialSpec()) { it } + fadeIn(motion.defaultEffectsSpec()),
                 exit = slideOutVertically(motion.fastSpatialSpec()) { it } + fadeOut(motion.fastEffectsSpec()),
-                modifier = Modifier.align(Alignment.BottomStart),
+                modifier = Modifier.align(Alignment.BottomStart).graphicsLayer {
+                    val p = entrancePart(entrance(), Entrance.BAR_START_MS, Entrance.BAR_END_MS)
+                    translationY = (1f - p) * size.height * 1.5f
+                    alpha = p
+                },
             ) {
                 val badge by notesVm.todoBadge.collectAsState()
                 LaunchedEffect(Unit) { notesVm.loadTodoBadge() }
-                FloatingTabs(
-                    nav,
+                val haptics = rememberHaptics()
+                FloatingNavBar(
+                    TABS,
                     route,
                     mapOf("todos" to badge),
-                    Modifier.navigationBarsPadding().padding(start = 16.dp, bottom = TOOLBAR_BOTTOM),
+                    onSelect = { t ->
+                        if (route != t.route) haptics.tick()
+                        nav.navigate(t.route) {
+                            // Tabs keep one copy each and remember where you were in them.
+                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                    modifier = Modifier.navigationBarsPadding().padding(start = 16.dp, bottom = TOOLBAR_BOTTOM),
                 )
             }
           }
@@ -512,73 +616,8 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_OPEN_LINE = "open_line"
         const val EXTRA_NEW_NOTE = "new_note"
         private val Loading = Session("", "")
-    }
-}
-
-/**
- * The tabs as a floating toolbar (Material 3 Expressive), bottom left where a thumb rests, with each screen's + button
- * beside it on the right. The open tab shows its name; the others are icons.
- */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun FloatingTabs(nav: NavHostController, selected: String?, badges: Map<String, Int>, modifier: Modifier = Modifier) {
-    val motion = MaterialTheme.motionScheme
-    val haptics = rememberHaptics()
-    Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shadowElevation = 6.dp,
-        modifier = modifier.height(TOOLBAR_HEIGHT),
-    ) {
-        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            for (t in TABS) {
-                val on = selected == t.route
-                val press = remember { MutableInteractionSource() }
-                // The open tab's pill fills in and its name slides out; the one you leave folds back to an icon.
-                val pill by animateColorAsState(
-                    if (on) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                    motion.defaultEffectsSpec(),
-                    label = "tab-pill",
-                )
-                Row(
-                    Modifier
-                        .height(48.dp)
-                        .pressScale(press, 0.94f)
-                        .clip(CircleShape)
-                        .background(pill)
-                        .clickable(interactionSource = press, indication = LocalIndication.current) {
-                            if (!on) haptics.tick()
-                            nav.navigate(t.route) {
-                                // Tabs keep one copy each and remember where you were in them.
-                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        }
-                        .padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Todos: how many are overdue or due today.
-                    val count = badges[t.route] ?: 0
-                    BadgedBox(badge = { if (count > 0) Badge { Text(if (count > 99) "99+" else "$count") } }) {
-                        Icon(
-                            if (on) t.selectedIcon else t.icon,
-                            if (on) null else t.label,
-                            tint = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    AnimatedVisibility(
-                        visible = on,
-                        enter = expandHorizontally(motion.defaultEffectsSpec<IntSize>()) + fadeIn(motion.defaultEffectsSpec()),
-                        exit = shrinkHorizontally(motion.defaultEffectsSpec<IntSize>()) + fadeOut(motion.fastEffectsSpec()),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Spacer(Modifier.width(10.dp))
-                            Text(t.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSecondaryContainer, maxLines = 1)
-                        }
-                    }
-                }
-            }
-        }
+        /** The splash's drop has landed and settled by now (see drawable/splash_icon_animated.xml). */
+        private const val SPLASH_MIN_MS = 800L
+        private const val SPLASH_MAX_MS = 2000L
     }
 }
