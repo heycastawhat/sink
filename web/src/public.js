@@ -1,7 +1,7 @@
 // A public page: /public/<handle> lists the notes that account published (`publish: true`), /public/<handle>/<path>
 // shows one through the same read-only editor as share links. Bare /public is the owner's page.
 
-import { createEditor } from './editor.js';
+import { createEditor, IMAGE_EXT } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
 import { esc, inlineHtml } from './util.js';
@@ -40,7 +40,21 @@ async function showNote(handle, notes, path) {
   const note = await getJson(`${base}/note?path=${encodeURIComponent(path)}`);
   if (!note) return ($('share-missing').hidden = false);
   document.title = `${note.title} · ${handle}`;
-  const attachment = (name) => `${base}/attachment?path=${encodeURIComponent(note.path)}&name=${encodeURIComponent(name)}`;
+  // Each note's images come through that note (the server only serves what a published note embeds).
+  const attachments = (path) => {
+    const attachment = (name) => `${base}/attachment?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`;
+    return {
+      resolveEmbed: attachment,
+      resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeURIComponent(src).replace(/^(\.\.\/)+/, '').split('/').pop())),
+    };
+  };
+  // Links to notes that aren't published become their plain text, so they don't look like links that go nowhere, and
+  // embeds of them go: only published notes' text is shown here.
+  const shown = (text) =>
+    text.replace(/(!?)\[\[([^\]\n]+)\]\]/g, (link, bang, inner) => {
+      if (findNote(notes, inner) || (bang && IMAGE_EXT.test(inner.split('|')[0].trim()))) return link;
+      return bang ? '' : (inner.split('|')[1] ?? inner.split(/[#|]/)[0]).trim();
+    });
   await loadPlugins(
     {
       list: async () => [{ id: 'diagrams', bundled_client: true }, { id: 'math', bundled_client: true }],
@@ -52,18 +66,20 @@ async function showNote(handle, notes, path) {
   );
   createEditor({
     parent: $('editor'),
-    // Links to notes that aren't published become their plain text, so they don't look like links that go nowhere.
-    doc: note.content.replace(/(?<!!)\[\[([^\]\n]+)\]\]/g, (link, inner) =>
-      findNote(notes, inner) ? link : (inner.split('|')[1] ?? inner.split(/[#|]/)[0]).trim(),
-    ),
+    doc: shown(note.content),
     readOnly: true,
+    path: note.path,
     onOpenLink: (target) => {
       if (/^https?:/i.test(target)) return window.open(target, '_blank', 'noopener,noreferrer');
       const to = findNote(notes, target);
       if (to) location.href = noteUrl(handle, to.path);
     },
-    resolveEmbed: attachment,
-    resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeURIComponent(src).replace(/^(\.\.\/)+/, '').split('/').pop())),
+    ...attachments(note.path),
+    loadEmbed: async (target) => {
+      const to = findNote(notes, target);
+      const embedded = to && (await getJson(`${base}/note?path=${encodeURIComponent(to.path)}`));
+      return embedded && { ...embedded, content: shown(embedded.content), ...attachments(embedded.path) };
+    },
     linkTargets: () => [],
   });
 }
