@@ -487,6 +487,16 @@ fun NoteScreen(
 
     BackHandler(enabled = !navBack) { flushAndLeave() }
 
+    // On its own page, pulling the note down from its top closes it, like a back gesture (see PullDownToClose).
+    val backDispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    val pullTravel = with(LocalDensity.current) { 360.dp.toPx() }
+    // Read on the WebView's touches, so not state: whether a pull may start right now.
+    val pullDownAllowed = remember { booleanArrayOf(false) }
+    val pullDown = remember(backDispatcher, pullTravel) {
+        PullDownToClose(dispatcher = { backDispatcher }, travel = { pullTravel }, enabled = { pullDownAllowed[0] })
+    }
+    pullDownAllowed[0] = navBack && !keyboardUp && !board && !ed.closed
+
     // Load: the phone's copy first (works offline), then the server's.
     LaunchedEffect(path) {
         if (path == null) {
@@ -802,7 +812,7 @@ fun NoteScreen(
                         }
                     },
                     onEmbed = ::sendEmbed,
-                )).also { web = it } },
+                )).also { web = it; it.pullDown = pullDown } },
                 // Excalidraw's tools sit along the bottom, so a board stops above the floating toolbar instead of under it.
                 modifier = Modifier.fillMaxWidth().weight(1f)
                     .padding(bottom = if (board && !keyboardUp) TOOLBAR_BOTTOM + TOOLBAR_HEIGHT else 0.dp),
@@ -1145,7 +1155,7 @@ private fun readPicked(context: Context, uri: Uri): Triple<String, String, ByteA
  * page. `https://sink.attachment/<name>` images come from the server with our token, cached on disk.
  */
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
-private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge): WebView {
+private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge): NoteWebView {
     val assets = WebViewAssetLoader.Builder()
         .addPathHandler("/", WebViewAssetLoader.PathHandler { path ->
             runCatching {
@@ -1162,7 +1172,7 @@ private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge):
         .build()
     val cache = File(context.cacheDir, "attachments").apply { mkdirs() }
 
-    return WebView(context).apply {
+    return NoteWebView(context).apply {
         setBackgroundColor(AndroidColor.TRANSPARENT)
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true

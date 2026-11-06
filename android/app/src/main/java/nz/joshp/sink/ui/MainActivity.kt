@@ -475,10 +475,12 @@ class MainActivity : ComponentActivity() {
                     BackMotion.predictive = true
                     if (!isNote(initialState)) fadeOut(BackMotion.track())
                     else {
-                        // Edge 0 is the left (NavigationEvent.EDGE_LEFT): the page drifts right, and vice versa.
+                        // Pulled down from its top, it sinks with the finger; from an edge, it drifts away from it (edge 0
+                        // is the left, NavigationEvent.EDGE_LEFT: the page drifts right, and vice versa).
                         val drift = if (edge == 0) 1 else -1
                         scaleOut(BackMotion.track(), targetScale = 0.86f) +
-                            slideOutHorizontally(BackMotion.track()) { w -> drift * w / 12 } +
+                            (if (BackMotion.downward) slideOutVertically(BackMotion.track()) { h -> h / 4 }
+                            else slideOutHorizontally(BackMotion.track()) { w -> drift * w / 12 }) +
                             fadeOut(BackMotion.late(0.6f))
                     }
                 },

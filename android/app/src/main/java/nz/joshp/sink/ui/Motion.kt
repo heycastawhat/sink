@@ -63,6 +63,9 @@ class CardMorph(val shared: SharedTransitionScope) {
 object BackMotion {
     var predictive = false
 
+    /** The gesture is a note pulled down from its top (PullDownToClose), not a swipe from the edge: it sinks rather than drifts. */
+    var downward = false
+
     /** How far the gesture's whole travel maps onto. Linear, so the page is where the finger says. */
     const val MS = 400
 
