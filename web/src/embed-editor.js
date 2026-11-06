@@ -3,6 +3,7 @@
 //   SinkBridge.ready()                      page loaded, send a note
 //   SinkBridge.changed(text)                text edited (debounced)
 //   SinkBridge.openLink(target)             [[wikilink]] or url tapped
+//   SinkBridge.linkMention(src, hash, start, text)   "Link" pressed on an unlinked mention; reply with sink.backlinks/mentions again
 //   SinkBridge.pickImage()                  user wants to attach an image; reply with sink.insert(text)
 //   SinkBridge.pickTemplate()               /template: user wants a template; reply with sink.template(text or null)
 // The app drives it with:
@@ -14,11 +15,12 @@
 //   sink.format(kind)   the bar above the keyboard: heading, h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike,
 //                       code, link, indent, outdent, undo, redo (see editor.js format)
 //   sink.backlinks(items)   GET /api/notes/backlinks' items, shown under the note; tapping one calls openLink(path)
+//   sink.mentions(items)   GET /api/notes/mentions' items: unlinked mentions, a collapsed section after the backlinks
 //   sink.inset(px)      how much of the page's bottom the app's floating toolbar covers; the cursor stays above it
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
 
 import { EditorView } from '@codemirror/view';
-import { backlinksHtml } from './backlinks.js';
+import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { createEditor } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
@@ -27,6 +29,7 @@ const bridge = window.SinkBridge ?? {
   ready() {},
   changed() {},
   openLink() {},
+  linkMention() {},
   pickImage() {},
 };
 
@@ -119,11 +122,23 @@ window.sink = {
     requestAnimationFrame(() => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest' }) }));
   },
   backlinks(items = []) {
-    const box = document.getElementById('links');
-    box.hidden = !items.length;
-    box.innerHTML = items.length ? backlinksHtml(items, { href: () => '#' }) : '';
+    linked = items;
+    drawLinks();
+  },
+  mentions(items = []) {
+    unlinked = items;
+    drawLinks();
   },
 };
+
+let linked = [];
+let unlinked = [];
+function drawLinks() {
+  const box = document.getElementById('links');
+  const href = () => '#';
+  box.innerHTML = (linked.length ? backlinksHtml(linked, { href }) : '') + mentionsHtml(unlinked, { href, open: box.querySelector('.unlinked')?.open });
+  box.hidden = !box.innerHTML;
+}
 
 // Excalidraw and React only download (here: load from the APK) when a board opens. Its fonts are bundled too, bar
 // the large CJK one, which falls back to the system's.
@@ -147,6 +162,7 @@ async function loadBoard(text, dark, colors) {
   });
 }
 
+onLinkMention(document.getElementById('links'), (m) => bridge.linkMention(m.src, m.hash, m.start, m.text));
 document.getElementById('links').addEventListener('click', (e) => {
   const a = e.target.closest('[data-path]');
   if (!a) return;
