@@ -987,3 +987,27 @@ notes.wireNotes();
 
 boot();
 if ('serviceWorker' in navigator && !import.meta.env.DEV) navigator.serviceWorker.register('/sw.js');
+
+// An installed app can stay open for days on an old bundle. sw.js is the same file every deploy, so the browser never
+// sees a new worker; the hashed entry script in a fresh index.html is what changes, so compare that with ours.
+const runningEntry = document.querySelector('script[type=module][src]')?.getAttribute('src');
+let lastUpdateCheck = 0;
+async function checkForUpdate() {
+  if (import.meta.env.DEV || document.hidden || Date.now() - lastUpdateCheck < 60_000) return;
+  lastUpdateCheck = Date.now();
+  const html = await fetch('/', { cache: 'no-store' })
+    .then((r) => (r.ok ? r.text() : ''))
+    .catch(() => '');
+  const entry = new DOMParser().parseFromString(html, 'text/html').querySelector('script[type=module][src]')?.getAttribute('src');
+  if (!entry || entry === runningEntry) return;
+  toast('A new version of Sink is ready', {
+    action: 'Reload',
+    duration: 0,
+    onAction: async () => {
+      if (await notes.saveForReload()) location.reload();
+      else toast("Couldn't save the note, so not reloading yet");
+    },
+  });
+}
+document.addEventListener('visibilitychange', checkForUpdate);
+setInterval(checkForUpdate, 30 * 60_000);
