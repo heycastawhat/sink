@@ -5,3 +5,6 @@
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
+
+# ML Kit (the QR scanner) builds its registrars by reflection from manifest names; R8 strips their constructors.
+-keep class * implements com.google.firebase.components.ComponentRegistrar { <init>(); }
