@@ -95,11 +95,9 @@ import nz.joshp.sink.data.SignIn
 import nz.joshp.sink.ui.theme.SinkTheme
 import java.io.File
 
-private data class Tab(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
-
 private val TABS = listOf(
-    Tab("notes", "Notes", Icons.AutoMirrored.Outlined.StickyNote2, Icons.AutoMirrored.Filled.StickyNote2),
-    Tab("todos", "Todos", Icons.Outlined.Checklist, Icons.Filled.Checklist),
+    NavPlace("notes", "Notes", Icons.AutoMirrored.Outlined.StickyNote2, Icons.AutoMirrored.Filled.StickyNote2),
+    NavPlace("todos", "Todos", Icons.Outlined.Checklist, Icons.Filled.Checklist),
 )
 
 /**
@@ -472,11 +470,21 @@ class MainActivity : ComponentActivity() {
             ) {
                 val badge by notesVm.todoBadge.collectAsState()
                 LaunchedEffect(Unit) { notesVm.loadTodoBadge() }
-                FloatingTabs(
-                    nav,
+                val haptics = rememberHaptics()
+                FloatingNavBar(
+                    TABS,
                     route,
                     mapOf("todos" to badge),
-                    Modifier.navigationBarsPadding().padding(start = 16.dp, bottom = TOOLBAR_BOTTOM),
+                    onSelect = { t ->
+                        if (route != t.route) haptics.tick()
+                        nav.navigate(t.route) {
+                            // Tabs keep one copy each and remember where you were in them.
+                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                    modifier = Modifier.navigationBarsPadding().padding(start = 16.dp, bottom = TOOLBAR_BOTTOM),
                 )
             }
           }
@@ -512,73 +520,5 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_OPEN_LINE = "open_line"
         const val EXTRA_NEW_NOTE = "new_note"
         private val Loading = Session("", "")
-    }
-}
-
-/**
- * The tabs as a floating toolbar (Material 3 Expressive), bottom left where a thumb rests, with each screen's + button
- * beside it on the right. The open tab shows its name; the others are icons.
- */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun FloatingTabs(nav: NavHostController, selected: String?, badges: Map<String, Int>, modifier: Modifier = Modifier) {
-    val motion = MaterialTheme.motionScheme
-    val haptics = rememberHaptics()
-    Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shadowElevation = 6.dp,
-        modifier = modifier.height(TOOLBAR_HEIGHT),
-    ) {
-        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            for (t in TABS) {
-                val on = selected == t.route
-                val press = remember { MutableInteractionSource() }
-                // The open tab's pill fills in and its name slides out; the one you leave folds back to an icon.
-                val pill by animateColorAsState(
-                    if (on) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                    motion.defaultEffectsSpec(),
-                    label = "tab-pill",
-                )
-                Row(
-                    Modifier
-                        .height(48.dp)
-                        .pressScale(press, 0.94f)
-                        .clip(CircleShape)
-                        .background(pill)
-                        .clickable(interactionSource = press, indication = LocalIndication.current) {
-                            if (!on) haptics.tick()
-                            nav.navigate(t.route) {
-                                // Tabs keep one copy each and remember where you were in them.
-                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        }
-                        .padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Todos: how many are overdue or due today.
-                    val count = badges[t.route] ?: 0
-                    BadgedBox(badge = { if (count > 0) Badge { Text(if (count > 99) "99+" else "$count") } }) {
-                        Icon(
-                            if (on) t.selectedIcon else t.icon,
-                            if (on) null else t.label,
-                            tint = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    AnimatedVisibility(
-                        visible = on,
-                        enter = expandHorizontally(motion.defaultEffectsSpec<IntSize>()) + fadeIn(motion.defaultEffectsSpec()),
-                        exit = shrinkHorizontally(motion.defaultEffectsSpec<IntSize>()) + fadeOut(motion.fastEffectsSpec()),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Spacer(Modifier.width(10.dp))
-                            Text(t.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSecondaryContainer, maxLines = 1)
-                        }
-                    }
-                }
-            }
-        }
     }
 }
