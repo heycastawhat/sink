@@ -42,6 +42,9 @@ export const api = {
   allowPerson: (entry) => request('/admin/users/allowed', json('POST', { entry })),
   invitePerson: (name) => request('/admin/invites', json('POST', { name })),
   cancelInvite: (id) => request(`/admin/invites/${id}`, { method: 'DELETE' }),
+  pushKey: () => request('/push/key'),
+  pushSubscribe: (sub) => request('/push/subscribe', json('POST', sub)),
+  pushUnsubscribe: (endpoint) => request('/push/unsubscribe', json('POST', { endpoint })),
   disallowPerson: (entry) => request(`/admin/users/allowed?entry=${encodeURIComponent(entry)}`, { method: 'DELETE' }),
 
   notes: () => request('/notes'),

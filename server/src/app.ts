@@ -11,6 +11,7 @@ import { adminRoutes } from "./routes/admin";
 import { calendarRoutes } from "./routes/calendar";
 import { publicPageRoutes, publishRoutes, robotsFor } from "./routes/publish";
 import { todoRoutes } from "./todos";
+import { pushRoutes, vapidKeys } from "./push";
 import type { Vault } from "./notes";
 import { pluginFileType, type PluginHost } from "./plugins";
 import { handleMcp, type ApiFetch } from "./mcp";
@@ -60,6 +61,7 @@ export function createApp(deps: {
   const passkeys = users && new Passkeys(db);
   const spaceOf = (subject: string) => users?.for(subject) ?? owner;
   const isOwner = (subject: string) => users?.isOwner(subject) ?? true;
+  const vapid = vapidKeys(db);
 
   // Each account's notes API, built once per vault; requests reach it with the caller's token details.
   const spaceApis = new WeakMap<Space, Hono<AuthEnv>>();
@@ -78,6 +80,7 @@ export function createApp(deps: {
     api.route("/", todoRoutes(space.db, space.vault, config.timeZone ?? "UTC"));
     api.route("/", shareRoutes(space.db, space.vault));
     api.route("/", eventRoutes(space.vault));
+    api.route("/", pushRoutes(space.db, vapid.publicKey));
     api.notFound((c) => c.json({ error: "not found" }, 404));
     api.onError((err, c) => {
       console.error(err);

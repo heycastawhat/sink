@@ -387,6 +387,13 @@ export const migrations: string[] = [
   CREATE UNIQUE INDEX users_handle ON users(handle);
   UPDATE notes SET mtime = 0;
   `,
+  // Web Push (push.ts): each account's browsers that turned reminders on, and the reminders already sent (by todo
+  // and time, so a rescan or restart doesn't send one twice). The server's VAPID key pair lives in the main DB.
+  `
+  CREATE TABLE push_subscriptions (endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at INTEGER NOT NULL);
+  CREATE TABLE push_sent (key TEXT PRIMARY KEY, remind_at INTEGER NOT NULL);
+  CREATE TABLE vapid (id INTEGER PRIMARY KEY CHECK (id = 1), public_key TEXT NOT NULL, private_jwk TEXT NOT NULL);
+  `,
 ];
 
 export function openDb(path: string): Database {

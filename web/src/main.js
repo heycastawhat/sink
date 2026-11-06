@@ -362,6 +362,13 @@ async function renderSettings() {
 
 <section class="setting-card">
   <h2>Notes</h2>
+  <div class="setting-row" id="reminders-row" hidden>
+    <div class="grow">
+      <label class="setting-title" for="reminders">Todo reminders</label>
+      <div class="muted small">A notification at a todo's reminder time, or 9am on its due date. This browser only; the Android app has its own.</div>
+    </div>
+    <m3e-switch id="reminders"></m3e-switch>
+  </div>
   <div class="setting-row">
     <div class="grow">
       <label class="setting-title" for="hide-foldered">Keep filed notes in their folders</label>
@@ -506,6 +513,11 @@ async function renderSettings() {
   renderTokens();
   renderPeople();
   renderPublic();
+  pushSubscription().then((push) => {
+    if (!push) return;
+    $('reminders-row').hidden = false;
+    $('reminders').checked = !!push.sub && Notification.permission === 'granted';
+  });
   try {
     const { notes: all } = await api.notes();
     $('server-info').innerHTML = [
@@ -629,10 +641,38 @@ $('settings').addEventListener('keydown', (e) => {
 
 $('settings').addEventListener('change', (e) => {
   if (e.target.id === 'haptics') setHaptics(e.target.checked);
+  if (e.target.id === 'reminders') {
+    const on = e.target.checked;
+    setReminders(on).catch((err) => {
+      e.target.checked = !on;
+      toast(err.message);
+    });
+  }
   if (e.target.id === 'hide-foldered') notes.prefs.hideFoldered = e.target.checked;
   if (e.target.id === 'keep-file') runImport('keep', e.target);
   if (e.target.id === 'notion-file') runImport('notion', e.target);
 });
+
+/** This browser's service worker and its push subscription (null if it has none), or null without Web Push. */
+async function pushSubscription() {
+  const reg = 'PushManager' in window && (await navigator.serviceWorker?.getRegistration());
+  return reg ? { reg, sub: await reg.pushManager.getSubscription() } : null;
+}
+
+async function setReminders(on) {
+  const push = await pushSubscription();
+  if (!push) return;
+  if (push.sub) {
+    await api.pushUnsubscribe(push.sub.endpoint).catch(() => {});
+    await push.sub.unsubscribe();
+  }
+  if (!on) return;
+  if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are blocked for this site');
+  const { key } = await api.pushKey();
+  const applicationServerKey = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+  const sub = await push.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+  await api.pushSubscribe(sub.toJSON());
+}
 
 /** Google Keep and Notion imports from Settings: loaded only when used. */
 async function runImport(kind, input) {
@@ -761,6 +801,8 @@ $('settings').addEventListener('click', async (e) => {
   } else if (id === 'open-trash') {
     location.hash = '#/trash';
   } else if (id === 'logout') {
+    // The next person to sign in on this browser shouldn't get these reminders.
+    await setReminders(false).catch(() => {});
     await api.logout().catch(() => {});
     showLogin();
   }
