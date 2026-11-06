@@ -20,6 +20,8 @@ app, and an MCP server so AI assistants can read and write your notes.
   Recurring todos (`🔁 every week`) add their next copy when ticked; tick with Undo, tap to edit, reschedule in a tap.
   Quick add reads dates off the end ("call mum tomorrow 6pm", "bins every tuesday"); priorities sort and show,
   start dates (`🛫`) keep a todo out of the way until then, and the Todos tab counts what's overdue or due today.
+- **Calendar feed:** Settings makes a private link that Google or Apple Calendar can subscribe to: open todos with a date
+  or reminder show up as all-day or timed events (repeats included), and the link can't open anything else. Revoke it any time.
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
 - **Obsidian plugin:** keeps a local Obsidian vault (desktop or mobile) in sync with Sink over the internet.
@@ -170,6 +172,8 @@ accepted; everything else is moved to a "Rejected" folder.
 
 - Run it behind HTTPS and list every address you use in `SINK_PUBLIC_URLS`; browser requests from anywhere else
   are refused.
+- The calendar feed link is a secret in a URL (calendar apps can't send headers). Its token only works on the feed,
+  not the API or MCP; anyone holding the link can read your dated todos until you revoke or replace it in Settings.
 - Tokens for AI assistants can read and write notes and todos but can't see or create other sign-ins. Revoke them
   in Settings.
 - Sink won't follow symlinks out of the notes folder, so a link synced into it can't expose the server's files.
