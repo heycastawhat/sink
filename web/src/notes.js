@@ -3,7 +3,7 @@
 // (Obsidian, the phone) are never silently overwritten.
 
 import { esc, folderOf, inlineHtml, tableCells } from './util.js';
-import { backlinksHtml } from './backlinks.js';
+import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
@@ -1314,24 +1314,38 @@ export function listenForChanges() {
   });
 }
 
-/** "Linked mentions" under the note: the notes that link here, each with the lines that do. */
-async function renderBacklinks(path) {
+/**
+ * "Linked mentions" under the note: the notes that link here, each with the lines that do. "Unlinked mentions" follow
+ * (slower, it reads notes), collapsed; they come back open after a "Link" press.
+ */
+async function renderBacklinks(path, { open = false } = {}) {
   const box = $('note-links');
   box.hidden = true;
   box.innerHTML = '';
   if (isBoardPath(path)) return;
-  let items;
-  try {
-    ({ items } = await api.backlinks(path));
-  } catch {
-    return;
-  }
-  // Still on this note, and there's something to show.
-  if (screen.path !== path || !items.length) return;
-  box.innerHTML = backlinksHtml(items, { href: noteHash, icon: ic('description') });
-  box.hidden = false;
+  const fetch = (call) => call(path).then(({ items }) => items, () => []);
+  const links = await fetch(api.backlinks);
+  const show = (mentions) => {
+    // Still on this note, and there's something to show.
+    if (screen.path !== path) return;
+    const icon = ic('description');
+    box.innerHTML = (links.length ? backlinksHtml(links, { href: noteHash, icon }) : '') + mentionsHtml(mentions, { href: noteHash, icon, open });
+    box.hidden = !box.innerHTML;
+  };
+  show([]);
+  show(await fetch(api.mentions));
 }
 
+/** A "Link" press: the mention becomes `[[…]]` in the note that has it, unless that note changed since the list. */
+async function linkMention(path, { src, hash, start, text }) {
+  try {
+    await api.linkMention(src, path, start, text, hash);
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    toast(err instanceof ApiError && err.status === 409 ? 'That note changed. Try again.' : err.message);
+  }
+  if (screen.path === path) renderBacklinks(path, { open: true });
+}
 async function closeEditor() {
   if (!screen.editor) return;
   clearInterval(screen.poll);
@@ -1499,6 +1513,7 @@ function wireScreen() {
     }
   });
   $('note-filename').addEventListener('click', () => $('note-rename').click());
+  onLinkMention($('note-links'), (m) => linkMention(screen.path, m));
   $('note-rename').addEventListener('click', async () => {
     await flush();
     if (!screen.path) return toast('Write something first');

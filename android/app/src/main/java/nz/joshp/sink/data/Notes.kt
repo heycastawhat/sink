@@ -303,6 +303,24 @@ suspend fun Api.backlinksJson(path: String): String =
         json.parseToJsonElement(it).jsonObject["items"]?.toString() ?: "[]"
     }
 
+/** Notes that write [path]'s name without linking it, as the JSON array the editor page's `sink.mentions()` takes. */
+suspend fun Api.mentionsJson(path: String): String =
+    call(request("/api/notes/mentions?path=${java.net.URLEncoder.encode(path, "UTF-8").replace("+", "%20")}").build()) {
+        json.parseToJsonElement(it).jsonObject["items"]?.toString() ?: "[]"
+    }
+
+/** Turns the mention at [start] in [src] into a link to [target]; 409 if [src] changed since [baseHash]. */
+suspend fun Api.linkMention(src: String, target: String, start: Int, text: String, baseHash: String) {
+    val body = buildJsonObject {
+        put("path", src)
+        put("target", target)
+        put("start", start)
+        put("text", text)
+        put("base_hash", baseHash)
+    }
+    call(request("/api/notes/mentions/link").post(jsonBody(body)).build()) { }
+}
+
 @Serializable
 data class TodoCount(val overdue: Int = 0, val today: Int = 0)
 

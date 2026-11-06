@@ -51,6 +51,9 @@ export const api = {
   searchNotes: (q) => request(`/notes?q=${encodeURIComponent(q)}&limit=100`),
   note: (path) => request(`/notes/file?${p(path)}`),
   backlinks: (path) => request(`/notes/backlinks?${p(path)}`),
+  mentions: (path) => request(`/notes/mentions?${p(path)}`),
+  linkMention: (path, target, start, text, baseHash) =>
+    request('/notes/mentions/link', json('POST', { path, target, start, text, base_hash: baseHash })),
   saveNote: (path, content, baseHash, init = {}, extra = {}) =>
     request(`/notes/file?${p(path)}`, { ...json('PUT', { content, base_hash: baseHash, ...extra }), ...init }),
   versions: (path) => request(`/notes/versions?${p(path)}`),

@@ -632,6 +632,53 @@ describe("notes", () => {
     expect((((await after.json()) as any).items as { path: string }[]).map((i) => i.path).sort()).toEqual(["Links.md", "Table.md"]);
   });
 
+  test("unlinked mentions: plain title and alias mentions, not links, code or frontmatter; linking keeps the hash rule", async () => {
+    const token = await login();
+    const make = (folder: string, title: string, content: string) => send(token, "POST", "/api/notes", { folder, title, content });
+    const mentions = async (path: string) => ((await (await get(token, `/api/notes/mentions?path=${encodeURIComponent(path)}`)).json()) as any).items as any[];
+    await make("Garden", "Église", "---\naliases: [Old church, Chapelle]\n---\n# Église\n\nStone.\n");
+    await make("", "Diary", "# Diary\n\n- Visited the église today, then the old CHURCH.\n");
+    await make("", "Linked", "# Linked\n\nThe [[Église]] is nice. Also église.\n");
+    await make("", "Code", "# Code\n\nUse `église` here.\n\n```\nÉglise in a fence\n```\n[église](other.md) and https://x.y/église/ and [[x|église]]\n");
+    await make("", "Front", "---\nnote: église\n---\n# Front\n\nNothing.\n");
+    await make("", "Words", "# Words\n\nÉglises and églised are other words.\n");
+    await make("", "Table", "# Table\n\n| Where | Note |\n| --- | --- |\n| Chapelle | x |\n");
+
+    const items = await mentions("Garden/Église.md");
+    expect(items.map((i) => i.path).sort()).toEqual(["Diary.md", "Linked.md", "Table.md"]);
+    expect(items.find((i) => i.path === "Linked.md").mentions.map((m: any) => m.text)).toEqual(["église"]);
+    const diary = items.find((i) => i.path === "Diary.md");
+    // The alias "Old church" is two words, matched across the case difference.
+    expect(diary.mentions.map((m: any) => m.text)).toEqual(["église", "old CHURCH"]);
+    expect(diary.mentions[0]).toMatchObject({ before: "Visited the ", after: " today, then the old CHURCH." });
+
+    // Linking: the exact title keeps its form, anything else becomes an alias; a stale hash is a conflict.
+    const link = (body: object) => send(token, "POST", "/api/notes/mentions/link", { path: "Diary.md", target: "Garden/Église.md", base_hash: diary.hash, ...body });
+    const stale = await link({ start: diary.mentions[1].start, text: "old CHURCH", base_hash: "0".repeat(64) });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as any).current.content).toContain("old CHURCH");
+    expect((await link({ start: diary.mentions[1].start + 1, text: "ld CHURCH" })).status).toBe(409);
+    const ok = await link({ start: diary.mentions[1].start, text: "old CHURCH" });
+    expect(ok.status).toBe(200);
+    expect(await Bun.file(file("Diary.md")).text()).toBe("# Diary\n\n- Visited the église today, then the [[Église|old CHURCH]].\n");
+    // The old hash no longer matches: a second link from the same listing must not overwrite.
+    expect((await link({ start: diary.mentions[0].start, text: "église" })).status).toBe(409);
+
+    // A note that links here can still have other plain mentions.
+    const fresh = (await mentions("Garden/Église.md")).find((i) => i.path === "Diary.md");
+    expect(fresh.mentions.map((m: any) => m.text)).toEqual(["église"]);
+    await link({ start: fresh.mentions[0].start, text: "église", base_hash: fresh.hash });
+    expect(await Bun.file(file("Diary.md")).text()).toContain("Visited the [[Église|église]] today");
+    expect((await mentions("Garden/Église.md")).map((i) => i.path).sort()).toEqual(["Linked.md", "Table.md"]);
+
+    // In a table the alias's pipe is escaped.
+    const table = (await mentions("Garden/Église.md")).find((i) => i.path === "Table.md");
+    await link({ path: "Table.md", start: table.mentions[0].start, text: "Chapelle", base_hash: table.hash });
+    expect(await Bun.file(file("Table.md")).text()).toContain("| [[Église\\|Chapelle]] | x |");
+
+    expect(readFrontmatter("aliases:\n  - One two\n  - 'Three'\n").aliases).toEqual(["One two", "Three"]);
+  });
+
   test("version previews drop list, task, quote and callout markers", async () => {
     const token = await login();
     const created = (await (await send(token, "POST", "/api/notes", { title: "Tasks", content: "# Tasks\n\n- [ ] one\n1. two\n> three\n> [!tip] four\n" })).json()) as any;

@@ -141,6 +141,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import nz.joshp.sink.data.backlinksJson
+import nz.joshp.sink.data.linkMention
+import nz.joshp.sink.data.mentionsJson
 import nz.joshp.sink.data.pluginFile
 import nz.joshp.sink.data.saveNote
 import nz.joshp.sink.data.templatesIn
@@ -174,6 +176,7 @@ private class Bridge(
     val onReady: () -> Unit,
     val onChanged: (String) -> Unit,
     val onLink: (String) -> Unit,
+    val onLinkMention: (src: String, hash: String, start: Int, text: String) -> Unit,
     val onPickImage: () -> Unit,
     val onPickTemplate: () -> Unit,
     val onHaptic: (String) -> Unit,
@@ -184,6 +187,7 @@ private class Bridge(
     @JavascriptInterface fun changed(text: String) = main.post { onChanged(text) }.let { }
     @JavascriptInterface fun openLink(target: String) = main.post { onLink(target) }.let { }
     @JavascriptInterface fun haptic(kind: String) = main.post { onHaptic(kind) }.let { }
+    @JavascriptInterface fun linkMention(src: String, hash: String, start: Int, text: String) = main.post { onLinkMention(src, hash, start, text) }.let { }
     @JavascriptInterface fun pickImage() = main.post(onPickImage).let { }
     @JavascriptInterface fun pickTemplate() = main.post(onPickTemplate).let { }
 }
@@ -286,6 +290,14 @@ fun NoteScreen(
     fun setEditorText(text: String) = js("window.sink.setText(${JsonPrimitive(text)})")
 
     suspend fun api(): Api? = vm.api()
+
+    // Linked mentions, then the unlinked ones (slower: the server reads notes); a failure just leaves a section out.
+    suspend fun showLinks(p: String) {
+        api()?.let { a ->
+            runCatching { a.backlinksJson(p) }.onSuccess { js("window.sink.backlinks($it)") }
+            runCatching { a.mentionsJson(p) }.onSuccess { js("window.sink.mentions($it)") }
+        }
+    }
 
     fun applyMeta(n: Note) {
         pinned = n.pinned
@@ -536,10 +548,9 @@ fun NoteScreen(
             put("board", board)
         }
         js("window.sink.load($payload)")
-        // Linked mentions after the text, so a slow or offline server never holds the note up.
+        // Mentions after the text, so a slow or offline server never holds the note up.
         val p = ed.path?.takeIf { !board } ?: return@LaunchedEffect
-        val items = runCatching { api()?.backlinksJson(p) }.getOrNull() ?: return@LaunchedEffect
-        js("window.sink.backlinks($items)")
+        showLinks(p)
     }
 
     // Edits made elsewhere show up while the note sits open and untouched: at once from the live stream, and by a
@@ -580,6 +591,18 @@ fun NoteScreen(
             result.onSuccess { js("window.sink.insert(${JsonPrimitive(it.embed)})") }
                 .onFailure { snackbar.showSnackbar("Upload failed: ${it.message}") }
             status = ""
+        }
+    }
+
+    fun linkMention(src: String, hash: String, start: Int, text: String) {
+        val p = ed.path ?: return
+        scope.launch {
+            runCatching { api()!!.linkMention(src, p, start, text, hash) }.onFailure {
+                snackbar.showSnackbar(
+                    if ((it as? ApiException)?.code == 409) "That note changed. Try again." else "Couldn't link: ${it.message}",
+                )
+            }
+            showLinks(p)
         }
     }
 
@@ -730,6 +753,7 @@ fun NoteScreen(
                         }
                     },
                     onLink = ::openLink,
+                    onLinkMention = ::linkMention,
                     onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onPickTemplate = { templating = TemplateAsk.Slash },
                     onHaptic = { kind ->
