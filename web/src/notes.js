@@ -1201,6 +1201,12 @@ async function flush() {
   if (dirty()) await save();
 }
 
+/** Saves the open note before the page reloads; false if there's still something unsaved. */
+export async function saveForReload() {
+  await flush();
+  return !dirty();
+}
+
 function save() {
   clearTimeout(screen.timer);
   if (screen.saving) {
