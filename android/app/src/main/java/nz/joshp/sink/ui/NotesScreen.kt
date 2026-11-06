@@ -1,6 +1,12 @@
 package nz.joshp.sink.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Animatable
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.LocalIndication
@@ -249,12 +255,41 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
             }
         }
     }
-    // Back climbs out of a folder before it leaves the tab.
-    BackHandler(enabled = inside) { vm.folderUp() }
+    // Back climbs out of a folder before it leaves the tab, and a back gesture previews it: the folder shrinks and drifts
+    // away from the edge with the finger; let go and its parent grows back into place, or cancel and it springs back.
+    val folderBack = remember { Animatable(0f) }
+    var folderBackEdge by remember { mutableIntStateOf(0) }
+    PredictiveBackHandler(enabled = inside) { events ->
+        try {
+            events.collect { e ->
+                folderBackEdge = e.swipeEdge
+                folderBack.snapTo(e.progress)
+            }
+            folderBack.animateTo(1f, tween(90))
+            vm.folderUp()
+            folderBack.animateTo(0f, spring(dampingRatio = 1f, stiffness = 380f))
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            scope.launch { folderBack.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = 500f)) }
+            throw e
+        }
+    }
 
     // Pulling up for a new note works from the search field and toolbar area too, not just the list.
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest).pullUpFromAnywhere(pullUp)) {
-        Column(Modifier.fillMaxSize().liftedByPullUp(pullUp).statusBarsPadding()) {
+        Column(
+            Modifier.fillMaxSize().graphicsLayer {
+                val p = folderBack.value
+                if (p > 0f) {
+                    val scale = 1f - 0.08f * p
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = (if (folderBackEdge == 0) 1f else -1f) * 24.dp.toPx() * p
+                    alpha = 1f - 0.4f * p
+                    shape = RoundedCornerShape(28.dp * p)
+                    clip = true
+                }
+            }.liftedByPullUp(pullUp).statusBarsPadding(),
+        ) {
             ScreenTitle(
                 state.folder.substringAfterLast('/').ifEmpty { "Notes" },
                 sub = subtitle,
