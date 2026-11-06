@@ -31,6 +31,7 @@ fun SinkTheme(
     }
     MaterialExpressiveTheme(
         colorScheme = colors,
+        typography = SinkTypography,
         motionScheme = MotionScheme.expressive(),
         content = content,
     )
