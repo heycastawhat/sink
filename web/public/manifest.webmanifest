@@ -13,6 +13,11 @@
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
+  "share_target": {
+    "action": "/shared",
+    "method": "GET",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  },
   "shortcuts": [
     { "name": "New note", "url": "/#/new", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
     { "name": "Todos", "url": "/#/todos", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
