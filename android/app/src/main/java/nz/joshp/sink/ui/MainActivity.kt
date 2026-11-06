@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.runtime.key
+import androidx.navigationevent.NavigationEventTransitionState
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
@@ -310,6 +312,19 @@ class MainActivity : ComponentActivity() {
         // A note (unless beside the list) and Settings are full-screen pages; the tabs keep the bar.
         val showBar = TABS.any { it.route == route }
         val openNoteAt = { path: String, line: Int? -> open(NoteTarget(path, line)) }
+        // A predictive back gesture out of a note: a tick as it passes halfway, past which the note is mostly gone.
+        val haptics = rememberHaptics()
+        val backs = LocalNavigationEventDispatcherOwner.current?.navigationEventDispatcher
+        LaunchedEffect(backs) {
+            var past = false
+            backs?.transitionState?.collect { s ->
+                val back = s as? NavigationEventTransitionState.InProgress
+                val now = back != null && back.direction == NavigationEventTransitionState.TRANSITIONING_BACK &&
+                    back.latestEvent.progress >= 0.5f && nav.currentBackStackEntry?.destination?.route?.startsWith("note?") == true
+                if (now && !past) haptics.threshold()
+                past = now
+            }
+        }
         // Screen changes use the theme's expressive motion (read here: the transition lambdas aren't composable).
         // Fades use the effects spec (no overshoot); movement and scale the spatial one (a little spring).
         val motion = MaterialTheme.motionScheme
@@ -427,6 +442,7 @@ class MainActivity : ComponentActivity() {
                         onSwitch = { switching.value = true },
                         initialText = e.arguments?.getString("text").orEmpty(),
                         sharedFiles = e.arguments?.getString("files").orEmpty().split('\n').filter { it.isNotEmpty() }.map(::File),
+                        navBack = true,
                     )
                 }
                 composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onBack = { nav.popBackStack() }, onCheckForUpdates = checkForUpdates) }

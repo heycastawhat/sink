@@ -229,6 +229,9 @@ private class Editing(var path: String?, val draftKey: String, var folder: Strin
     var loaded = false
     val key get() = path ?: draftKey
     val dirty get() = loaded && current != saved
+    /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */
+    var flushing = 0
+    var closed = false
 }
 
 /**
@@ -253,6 +256,11 @@ fun NoteScreen(
     sharedFiles: List<File> = emptyList(),
     /** Set to this note's save-then-continue, for a list beside it that swaps in another note. */
     flusher: NoteFlusher? = null,
+    /**
+     * Back is the NavHost's, so a predictive back gesture can animate the note away as it's dragged; the note saves as
+     * it pauses (when the gesture starts, or when it's popped) instead of before leaving.
+     */
+    navBack: Boolean = false,
 ) {
     // A board opens in the same page, in Excalidraw, and saves like a note: hash-checked, queued offline, with history.
     val board = path?.endsWith(".excalidraw.md", ignoreCase = true) == true
@@ -265,6 +273,7 @@ fun NoteScreen(
     val snackbar = remember { SnackbarHostState() }
     val store = remember { NoteStore(context) }
     val draftKey = rememberSaveable { NoteSaver.newDraftKey() }
+    val main = remember { Handler(Looper.getMainLooper()) }
     // A new note goes in the folder being browsed, unless it was opened for a specific one.
     val ed = remember(path) { Editing(path, draftKey, if (path == null && folder.isEmpty()) vm.state.value.folder else folder) }
     val colors = MaterialTheme.colorScheme
@@ -431,10 +440,18 @@ fun NoteScreen(
         val w = web
         if (w == null || !ed.loaded) return then()
         w.evaluateJavascript("document.activeElement && document.activeElement.blur()", null)
-        w.postDelayed({ readAndSave(w, then) }, 120)
+        ed.flushing++
+        // Not w.postDelayed, which waits for the view to be attached: a note popped mid-flush never is again.
+        main.postDelayed({
+            readAndSave(w) {
+                if (--ed.flushing == 0 && ed.closed) w.destroy()
+                then()
+            }
+        }, 120)
     }
 
-    fun flushAndLeave() = flush(onBack)
+    // Not if it's gone meanwhile (back pressed again): it would leave whatever's under it too.
+    fun flushAndLeave() = flush { if (!ed.closed) onBack() }
     // Handed back when this note goes, so a later tap in the list doesn't wait on a closed page.
     if (flusher != null) DisposableEffect(flusher) {
         flusher.flush = ::flush
@@ -465,7 +482,7 @@ fun NoteScreen(
         onDispose { lifecycle.removeObserver(observer) }
     }
 
-    BackHandler { flushAndLeave() }
+    BackHandler(enabled = !navBack) { flushAndLeave() }
 
     // Load: the phone's copy first (works offline), then the server's.
     LaunchedEffect(path) {
@@ -882,7 +899,12 @@ fun NoteScreen(
         )
     }
 
-    DisposableEffect(Unit) { onDispose { web?.destroy() } }
+    DisposableEffect(Unit) {
+        onDispose {
+            ed.closed = true
+            if (ed.flushing == 0) web?.destroy()
+        }
+    }
 
     templating?.let { ask ->
         // /template is waiting on an answer; anything but a template is null, so it stops waiting.
