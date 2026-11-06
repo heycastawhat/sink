@@ -5,6 +5,7 @@
 //   SinkBridge.openLink(target)             [[wikilink]] or url tapped
 //   SinkBridge.pickImage()                  user wants to attach an image; reply with sink.insert(text)
 //   SinkBridge.pickTemplate()               /template: user wants a template; reply with sink.template(text or null)
+//   SinkBridge.haptic(kind)                 tick, confirm, reject or toggle (haptics.js; the WebView can't vibrate)
 // The app drives it with:
 //   sink.load({ text, dark, colors, links, line, plugins, board })   colors: { '--md-sys-color-primary': '#...', ... }
 //     board: the text is an Excalidraw board (.excalidraw.md); it opens in Excalidraw instead of the text editor.

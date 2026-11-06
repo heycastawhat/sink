@@ -19,6 +19,7 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
 import './editor.css';
+import { buzz } from './haptics.js';
 import { inlineHtml, tableCells } from './util.js';
 import { registry } from './plugin-api.js';
 
@@ -788,6 +789,7 @@ function toggleTask(view, pos) {
   const marker = view.state.sliceDoc(pos, pos + 3);
   if (!/^\[[ xX]\]$/.test(marker)) return false;
   view.dispatch({ changes: { from: pos + 1, to: pos + 2, insert: marker[1] === ' ' ? 'x' : ' ' }, userEvent: 'input.toggle' });
+  buzz(marker[1] === ' ' ? 'confirm' : 'toggle');
   return true;
 }
 
@@ -843,6 +845,8 @@ export function createEditor(opts) {
     if (!m) return null;
     const slash = m.from + m.text.indexOf('/');
     const typed = ctx.state.sliceDoc(slash + 1, ctx.pos).toLowerCase();
+    // Just the "/": the menu is opening.
+    if (!typed) buzz('tick');
     const rank = (c) => {
       if (c.id.toLowerCase().startsWith(typed)) return 0;
       if (c.name.toLowerCase().split(/\W+/).some((w) => w.startsWith(typed))) return 1;
@@ -864,6 +868,7 @@ export function createEditor(opts) {
         icon: c.icon ?? 'bolt',
         apply: (view, _completion, from, to) => {
           view.dispatch({ changes: { from, to, insert: '' } });
+          buzz('tick');
           Promise.resolve(c.run(commandContext(view, opts), opts)).catch((err) => opts.onError?.(err));
         },
       })),
@@ -956,6 +961,7 @@ export function createEditor(opts) {
             const lineActive = view.hasFocus && activeLines(view.state).has(view.state.doc.lineAt(view.posAtDOM(el)).number);
             if (link && (modifier || !lineActive)) {
               e.preventDefault();
+              buzz('tick');
               opts.onOpenLink?.(link.dataset.link ?? link.textContent, { newTab: e.shiftKey });
               return true;
             }
@@ -1018,6 +1024,7 @@ export function createEditor(opts) {
       if (kind === 'heading') {
         const now = kindOf(view.state.doc.lineAt(view.state.selection.main.from).text.match(LINE_START)[2]);
         kind = { h1: 'h2', h2: 'h3', h3: 'h3' }[now] ?? 'h1';
+        buzz('tick');
       }
       if (LINE_KINDS[kind]) formatLines(view, kind);
       else FORMATS[kind]?.(view);
