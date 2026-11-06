@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AuthEnv } from "./auth";
 import { ClipError, fetchPage } from "./clip";
+import { htmlToMarkdown } from "./html";
+import { parseHTML } from "linkedom";
+import { parseTodos } from "./todos";
 import { openDb } from "./db";
 import { Vault } from "./notes";
 import { clipRoutes } from "./routes/clip";
@@ -173,5 +176,23 @@ describe("clip safety", () => {
   test("rejects a bad body", async () => {
     expect((await app.request("/clip", { method: "POST", body: "nope" })).status).toBe(400);
     expect((await clip(`${origin}/article`, { folder: "../x" })).status).toBeGreaterThanOrEqual(400);
+  });
+});
+
+describe("page text as markdown", () => {
+  const md = (html: string) => htmlToMarkdown(parseHTML(`<html><body>${html}</body></html>`).document.body as any, "https://example.com/a/");
+
+  test("text that looks like markup stays text", () => {
+    expect(md("<p>See [[Wiki]], 50%% off, #sale and *stars*.</p>")).toBe(String.raw`See \[\[Wiki\]\], 50%\% off, \#sale and \*stars\*.`);
+    expect(md("<p>- [ ] not a todo</p><p># not a heading</p><p>1. not a list</p><p>snake_case</p>")).toBe(
+      String.raw`\- \[ \] not a todo` + "\n\n" + String.raw`\# not a heading` + "\n\n" + String.raw`1\. not a list` + "\n\nsnake_case",
+    );
+    expect(parseTodos(md("<p>- [ ] not a todo</p>"), "UTC")).toEqual([]);
+  });
+
+  test("code with backticks in it keeps its fences", () => {
+    expect(md("<p><code>a`b</code></p>")).toBe("``a`b``");
+    expect(md("<pre>```\nx\n```</pre>")).toBe("````\n```\nx\n```\n````");
+    expect(md("<p><code>[[x]] %%</code></p>")).toBe("`[[x]] %%`");
   });
 });

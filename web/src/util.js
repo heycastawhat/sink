@@ -7,12 +7,16 @@ export const esc = (s) =>
 /** The folder a vault path is in ("" at the top level). */
 export const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 
+// A backslash-escaped mark (`\*`, `\[`, `\#`) is the character itself, never formatting: it's parked in the
+// private use area while the rest is read.
+const hideEscapes = (s) => s.replace(/\\([!-/:-@[-`{-~])/g, (_, c) => String.fromCharCode(0xe000 + c.charCodeAt(0)));
+
 /**
  * Inline markdown as card HTML: links as their (link-coloured) text, embeds and Tasks fields dropped, and bold, italic, strikethrough,
  * `code`, ==highlight== and #tags kept as formatting. Escapes first, so the formatting is the only markup.
  */
 export function inlineHtml(s) {
-  const plain = s
+  const plain = hideEscapes(s)
     .replace(/!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[\[([^\]|]+)\|?([^\]]*)\]\]/g, (_, a, b) => `\u0001${b || a.replace(/#.*/, '')}\u0002`)
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '\u0001$1\u0002')
@@ -28,7 +32,9 @@ export function inlineHtml(s) {
     .replace(/==([^=]+)==/g, '<mark>$1</mark>')
     .replace(/(^|\s)(#[\p{L}_][\p{L}\p{N}_/-]*)/gu, '$1<span class="ln-tag">$2</span>')
     .replace(/\u0001([^\u0002]*)\u0002/g, '<span class="ln-link">$1</span>');
-  return html.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${code[i]}</code>`);
+  return html
+    .replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${code[i]}</code>`)
+    .replace(/[\ue021-\ue07e]/g, (c) => esc(String.fromCharCode(c.charCodeAt(0) - 0xe000)));
 }
 
 /** A markdown table row as its cells: split on unescaped pipes (outer ones optional), `\|` read as a pipe. */
