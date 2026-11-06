@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
 
 /**
@@ -70,7 +71,7 @@ fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
     val corner = if (note) {
         nav.transition.animateDp({ motion.defaultSpatialSpec() }, label = "morph-corner") {
             if (it == EnterExitState.Visible) 0.dp else 16.dp
-        }.value
+        }.value.coerceAtLeast(0.dp) // the expressive spatial spring overshoots past 0, and negative corners throw
     } else 16.dp
     return with(morph.shared) {
         this@morphBounds.sharedBounds(
