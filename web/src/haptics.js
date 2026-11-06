@@ -1,5 +1,7 @@
 // Haptic feedback. Android browsers have the Vibration API. iOS Safari doesn't, but flipping a hidden
 // <input type="checkbox" switch> from a tap makes the Taptic Engine tick, so that's the fallback there.
+// In the Android app's editor WebView there's no VIBRATE permission, so it asks the app instead, whose haptics
+// also follow the system's touch feedback setting.
 
 const PATTERNS = {
   tick: 8,
@@ -9,6 +11,9 @@ const PATTERNS = {
   warn: [28, 40, 28],
   heavy: 30,
 };
+
+// The app's kinds (Haptics.kt).
+const APP_KINDS = { tick: 'tick', select: 'tick', toggle: 'toggle', confirm: 'confirm', warn: 'reject', heavy: 'reject' };
 
 let enabled = true;
 try {
@@ -42,7 +47,8 @@ function tickOnIos() {
 /** A short buzz: 'tick', 'select', 'toggle', 'confirm', 'warn' or 'heavy'. Call it from a tap or key handler. */
 export function buzz(kind = 'tick') {
   if (!enabled) return;
-  if (navigator.vibrate) navigator.vibrate(PATTERNS[kind] ?? PATTERNS.tick);
+  if (window.SinkBridge?.haptic) window.SinkBridge.haptic(APP_KINDS[kind] ?? 'tick');
+  else if (navigator.vibrate) navigator.vibrate(PATTERNS[kind] ?? PATTERNS.tick);
   else if (document.body) tickOnIos();
 }
 

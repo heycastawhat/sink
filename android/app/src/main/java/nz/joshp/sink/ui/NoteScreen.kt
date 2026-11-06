@@ -176,12 +176,14 @@ private class Bridge(
     val onLink: (String) -> Unit,
     val onPickImage: () -> Unit,
     val onPickTemplate: () -> Unit,
+    val onHaptic: (String) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
 
     @JavascriptInterface fun ready() = main.post(onReady).let { }
     @JavascriptInterface fun changed(text: String) = main.post { onChanged(text) }.let { }
     @JavascriptInterface fun openLink(target: String) = main.post { onLink(target) }.let { }
+    @JavascriptInterface fun haptic(kind: String) = main.post { onHaptic(kind) }.let { }
     @JavascriptInterface fun pickImage() = main.post(onPickImage).let { }
     @JavascriptInterface fun pickTemplate() = main.post(onPickTemplate).let { }
 }
@@ -728,6 +730,17 @@ fun NoteScreen(
                     onLink = ::openLink,
                     onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onPickTemplate = { templating = TemplateAsk.Slash },
+                    onHaptic = { kind ->
+                        when (kind) {
+                            "tick" -> haptics.tick()
+                            "confirm" -> haptics.confirm()
+                            "reject" -> haptics.reject()
+                            // The page only sends a toggle for unticking; ticking is a confirm.
+                            "toggle" -> haptics.toggle(false)
+                            "longPress" -> haptics.longPress()
+                            "threshold" -> haptics.threshold()
+                        }
+                    },
                 )).also { web = it } },
                 // Excalidraw's tools sit along the bottom, so a board stops above the floating toolbar instead of under it.
                 modifier = Modifier.fillMaxWidth().weight(1f)
