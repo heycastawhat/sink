@@ -27,6 +27,14 @@ import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.foundation.layout.width
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,6 +62,8 @@ import nz.joshp.sink.data.normalizeServerUrl
 @Composable
 fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error: String?) {
     var server by rememberSaveable(initialServer) { mutableStateOf(initialServer ?: "") }
+    var scanning by remember { mutableStateOf(false) }
+    var scanError by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
@@ -67,6 +77,23 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
         if (busy || server.isBlank()) return
         haptics.confirm()
         scope.launch { SignIn.start(context, settings, normalizeServerUrl(server)) }
+    }
+
+    // Google's scanner runs in Play services, so the app needs no camera permission.
+    fun scan() {
+        scanError = null
+        val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+        GmsBarcodeScanning.getClient(context, options).startScan()
+            .addOnSuccessListener { code ->
+                val raw = code.rawValue ?: return@addOnSuccessListener
+                haptics.confirm()
+                scanning = true
+                scope.launch {
+                    scanError = SignIn.fromQr(settings, raw)
+                    scanning = false
+                }
+            }
+            .addOnFailureListener { scanError = it.message ?: "Couldn't open the scanner" }
     }
 
     Box(
@@ -117,20 +144,26 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { submit() }),
-                isError = error != null,
-                supportingText = (error ?: cleartextWarning(server))?.let { { Text(it) } },
+                isError = (error ?: scanError) != null,
+                supportingText = (error ?: scanError ?: cleartextWarning(server))?.let { { Text(it) } },
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(4.dp))
             Button(
                 onClick = ::submit,
-                enabled = !busy && server.isNotBlank(),
+                enabled = !busy && !scanning && server.isNotBlank(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
             ) {
-                if (busy) LoadingIndicator(Modifier.size(32.dp), color = MaterialTheme.colorScheme.onPrimary)
+                if (busy || scanning) LoadingIndicator(Modifier.size(32.dp), color = MaterialTheme.colorScheme.onPrimary)
                 else Text("Sign in", style = MaterialTheme.typography.titleMedium)
+            }
+            // The code comes from Settings → Signed-in devices on a browser that's already signed in.
+            TextButton(onClick = ::scan, enabled = !busy && !scanning) {
+                Icon(Icons.Filled.QrCodeScanner, null, Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Scan sign-in code")
             }
         }
     }

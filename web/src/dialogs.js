@@ -1,5 +1,6 @@
 // Small modal dialogs on the native <dialog> element: a text prompt and a folder picker.
 
+import { renderSVG } from 'uqr';
 import { esc, inlineHtml } from './util.js';
 
 const ic = (name, slot) => `<m3e-icon name="${esc(name)}"${slot ? ` slot="${slot}"` : ''}></m3e-icon>`;
@@ -86,6 +87,22 @@ export function askConfirm({ title, body = '', action = 'OK', danger = false }) 
       dlg.querySelector('[data-cancel]').addEventListener('click', () => done(false));
     },
   ).then(Boolean);
+}
+
+/** Shows `url` as a QR code until closed or `ttl` ms pass. */
+export function showQr({ title, body, url, ttl }) {
+  return open(
+    `<div class="sink-dialog-body qr-dialog">
+  <h2>${esc(title)}</h2>
+  <p class="muted dialog-text">${esc(body)}</p>
+  <div class="qr-code">${renderSVG(url, { border: 2 })}</div>
+  <div class="dialog-actions"><m3e-button data-cancel variant="text">Done</m3e-button></div>
+</div>`,
+    (dlg, done) => {
+      dlg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
+      setTimeout(() => done(null), ttl);
+    },
+  );
 }
 
 /**
