@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -80,19 +81,21 @@ fun FloatingNavBar(
             .height(TOOLBAR_HEIGHT)
             .shadow(8.dp, CircleShape, ambientColor = Color.Black, spotColor = Color.Black)
             .background(colors.container, CircleShape)
-            .padding(horizontal = PILL_END_PADDING, vertical = PILL_PADDING)
+            .padding(PILL_GAP)
             .selectableGroup(),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(PILL_GAP),
     ) {
         for (p in places) NavPlaceItem(p, p.route == selected, badges[p.route] ?: 0, colors) { onSelect(p) }
     }
 }
 
-private val PILL_PADDING = 4.dp
-/** Room at the pill's ends, a little more than above and below so the places don't crowd its rounded ends. */
-private val PILL_END_PADDING = 10.dp
-/** An icon-only place's width (every place is as tall as the pill inside its padding). */
-private val ITEM_WIDTH = 48.dp
+/** The one gap in the pill: round its edge and between its places alike. */
+private val PILL_GAP = 6.dp
+/** The open place's capsule: this much either side of its icon and name. */
+private val CAPSULE_PADDING = 20.dp
+/** An icon-only place is a circle, as wide as the pill is tall inside its gap. */
+private val ITEM_WIDTH = TOOLBAR_HEIGHT - PILL_GAP * 2
 
 /** The springs: the place opening without overshoot (so the pill never bulges past where it lands), the drawn capsule with it. */
 private object NavMotion {
@@ -160,10 +163,10 @@ private fun NavPlaceItem(place: NavPlace, selected: Boolean, badge: Int, colors:
         Modifier
             .fillMaxHeight()
             // The capsule, drawn unclipped and wider than the place by the bounce's lead on the layout, so it
-            // overshoots and settles while the place itself doesn't (at most the pill's end padding each way).
+            // overshoots and settles while the place itself doesn't (at most the pill's gap each way).
             .drawBehind {
-                val most = PILL_END_PADDING.toPx() * 2
-                val extra = ((bounce.value - open.value) * (labelRoomPx[0] + 2 * (16.dp - cellPadding).toPx())).coerceIn(-most, most)
+                val most = PILL_GAP.toPx() * 2
+                val extra = ((bounce.value - open.value) * (labelRoomPx[0] + 2 * (CAPSULE_PADDING - cellPadding).toPx())).coerceIn(-most, most)
                 val width = (size.width + extra).coerceAtLeast(0f)
                 drawRoundRect(capsule, topLeft = Offset((size.width - width) / 2f, 0f), size = Size(width, size.height), cornerRadius = CornerRadius(size.height / 2f))
             }
@@ -172,7 +175,7 @@ private fun NavPlaceItem(place: NavPlace, selected: Boolean, badge: Int, colors:
             .semantics { contentDescription = if (badge > 0) "${place.label}, $badge due" else place.label }
             .layout { measurable, constraints ->
                 // Side padding goes from the icon cell's to the capsule's as the place opens.
-                val pad = lerp(cellPadding, 16.dp, open.value.coerceIn(0f, 1f)).roundToPx()
+                val pad = lerp(cellPadding, CAPSULE_PADDING, open.value.coerceIn(0f, 1f)).roundToPx()
                 val placeable = measurable.measure(constraints.offset(horizontal = -pad * 2))
                 layout(placeable.width + pad * 2, placeable.height) { placeable.place(pad, 0) }
             },
