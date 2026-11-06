@@ -21,6 +21,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -43,9 +49,7 @@ import android.net.Uri
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.automirrored.outlined.StickyNote2
 import androidx.compose.material.icons.filled.Checklist
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Checklist
-import androidx.compose.material.icons.outlined.Settings
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import nz.joshp.sink.BuildConfig
@@ -89,16 +93,35 @@ private data class Tab(val route: String, val label: String, val icon: ImageVect
 private val TABS = listOf(
     Tab("notes", "Notes", Icons.AutoMirrored.Outlined.StickyNote2, Icons.AutoMirrored.Filled.StickyNote2),
     Tab("todos", "Todos", Icons.Outlined.Checklist, Icons.Filled.Checklist),
-    Tab("settings", "Settings", Icons.Outlined.Settings, Icons.Filled.Settings),
 )
 
 /**
- * Route for one note (or a new draft when [path] is null, optionally starting with [text] and with [files] from the
- * app's cache to attach).
+ * A note to open (or a new draft when [path] is null, optionally starting with [text] and with [files] from the
+ * app's cache to attach). [opened] tells two otherwise identical new drafts apart.
  */
-fun noteRoute(path: String?, line: Int? = null, folder: String = "", text: String = "", files: List<File> = emptyList()) =
-    "note?path=${path?.let(Uri::encode) ?: ""}&line=${line ?: -1}&folder=${Uri.encode(folder)}&text=${Uri.encode(text)}" +
-        "&files=${Uri.encode(files.joinToString("\n") { it.path })}"
+data class NoteTarget(
+    val path: String?,
+    val line: Int? = null,
+    val folder: String = "",
+    val text: String = "",
+    val files: List<File> = emptyList(),
+    val opened: Long = System.nanoTime(),
+) {
+    val route get() =
+        "note?path=${path?.let(Uri::encode) ?: ""}&line=${line ?: -1}&folder=${Uri.encode(folder)}&text=${Uri.encode(text)}" +
+            "&files=${Uri.encode(files.joinToString("\n") { it.path })}"
+}
+
+private val NoteTargetSaver = listSaver<NoteTarget?, String>(
+    save = { t -> if (t == null) emptyList() else listOf(t.path ?: "\u0000", "${t.line ?: -1}", t.folder, t.text, t.files.joinToString("\n") { it.path }, "${t.opened}") },
+    restore = { v ->
+        if (v.isEmpty()) null
+        else NoteTarget(
+            v[0].takeIf { it != "\u0000" }, v[1].toInt().takeIf { it >= 0 }, v[2], v[3],
+            v[4].split('\n').filter { it.isNotEmpty() }.map(::File), v[5].toLong(),
+        )
+    },
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -133,7 +156,7 @@ class MainActivity : ComponentActivity() {
     private val signInError = mutableStateOf<String?>(null)
 
     // A note route from a todo reminder, the New note tile, or text and files shared from another app.
-    private val openNote = mutableStateOf<String?>(null)
+    private val openNote = mutableStateOf<NoteTarget?>(null)
 
     // The quick switcher, open over whatever screen is showing.
     private val switching = mutableStateOf(false)
@@ -149,14 +172,14 @@ class MainActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
-    private fun noteTarget(intent: Intent): String? = when {
+    private fun noteTarget(intent: Intent): NoteTarget? = when {
         SharedFiles.uris(intent).isNotEmpty() -> null
         intent.action == Intent.ACTION_SEND -> {
-            sharedText(intent).takeIf { it.isNotEmpty() }?.let { noteRoute(null, text = it) }
+            sharedText(intent).takeIf { it.isNotEmpty() }?.let { NoteTarget(null, text = it) }
         }
-        intent.getBooleanExtra(EXTRA_NEW_NOTE, false) -> noteRoute(null)
+        intent.getBooleanExtra(EXTRA_NEW_NOTE, false) -> NoteTarget(null)
         intent.getStringExtra(EXTRA_OPEN_NOTE) != null ->
-            noteRoute(intent.getStringExtra(EXTRA_OPEN_NOTE), intent.getIntExtra(EXTRA_OPEN_LINE, -1).takeIf { it >= 0 })
+            NoteTarget(intent.getStringExtra(EXTRA_OPEN_NOTE), intent.getIntExtra(EXTRA_OPEN_LINE, -1).takeIf { it >= 0 })
         else -> null
     }
 
@@ -182,7 +205,7 @@ class MainActivity : ComponentActivity() {
         val text = sharedText(intent)
         lifecycleScope.launch {
             val files = withContext(Dispatchers.IO) { SharedFiles.copy(applicationContext, uris) }
-            if (files.isNotEmpty() || text.isNotEmpty()) openNote.value = noteRoute(null, text = text, files = files)
+            if (files.isNotEmpty() || text.isNotEmpty()) openNote.value = NoteTarget(null, text = text, files = files)
         }
     }
 
@@ -214,7 +237,32 @@ class MainActivity : ComponentActivity() {
         val settings = (application as SinkApp).settings
         val notesVm: NotesViewModel = viewModel(key = "notes:" + session.token)
         val nav = rememberNavController()
-        val start = remember { if (openSettings) "settings" else "notes" }
+        // Settings is a page over Notes (from its menu), so back from it lands there.
+        LaunchedEffect(Unit) { if (openSettings) nav.navigate("settings") { launchSingleTop = true } }
+        // Wide enough (a tablet, an unfolded phone): the notes stay on the left with the open note beside them.
+        val config = androidx.compose.ui.platform.LocalConfiguration.current
+        val wide = config.screenWidthDp >= 840 && config.screenHeightDp >= 480
+        var beside by rememberSaveable(stateSaver = NoteTargetSaver) { mutableStateOf<NoteTarget?>(null) }
+        // The note beside the list saves before another takes its place.
+        val flusher = remember { NoteFlusher() }
+        val open = { t: NoteTarget ->
+            if (wide) flusher.flush {
+                beside = t
+                nav.navigate("notes") {
+                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            } else nav.navigate(t.route)
+        }
+        // Folded back to a phone with a note open beside the list: it carries on as its own page.
+        LaunchedEffect(wide) {
+            val t = beside
+            if (!wide && t != null) {
+                beside = null
+                nav.navigate(t.route)
+            }
+        }
         val loggedOut by notesVm.loggedOut.collectAsState()
         // Live changes from the server while the app is on screen; stopped in the background to save battery.
         val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
@@ -225,20 +273,20 @@ class MainActivity : ComponentActivity() {
         val noteTarget = openNote.value
         LaunchedEffect(noteTarget) {
             if (noteTarget != null) {
-                nav.navigate(noteTarget)
+                open(noteTarget)
                 openNote.value = null
             }
         }
 
         val entry by nav.currentBackStackEntryAsState()
         val route = entry?.destination?.route
-        // A note is its own full-screen page; the tabs keep the bar.
-        val showBar = route != null && !route.startsWith("note?")
-        val openNoteAt = { path: String, line: Int? -> nav.navigate(noteRoute(path, line)) }
+        // A note (unless beside the list) and Settings are full-screen pages; the tabs keep the bar.
+        val showBar = TABS.any { it.route == route }
+        val openNoteAt = { path: String, line: Int? -> open(NoteTarget(path, line)) }
         // Screen changes use the theme's expressive motion (read here: the transition lambdas aren't composable).
         // Fades use the effects spec (no overshoot); movement and scale the spatial one (a little spring).
         val motion = MaterialTheme.motionScheme
-        val isNote = { e: androidx.navigation.NavBackStackEntry -> e.destination.route?.startsWith("note?") == true }
+        val isNote = { e: androidx.navigation.NavBackStackEntry -> e.destination.route.let { it == "settings" || it?.startsWith("note?") == true } }
 
         // A newer APK on GitHub: asked about once a day, or from Settings.
         var update by remember { mutableStateOf<Update?>(null) }
@@ -280,7 +328,7 @@ class MainActivity : ComponentActivity() {
             // Screens draw to the bottom edge; the tabs float over them (each screen leaves room, see toolbarClearance).
             NavHost(
                 nav,
-                startDestination = start,
+                startDestination = "notes",
                 modifier = Modifier.fillMaxSize(),
                 // A note rises over the screen it came from, which settles back a little; tabs fade through.
                 enterTransition = {
@@ -298,7 +346,37 @@ class MainActivity : ComponentActivity() {
                 },
             ) {
                 composable("notes") {
-                    NotesScreen(notesVm, onOpen = { openNoteAt(it, null) }, onNew = { text -> nav.navigate(noteRoute(null, folder = notesVm.state.value.folder, text = text)) })
+                    val list = @Composable {
+                        NotesScreen(
+                            notesVm,
+                            onOpen = { if (it != beside?.path) openNoteAt(it, null) },
+                            onNew = { text -> open(NoteTarget(null, folder = notesVm.state.value.folder, text = text)) },
+                            onSettings = { flusher.flush { nav.navigate("settings") } },
+                        )
+                    }
+                    if (!wide) list()
+                    else Row(Modifier.fillMaxSize()) {
+                        Box(Modifier.weight(0.42f).fillMaxHeight()) { list() }
+                        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Box(Modifier.weight(0.58f).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
+                            val t = beside
+                            if (t == null) EmptyState("No note open", "Pick one from the list, or start a new one.", Icons.Outlined.EditNote)
+                            else key(t) {
+                                NoteScreen(
+                                    notesVm,
+                                    path = t.path,
+                                    line = t.line,
+                                    folder = t.folder,
+                                    onBack = { beside = null },
+                                    onOpenNote = { openNoteAt(it, null) },
+                                    onSwitch = { switching.value = true },
+                                    initialText = t.text,
+                                    sharedFiles = t.files,
+                                    flusher = flusher,
+                                )
+                            }
+                        }
+                    }
                 }
                 composable("todos") { TodosScreen(notesVm, onOpenNote = { p, l -> openNoteAt(p, l) }) }
                 composable(
@@ -324,7 +402,7 @@ class MainActivity : ComponentActivity() {
                         sharedFiles = e.arguments?.getString("files").orEmpty().split('\n').filter { it.isNotEmpty() }.map(::File),
                     )
                 }
-                composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onCheckForUpdates = checkForUpdates) }
+                composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onBack = { nav.popBackStack() }, onCheckForUpdates = checkForUpdates) }
             }
             // The tabs slide away when a note opens over them and come back with the list.
             AnimatedVisibility(

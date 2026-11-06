@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -88,8 +89,8 @@ fun SettingsScreen(
             .background(MaterialTheme.colorScheme.surfaceContainerLowest)
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
-            // Clear of the floating tabs at the end of the page.
-            .padding(bottom = toolbarClearance()),
+            .navigationBarsPadding()
+            .padding(bottom = 16.dp),
     ) {
         ScreenTitle("Settings", onBack = onBack)
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {

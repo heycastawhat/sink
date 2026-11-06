@@ -6,8 +6,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.ui.draw.drawWithContent
@@ -48,7 +46,6 @@ import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -99,6 +96,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
@@ -115,9 +115,7 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
     val state by vm.todos.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
-    val motion = MaterialTheme.motionScheme
     val snackbar = remember { SnackbarHostState() }
-    var adding by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { vm.loadTodos() }
 
     val today = state.today
@@ -165,11 +163,20 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            ScreenTitle("Todos")
+            // Done ones are a look back, so the switch for them sits up here out of the way.
+            ScreenTitle("Todos") {
+                FilterChip(
+                    selected = state.done != null,
+                    onClick = { haptics.tick(); vm.toggleDone() },
+                    label = { Text("Done") },
+                    leadingIcon = if (state.done != null) ({ Icon(Icons.Outlined.Check, null, Modifier.size(FilterChipDefaults.IconSize)) }) else null,
+                    modifier = Modifier.padding(end = 8.dp),
+                )
+            }
             PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = { vm.loadTodos(pull = true) }, modifier = Modifier.fillMaxSize()) {
                 when {
                     !state.loaded -> Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
-                    state.open.isEmpty() && state.error != null -> EmptyState("Can't reach your todos", state.error ?: "")
+                    state.open.isEmpty() && state.error != null -> EmptyState("Can't reach your todos", state.error ?: "", Icons.Outlined.CloudOff)
                     // From the bottom up, like Notes: overdue and today's right above the add field, later ones and
                     // the done list further up. Within a group the soonest is lowest; each heading sits above its group.
                     else -> LazyColumn(Modifier.fillMaxSize(), reverseLayout = true, contentPadding = PaddingValues(top = 8.dp, bottom = toolbarClearance(extra = 76.dp))) {
@@ -189,13 +196,9 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                                 }
                             }
                         }
-                        item(key = "done-toggle") {
-                            TextButton(onClick = { haptics.tick(); vm.toggleDone() }, modifier = Modifier.animateItem().padding(start = 8.dp, top = 8.dp)) {
-                                Text(if (state.done == null) "Show done" else "Hide done")
-                            }
-                        }
                         state.done?.let { done ->
                             items(done.take(100), key = { "d:${it.path}:${it.line}" }) { t -> TodoRow(t, today, actions, Modifier.animateItem()) }
+                            item(key = "done-head") { GroupHead("Done", done.size, Modifier.animateItem()) }
                         }
                     }
                 }
@@ -214,21 +217,6 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                 haptics.confirm()
                 vm.addTodo(text, due, time)?.let { snackbar.showSnackbar(it) }
             }
-        }
-        // Pops in and out as the keyboard goes and comes.
-        AnimatedVisibility(
-            visible = !keyboardUp,
-            enter = scaleIn(motion.defaultSpatialSpec(), initialScale = 0.6f) + fadeIn(motion.defaultEffectsSpec()),
-            exit = scaleOut(motion.defaultSpatialSpec(), targetScale = 0.6f) + fadeOut(motion.defaultEffectsSpec()),
-            modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 16.dp, bottom = TOOLBAR_BOTTOM + 4.dp),
-        ) {
-            FloatingActionButton(
-                onClick = {
-                    haptics.tick()
-                    adding = true
-                },
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-            ) { Icon(Icons.Outlined.AddTask, "New todo") }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = toolbarClearance(extra = 76.dp)))
     }
@@ -253,16 +241,6 @@ fun TodosScreen(vm: NotesViewModel, onOpenNote: (String, Int) -> Unit) {
                 scope.launch { snackbar.showSnackbar(vm.cancelTodo(t)) }
             },
             onDismiss = { editing = null },
-        )
-    }
-
-    if (adding) {
-        TodoDialog(
-            onAdd = { text, due ->
-                adding = false
-                scope.launch { snackbar.showSnackbar(vm.addTodo(text, due, null) ?: "Added to Todo.md") }
-            },
-            onDismiss = { adding = false },
         )
     }
 }

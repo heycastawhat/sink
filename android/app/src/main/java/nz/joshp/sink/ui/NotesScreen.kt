@@ -92,11 +92,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.foundation.text.InlineTextContent
-import androidx.compose.foundation.text.appendInlineContent
-import androidx.compose.ui.text.Placeholder
-import androidx.compose.ui.text.PlaceholderVerticalAlign
-import androidx.compose.ui.unit.em
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -109,6 +104,25 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.SearchOff
+import androidx.compose.material.icons.outlined.Settings
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import nz.joshp.sink.data.NoteMeta
 import kotlinx.coroutines.launch
@@ -136,7 +150,7 @@ fun noteTint(color: String?, base: Color = MaterialTheme.colorScheme.surfaceCont
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: String) -> Unit) {
+fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: String) -> Unit, onSettings: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.refresh() }
     val snackbar = remember { SnackbarHostState() }
@@ -203,6 +217,17 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     // Once there are enough notes for it to save scrolling, or whenever home leaves some out (filed in folders).
     val showRecent = !inside && !searching && (if (hideFoldered) recent.isNotEmpty() else state.notes.size > 6)
     var recentShut by rememberSaveable { mutableStateOf(false) }
+    var searchShown by remember { mutableStateOf(true) }
+    var searchFocused by remember { mutableStateOf(false) }
+    // The list runs bottom up: a finger moving down shows older notes (search goes), moving up comes back (search returns).
+    val searchHider = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && kotlin.math.abs(available.y) > 4f) searchShown = available.y < 0f
+                return Offset.Zero
+            }
+        }
+    }
     // Back climbs out of a folder before it leaves the tab.
     BackHandler(enabled = inside) { vm.folderUp() }
 
@@ -216,7 +241,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                 trailing = {
                     if (state.offline) Icon(Icons.Outlined.CloudOff, "Offline", Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Box {
-                        IconButton(onClick = { haptics.tick(); menu = true }) { Icon(Icons.Outlined.MoreVert, "Folder actions") }
+                        IconButton(onClick = { haptics.tick(); menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(
                                 text = { Text(if (inside) "New folder here" else "New folder") },
@@ -241,6 +266,12 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                                     onClick = { menu = false; haptics.reject(); act { vm.trashFolder(state.folder) } },
                                 )
                             }
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Settings") },
+                                leadingIcon = { Icon(Icons.Outlined.Settings, null) },
+                                onClick = { menu = false; haptics.tick(); onSettings() },
+                            )
                         }
                     }
                 },
@@ -250,7 +281,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
             PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = { vm.refresh(pull = true) }, modifier = Modifier.fillMaxSize()) {
                 when {
                     !state.loaded -> Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
-                    list.isEmpty() && state.error != null && state.notes.isEmpty() -> EmptyState("Can't reach your notes", state.error ?: "")
+                    list.isEmpty() && state.error != null && state.notes.isEmpty() -> EmptyState("Can't reach your notes", state.error ?: "", Icons.Outlined.CloudOff)
                     list.isEmpty() && !showRecent && (subfolders.isEmpty() || searching) -> EmptyState(
                         when {
                             state.query.isNotBlank() -> "Nothing matches"
@@ -262,17 +293,22 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                             inside -> "Tap + or pull up to write a note in this folder."
                             else -> "Tap + or pull up to write one. It's saved as a markdown file on your server."
                         },
+                        when {
+                            state.query.isNotBlank() -> Icons.Outlined.SearchOff
+                            inside -> Icons.Outlined.FolderOpen
+                            else -> Icons.Outlined.EditNote
+                        },
                     )
                     // Laid out from the bottom up, where a thumb reaches: folders, then Recent, pinned notes, and the
                     // newest notes, with older ones further up (scroll up for them). Each section's label comes after
                     // its items here, which puts it above them on screen.
                     else -> LazyVerticalStaggeredGrid(
-                        columns = StaggeredGridCells.Adaptive(300.dp),
+                        columns = CardColumns,
                         reverseLayout = true,
                         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = toolbarClearance(extra = 68.dp)),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalItemSpacing = 10.dp,
-                        modifier = Modifier.fillMaxSize().pullUpToCreate(pullUp),
+                        modifier = Modifier.fillMaxSize().pullUpToCreate(pullUp).nestedScroll(searchHider),
                     ) {
                         // Folders sit as chips in a row; with none yet, home still offers "New folder".
                         if (!searching && (subfolders.isNotEmpty() || !inside)) {
@@ -319,18 +355,26 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
         }
 
         // Search sits at the bottom where a thumb reaches it.
-        val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+        // Only the search's keyboard counts: beside an open note (wide screens) the keyboard may be the note's.
+        val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0 && searchFocused
+        val showSearch = searchShown || keyboardUp || state.query.isNotEmpty() || list.isEmpty()
+        val fade by animateDpAsState(toolbarClearance(extra = if (showSearch) 68.dp else 0.dp), MaterialTheme.motionScheme.defaultSpatialSpec(), label = "fade")
         // Notes fade out behind the search and toolbar instead of being cut off.
         if (!keyboardUp) {
             Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(toolbarClearance(extra = 68.dp))
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(fade)
                     .background(Brush.verticalGradient(listOf(Color.Transparent, MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f)))),
             )
         }
         // Full width just above the floating tabs; with the keyboard up it sits right on top of it instead.
+        AnimatedVisibility(
+            visible = showSearch,
+            enter = slideInVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) { it / 2 } + fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),
+            exit = slideOutVertically(MaterialTheme.motionScheme.fastSpatialSpec()) { it / 2 } + fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+            modifier = Modifier.align(Alignment.BottomStart),
+        ) {
         Row(
             Modifier
-                .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .then(if (keyboardUp) Modifier.imePadding().padding(bottom = 8.dp) else Modifier.navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 12.dp))
                 .padding(horizontal = 16.dp),
@@ -351,7 +395,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                     focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                 ),
-                modifier = Modifier.weight(1f).shadow(6.dp, CircleShape),
+                modifier = Modifier.weight(1f).shadow(6.dp, CircleShape).onFocusChanged { searchFocused = it.isFocused },
             )
             // How the notes are ordered, and whether home keeps filed notes to their folders.
             Box {
@@ -381,6 +425,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                 }
             }
         }
+        }
         // Beside the floating tabs, level with them.
         if (!keyboardUp) {
             NewMenuFab(
@@ -392,7 +437,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                 modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM - 16.dp + 4.dp),
             )
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = toolbarClearance(extra = 68.dp)))
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = fade))
         PullUpDrawer(pullUp)
     }
 
@@ -474,6 +519,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMeta) -> Unit, loadImage: suspend (String) -> ImageBitmap?, modifier: Modifier = Modifier) {
     val press = remember { MutableInteractionSource() }
@@ -496,39 +542,45 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMe
             image?.let { Image(it, null, Modifier.fillMaxWidth().heightIn(max = 200.dp), contentScale = ContentScale.Crop) }
         }
         Column(
-            Modifier.padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            Modifier.padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(verticalAlignment = Alignment.Top) {
+            if (showTitle || n.pinned) Row(verticalAlignment = Alignment.Top) {
                 if (n.isBoard) {
-                    Icon(Icons.Outlined.Draw, null, Modifier.size(18.dp).padding(top = 2.dp))
+                    Icon(Icons.Outlined.Draw, null, Modifier.size(20.dp).padding(top = 2.dp))
                     Spacer(Modifier.width(6.dp))
                 }
                 Text(
                     if (showTitle) n.title else "",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, lineHeight = 21.sp),
                     modifier = Modifier.weight(1f),
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (n.pinned) {
-                    Icon(Icons.Filled.PushPin, "Pinned", Modifier.size(16.dp).padding(top = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(cardDate(n.mtime), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
+                if (n.pinned) Icon(Icons.Filled.PushPin, "Pinned", Modifier.padding(start = 6.dp, top = 2.dp).size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (n.snippet != null) {
-                Text(highlight(n.snippet), style = MaterialTheme.typography.bodyMedium, maxLines = 6, overflow = TextOverflow.Ellipsis)
+                Text(highlight(n.snippet), style = MaterialTheme.typography.bodyMedium, maxLines = 8, overflow = TextOverflow.Ellipsis)
             } else if (!n.isBoard) {
-                ExcerptFlow(n.excerpt.orEmpty())
+                Excerpt(n.excerpt.orEmpty())
             }
-            if (n.folder.isNotEmpty() || n.tags.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (n.folder.isNotEmpty()) Pill(n.folder)
-                    n.tags.take(2).forEach { Pill("#$it") }
-                }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                Text(cardDate(n.mtime), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                // Just the folder's own name: a card is too narrow for a path.
+                if (n.folder.isNotEmpty()) Pill(n.folder.substringAfterLast('/'))
+                n.tags.take(2).forEach { Pill("#$it") }
             }
         }
+    }
+}
+
+/** Card columns: as many as fit at 220dp or wider, but always at least two, Keep-style. */
+private val CardColumns = object : StaggeredGridCells {
+    override fun Density.calculateCrossAxisCellSizes(availableSize: Int, spacing: Int): IntArray {
+        val count = maxOf(2, (availableSize + spacing) / (220.dp.roundToPx() + spacing))
+        val size = (availableSize - spacing * (count - 1)) / count
+        val left = availableSize - spacing * (count - 1) - size * count
+        return IntArray(count) { size + if (it < left) 1 else 0 }
     }
 }
 
@@ -666,7 +718,7 @@ fun Excerpt(text: String, small: Boolean = false) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val codeBg = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val markBg = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-    val oneLine = if (small) 1 else Int.MAX_VALUE
+    val oneLine = if (small) 1 else 4
     fun inline(s: String) = inlineMarkdown(s, codeBg, markBg)
     Column(Modifier.heightIn(max = 220.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         for (line in lines) {
@@ -721,37 +773,6 @@ fun Excerpt(text: String, small: Boolean = false) {
             }
         }
     }
-}
-
-/** A card's preview as running text: bullets and tasks inline, two lines at most. Search hits and boards don't use it. */
-@Composable
-private fun ExcerptFlow(text: String) {
-    val lines = remember(text) { cardLines(text) }
-    if (lines.isEmpty()) return
-    val codeBg = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-    val markBg = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-    val flowed = remember(lines, codeBg, markBg) {
-        buildAnnotatedString {
-            lines.forEachIndexed { i, line ->
-                if (i > 0) append(" ")
-                when (line) {
-                    is CardLine.Plain -> append(inlineMarkdown(line.text, codeBg, markBg))
-                    is CardLine.Item -> { append(if (line.marker == "•") "• " else line.marker + " "); append(inlineMarkdown(line.text, codeBg, markBg)) }
-                    is CardLine.Task -> { appendInlineContent(if (line.done) "done" else "open", "[ ]"); append(" "); append(inlineMarkdown(line.text, codeBg, markBg)) }
-                    is CardLine.Heading -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(inlineMarkdown(line.text, codeBg, markBg)) }
-                    is CardLine.Quote -> append(inlineMarkdown(line.text, codeBg, markBg))
-                    is CardLine.Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg)) { append(line.text.trim()) }
-                    is CardLine.Row -> append(line.cells.joinToString(" | ") { inlineMarkdown(it, codeBg, markBg).text })
-                }
-            }
-        }
-    }
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    fun box(icon: androidx.compose.ui.graphics.vector.ImageVector) = InlineTextContent(Placeholder(1.1.em, 1.1.em, PlaceholderVerticalAlign.TextCenter)) {
-        Icon(icon, null, Modifier.fillMaxSize(), tint = muted)
-    }
-    val boxes = mapOf("open" to box(Icons.Outlined.CheckBoxOutlineBlank), "done" to box(Icons.Outlined.CheckBox))
-    Text(flowed, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, inlineContent = boxes)
 }
 
 /** A card's date: the time today, "Yesterday", the weekday within the last week, else "12 Oct" (with the year when it isn't this one). */
