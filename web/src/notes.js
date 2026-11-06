@@ -3,7 +3,7 @@
 // (Obsidian, the phone) are never silently overwritten.
 
 import { esc, folderOf, inlineHtml, tableCells } from './util.js';
-import { backlinksHtml } from './backlinks.js';
+import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { registry, onRegistryChange } from './plugin-api.js';
@@ -805,14 +805,20 @@ function linkTargets() {
   return state.notes.filter((n) => !/\.excalidraw\.md$/i.test(n.path)).map((n) => ({ label: fileName(n.path), detail: folderOf(n.path) }));
 }
 
+/** The note a [[link]] means, as Obsidian finds it: by path, then file name, then title. */
+function findLinked(target) {
+  const lower = target.split('#')[0].replace(/\.md$/i, '').trim().toLowerCase();
+  return (
+    state.notes.find((n) => n.path.toLowerCase() === `${lower}.md`) ??
+    state.notes.find((n) => fileName(n.path).toLowerCase() === lower.split('/').pop()) ??
+    state.notes.find((n) => n.title.toLowerCase() === lower)
+  );
+}
+
 async function openLink(target, { external } = {}) {
   if (external) return window.open(target, '_blank', 'noopener');
   const name = target.split('#')[0].replace(/\.md$/i, '').trim();
-  const lower = name.toLowerCase();
-  const hit =
-    state.notes.find((n) => n.path.toLowerCase() === `${lower}.md`) ??
-    state.notes.find((n) => fileName(n.path).toLowerCase() === lower.split('/').pop()) ??
-    state.notes.find((n) => n.title.toLowerCase() === lower);
+  const hit = findLinked(target);
   await flush();
   if (hit) return navigate(noteHash(hit.path));
   // Like Obsidian: following a link to a note that doesn't exist creates it.
@@ -886,6 +892,11 @@ function mountEditor(text) {
     onOpenLink: openLink,
     resolveEmbed: (name) => api.attachmentUrl(name),
     resolveImage: (src) => (/^(https?:|data:|\/)/i.test(src) ? src : api.attachmentUrl(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
+    loadEmbed: (target) => {
+      const hit = findLinked(target);
+      return hit ? api.note(hit.path) : null;
+    },
+    path: screen.path,
     linkTargets,
     uploadFile: async (file) => {
       setStatus('Uploading…');
@@ -1108,6 +1119,19 @@ export function newNote() {
   openFromApp(state.folder ? `#/new?folder=${encodeURIComponent(state.folder)}` : '#/new');
 }
 
+/** New → Clip a web page (or the bookmarklet, which passes the address): the server saves the page's article as a note. */
+export async function clipPage(address) {
+  const url = address ?? (await askText({ title: 'Clip a web page', label: 'Page address', action: 'Clip' }));
+  if (!url) return;
+  toast('Clipping…');
+  try {
+    const created = await api.clip(/^[a-z][a-z\d+.-]*:/i.test(url) ? url : `https://${url}`, state.folder);
+    openFromApp(noteHash(created.path));
+  } catch (err) {
+    toast(`Couldn't clip that page: ${err.message}`);
+  }
+}
+
 /** Text the next draft starts with (New → From template). */
 let draftText = '';
 
@@ -1230,6 +1254,7 @@ async function resolveConflict(mine, current) {
     Object.assign(screen, { hash: current.hash, saved: mine });
     return setStatus('Saved');
   }
+  buzz('warn');
   try {
     // What's in the editor now, including anything typed while the save was out.
     mine = screen.editor.getText();
@@ -1245,6 +1270,7 @@ async function resolveConflict(mine, current) {
       Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine });
     }
     toast(`Changed somewhere else. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
+    buzz('confirm');
     setStatus('Saved');
     loadNotes();
   } catch (err) {
@@ -1312,24 +1338,38 @@ export function listenForChanges() {
   });
 }
 
-/** "Linked mentions" under the note: the notes that link here, each with the lines that do. */
-async function renderBacklinks(path) {
+/**
+ * "Linked mentions" under the note: the notes that link here, each with the lines that do. "Unlinked mentions" follow
+ * (slower, it reads notes), collapsed; they come back open after a "Link" press.
+ */
+async function renderBacklinks(path, { open = false } = {}) {
   const box = $('note-links');
   box.hidden = true;
   box.innerHTML = '';
   if (isBoardPath(path)) return;
-  let items;
-  try {
-    ({ items } = await api.backlinks(path));
-  } catch {
-    return;
-  }
-  // Still on this note, and there's something to show.
-  if (screen.path !== path || !items.length) return;
-  box.innerHTML = backlinksHtml(items, { href: noteHash, icon: ic('description') });
-  box.hidden = false;
+  const fetch = (call) => call(path).then(({ items }) => items, () => []);
+  const links = await fetch(api.backlinks);
+  const show = (mentions) => {
+    // Still on this note, and there's something to show.
+    if (screen.path !== path) return;
+    const icon = ic('description');
+    box.innerHTML = (links.length ? backlinksHtml(links, { href: noteHash, icon }) : '') + mentionsHtml(mentions, { href: noteHash, icon, open });
+    box.hidden = !box.innerHTML;
+  };
+  show([]);
+  show(await fetch(api.mentions));
 }
 
+/** A "Link" press: the mention becomes `[[…]]` in the note that has it, unless that note changed since the list. */
+async function linkMention(path, { src, hash, start, text }) {
+  try {
+    await api.linkMention(src, path, start, text, hash);
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    toast(err instanceof ApiError && err.status === 409 ? 'That note changed. Try again.' : err.message);
+  }
+  if (screen.path === path) renderBacklinks(path, { open: true });
+}
 async function closeEditor() {
   if (!screen.editor) return;
   clearInterval(screen.poll);
@@ -1497,6 +1537,7 @@ function wireScreen() {
     }
   });
   $('note-filename').addEventListener('click', () => $('note-rename').click());
+  onLinkMention($('note-links'), (m) => linkMention(screen.path, m));
   $('note-rename').addEventListener('click', async () => {
     await flush();
     if (!screen.path) return toast('Write something first');

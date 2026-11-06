@@ -215,24 +215,30 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme
 
 // ---------- routing ----------
 // Hash routes so reloads, the back button and links keep their place:
-// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new[?folder=F]  #/todos  #/trash  #/settings
+// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new[?folder=F]  #/clip?url=U  #/todos  #/trash  #/settings
 
 function parseHash() {
   const [path, query = ''] = (location.hash.replace(/^#/, '') || '/').split('?');
   const [, first = '', ...rest] = path.split('/');
-  const base = { view: 'notes', folder: '', note: null, line: null, draft: false };
+  const base = { view: 'notes', folder: '', note: null, line: null, draft: false, clip: null };
   if (!first || first === 'notes') return { ...base, folder: decodeURIComponent(rest.join('/')) };
   if (first === 'n' && rest.length) {
     const line = new URLSearchParams(query).get('line');
     return { ...base, note: rest.map(decodeURIComponent).join('/'), line: line == null ? null : Number(line) };
   }
   if (first === 'new') return { ...base, draft: true, folder: new URLSearchParams(query).get('folder') ?? '' };
+  if (first === 'clip') return { ...base, clip: new URLSearchParams(query).get('url') };
   if (['todos', 'trash', 'settings'].includes(first)) return { ...base, view: first };
   return base;
 }
 
 function applyRoute() {
   const route = parseHash();
+  if (route.clip) {
+    // The bookmarklet's address: clip once, then leave it out of history so back and reload don't clip again.
+    location.replace('#/notes');
+    return notes.clipPage(route.clip);
+  }
   const viewChanged = route.view !== state.view;
   state.view = route.view;
   state.folder = route.folder;
@@ -362,6 +368,13 @@ async function renderSettings() {
 
 <section class="setting-card">
   <h2>Notes</h2>
+  <div class="setting-row" id="reminders-row" hidden>
+    <div class="grow">
+      <label class="setting-title" for="reminders">Todo reminders</label>
+      <div class="muted small">A notification at a todo's reminder time, or 9am on its due date. This browser only; the Android app has its own.</div>
+    </div>
+    <m3e-switch id="reminders"></m3e-switch>
+  </div>
   <div class="setting-row">
     <div class="grow">
       <label class="setting-title" for="hide-foldered">Keep filed notes in their folders</label>
@@ -386,6 +399,12 @@ async function renderSettings() {
     </div>
     <m3e-button id="notion-import" variant="tonal">${ic('upload', 'icon')}Import</m3e-button>
     <input id="notion-file" type="file" accept=".zip" hidden />
+  </div>
+  <div class="setting-row">
+    <div class="grow">
+      <div class="setting-title">Clip web pages</div>
+      <div class="muted small">New → Clip a web page saves a page's article as a note, with its address. Or drag this to your bookmarks bar and click it on any page: <a id="clip-bookmarklet" href="javascript:location.href='${esc(location.origin)}/#/clip?url='+encodeURIComponent(location.href)">Clip to Sink</a>.</div>
+    </div>
   </div>
   <div class="setting-row">
     <div class="grow">
@@ -434,6 +453,20 @@ async function renderSettings() {
       <m3e-button id="connect-copy" variant="text" size="small">${ic('content_copy', 'icon')}Copy command</m3e-button>
     </div>
   </m3e-expansion-panel>
+</section>
+
+<section class="setting-card">
+  <h2>Calendar feed</h2>
+  <p class="muted">Subscribe in Google or Apple Calendar to see your todos that have a date or reminder. Anyone with the link can read those todos, so keep it private and revoke it if it leaks.</p>
+  <div class="setting-row">
+    <div class="grow muted small" id="calendar-state"></div>
+    <m3e-button id="calendar-revoke" variant="text" hidden>Revoke</m3e-button>
+    <m3e-button id="calendar-create" variant="tonal">Create link</m3e-button>
+  </div>
+  <div id="calendar-result" hidden>
+    <p class="small">Add this link as a calendar from URL. It's only shown now.</p>
+    <div class="copy-row"><code id="calendar-url"></code><m3e-icon-button id="calendar-copy" aria-label="Copy calendar link" title="Copy">${ic('content_copy')}</m3e-icon-button></div>
+  </div>
 </section>
 
 <section class="setting-card">
@@ -492,6 +525,11 @@ async function renderSettings() {
   renderTokens();
   renderPeople();
   renderPublic();
+  pushSubscription().then((push) => {
+    if (!push) return;
+    $('reminders-row').hidden = false;
+    $('reminders').checked = !!push.sub && Notification.permission === 'granted';
+  });
   try {
     const { notes: all } = await api.notes();
     $('server-info').innerHTML = [
@@ -511,6 +549,11 @@ async function renderTokens() {
     const ago = (ts) => (ts ? `${relativeDay(ts).toLowerCase()} ${timeOf(ts)}` : 'never');
     // Assistant tokens carry the "mcp" scope (made by a connector or the Create token button); the rest are sign-ins.
     const isAssistant = (t) => t.scope === 'mcp';
+    const feed = tokens.find((t) => t.scope === 'calendar');
+    $('calendar-state').textContent = feed ? `Link active. ${feed.last_used_at ? `Last fetched ${ago(feed.last_used_at)}.` : 'Not fetched yet.'}` : 'No link yet.';
+    $('calendar-create').textContent = feed ? 'Replace link' : 'Create link';
+    $('calendar-revoke').hidden = !feed;
+    $('calendar-revoke').dataset.id = feed?.id ?? '';
     const recent = (a, b) => (b.id === me.tokenId) - (a.id === me.tokenId) || (b.last_used_at ?? 0) - (a.last_used_at ?? 0);
     const row = (t) => `<div class="token-row">
   <span class="token-icon">${ic(isAssistant(t) ? 'hub' : 'devices')}</span>
@@ -522,7 +565,7 @@ async function renderTokens() {
       `<h3 class="token-group">${title}<span>${items.length || ''}</span></h3>` +
       (items.length ? items.sort(recent).map(row).join('') : `<p class="muted small">${empty}</p>`);
     $('connect-tokens').innerHTML =
-      group('Devices', tokens.filter((t) => !isAssistant(t)), 'No devices signed in.') +
+      group('Devices', tokens.filter((t) => !isAssistant(t) && t.scope !== 'calendar'), 'No devices signed in.') +
       group('Assistants', tokens.filter(isAssistant), 'No assistants connected yet. Add one with the connector URL above.');
   } catch (err) {
     $('connect-tokens').textContent = err.message;
@@ -610,10 +653,38 @@ $('settings').addEventListener('keydown', (e) => {
 
 $('settings').addEventListener('change', (e) => {
   if (e.target.id === 'haptics') setHaptics(e.target.checked);
+  if (e.target.id === 'reminders') {
+    const on = e.target.checked;
+    setReminders(on).catch((err) => {
+      e.target.checked = !on;
+      toast(err.message);
+    });
+  }
   if (e.target.id === 'hide-foldered') notes.prefs.hideFoldered = e.target.checked;
   if (e.target.id === 'keep-file') runImport('keep', e.target);
   if (e.target.id === 'notion-file') runImport('notion', e.target);
 });
+
+/** This browser's service worker and its push subscription (null if it has none), or null without Web Push. */
+async function pushSubscription() {
+  const reg = 'PushManager' in window && (await navigator.serviceWorker?.getRegistration());
+  return reg ? { reg, sub: await reg.pushManager.getSubscription() } : null;
+}
+
+async function setReminders(on) {
+  const push = await pushSubscription();
+  if (!push) return;
+  if (push.sub) {
+    await api.pushUnsubscribe(push.sub.endpoint).catch(() => {});
+    await push.sub.unsubscribe();
+  }
+  if (!on) return;
+  if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are blocked for this site');
+  const { key } = await api.pushKey();
+  const applicationServerKey = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+  const sub = await push.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+  await api.pushSubscribe(sub.toJSON());
+}
 
 /** Google Keep and Notion imports from Settings: loaded only when used. */
 async function runImport(kind, input) {
@@ -641,6 +712,10 @@ async function runImport(kind, input) {
 }
 
 $('settings').addEventListener('click', async (e) => {
+  if (e.target.closest('#clip-bookmarklet')) {
+    e.preventDefault();
+    return toast('Drag it to your bookmarks bar');
+  }
   const scheme = e.target.closest('[data-scheme]');
   if (scheme) {
     storage.set('scheme', scheme.dataset.scheme);
@@ -718,6 +793,23 @@ $('settings').addEventListener('click', async (e) => {
     } catch (err) {
       toast(err.message);
     }
+  } else if (id === 'calendar-create') {
+    try {
+      const { token } = await api.createCalendarToken();
+      $('calendar-url').textContent = `${location.origin}/api/calendar/${token}.ics`;
+      $('calendar-result').hidden = false;
+      renderTokens();
+    } catch (err) {
+      toast(err.message);
+    }
+  } else if (id === 'calendar-copy') {
+    await navigator.clipboard.writeText($('calendar-url').textContent);
+    toast('Copied');
+  } else if (id === 'calendar-revoke') {
+    if (!(await askConfirm({ title: 'Revoke the calendar link?', body: 'Calendars subscribed to it stop updating.', action: 'Revoke', danger: true }))) return;
+    await api.revokeToken($('calendar-revoke').dataset.id).catch((err) => toast(err.message));
+    $('calendar-result').hidden = true;
+    renderTokens();
   } else if (id === 'export-notes') {
     location.href = '/api/notes/export';
   } else if (id === 'keep-import' || id === 'notion-import') {
@@ -725,6 +817,8 @@ $('settings').addEventListener('click', async (e) => {
   } else if (id === 'open-trash') {
     location.hash = '#/trash';
   } else if (id === 'logout') {
+    // The next person to sign in on this browser shouldn't get these reminders.
+    await setReminders(false).catch(() => {});
     await api.logout().catch(() => {});
     showLogin();
   }
@@ -738,6 +832,7 @@ const NEW_ITEMS = [
   { id: 'todo', label: 'Todo', icon: 'add_task', run: () => notes.quickTodo() },
   { id: 'folder', label: 'Folder', icon: 'create_new_folder', run: () => notes.newFolderHere(state.view === 'notes' ? state.folder : '') },
   { id: 'board', label: 'Board', icon: 'draw', run: () => notes.newBoard() },
+  { id: 'clip', label: 'Clip a web page', icon: 'link', run: () => notes.clipPage() },
   { id: 'template', label: 'From template', icon: 'content_copy', run: () => notes.newFromTemplate() },
 ];
 const itemHtml = (cls) =>

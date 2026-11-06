@@ -43,16 +43,34 @@ export class Auth {
     return token;
   }
 
-  /** The token's id, scope and account, or null if it isn't one of ours. */
+  /**
+   * The token's id, scope and account, or null if it isn't one of ours. Calendar-feed tokens never match: they sit in a
+   * URL that calendar apps and proxies keep, so they must not work anywhere else (API, MCP, OAuth).
+   */
   check(token: string): { id: string; scope: Scope; subject: string } | null {
     const row = this.db
       .query<{ id: string; scope: Scope; subject: string }, [string, number]>(
-        "SELECT id, scope, COALESCE(subject, '') AS subject FROM tokens WHERE token_hash = ? AND (expires_at IS NULL OR expires_at > ?)",
+        "SELECT id, scope, COALESCE(subject, '') AS subject FROM tokens WHERE token_hash = ? AND scope != 'calendar' AND (expires_at IS NULL OR expires_at > ?)",
       )
       .get(sha256(token), now());
     if (!row) return null;
     this.db.query("UPDATE tokens SET last_used_at = ? WHERE id = ?").run(now(), row.id);
     return row;
+  }
+
+  /** The account behind a calendar-feed token, or null. One feed link per account: a new one replaces the old. */
+  calendarSubject(token: string): string | null {
+    const row = this.db
+      .query<{ id: string; subject: string }, [string]>("SELECT id, COALESCE(subject, '') AS subject FROM tokens WHERE token_hash = ? AND scope = 'calendar'")
+      .get(sha256(token));
+    if (!row) return null;
+    this.db.query("UPDATE tokens SET last_used_at = ? WHERE id = ?").run(now(), row.id);
+    return row.subject;
+  }
+
+  issueCalendarToken(subject: string): string {
+    this.db.query("DELETE FROM tokens WHERE subject = ? AND scope = 'calendar'").run(subject);
+    return this.issueToken("Calendar feed", subject, "calendar");
   }
 
   verify(token: string): string | null {
@@ -80,7 +98,7 @@ export class Auth {
   }
 }
 
-export type Scope = "full" | "mcp";
+export type Scope = "full" | "mcp" | "calendar";
 export type AuthEnv = { Variables: { tokenId: string; scope: Scope; subject: string } };
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -296,6 +314,9 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
     return c.json({ token: auth.issueToken(parsed.data.name, c.get("subject"), "mcp") }, 201);
   });
+
+  // A private link for calendar apps (Google, Apple), which can't send headers: the token in the URL only reads the feed.
+  app.post("/calendar", authed, requireFullScope, (c) => c.json({ token: auth.issueCalendarToken(c.get("subject")) }, 201));
 
   app.delete("/tokens/:id", authed, requireFullScope, (c) => {
     auth.revoke(c.req.param("id"), c.get("subject"));

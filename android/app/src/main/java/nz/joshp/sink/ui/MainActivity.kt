@@ -25,6 +25,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.runtime.key
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.navigationevent.NavigationEventTransitionState
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
@@ -77,13 +81,16 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import nz.joshp.sink.SinkApp
 import nz.joshp.sink.capture.SharedFiles
+import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.Update
 import nz.joshp.sink.data.Updates
 import nz.joshp.sink.data.Session
+import nz.joshp.sink.data.clipUrl
 import nz.joshp.sink.data.SignIn
 import nz.joshp.sink.ui.theme.SinkTheme
 import java.io.File
@@ -97,7 +104,8 @@ private val TABS = listOf(
 
 /**
  * A note to open (or a new draft when [path] is null, optionally starting with [text] and with [files] from the
- * app's cache to attach). [opened] tells two otherwise identical new drafts apart.
+ * app's cache to attach). [opened] tells two otherwise identical new drafts apart. [from] is the card it was opened
+ * from, which it grows out of (see [CardMorph]).
  */
 data class NoteTarget(
     val path: String?,
@@ -106,19 +114,20 @@ data class NoteTarget(
     val text: String = "",
     val files: List<File> = emptyList(),
     val opened: Long = System.nanoTime(),
+    val from: String? = null,
 ) {
     val route get() =
         "note?path=${path?.let(Uri::encode) ?: ""}&line=${line ?: -1}&folder=${Uri.encode(folder)}&text=${Uri.encode(text)}" +
-            "&files=${Uri.encode(files.joinToString("\n") { it.path })}"
+            "&files=${Uri.encode(files.joinToString("\n") { it.path })}&from=${Uri.encode(from.orEmpty())}"
 }
 
 private val NoteTargetSaver = listSaver<NoteTarget?, String>(
-    save = { t -> if (t == null) emptyList() else listOf(t.path ?: "\u0000", "${t.line ?: -1}", t.folder, t.text, t.files.joinToString("\n") { it.path }, "${t.opened}") },
+    save = { t -> if (t == null) emptyList() else listOf(t.path ?: "\u0000", "${t.line ?: -1}", t.folder, t.text, t.files.joinToString("\n") { it.path }, "${t.opened}", t.from.orEmpty()) },
     restore = { v ->
         if (v.isEmpty()) null
         else NoteTarget(
             v[0].takeIf { it != "\u0000" }, v[1].toInt().takeIf { it >= 0 }, v[2], v[3],
-            v[4].split('\n').filter { it.isNotEmpty() }.map(::File), v[5].toLong(),
+            v[4].split('\n').filter { it.isNotEmpty() }.map(::File), v[5].toLong(), v.getOrNull(6)?.ifEmpty { null },
         )
     },
 )
@@ -133,7 +142,10 @@ class MainActivity : ComponentActivity() {
         handleDebugSignIn(intent)
         openNote.value = noteTarget(intent)
         // Not again when the activity is recreated (rotation): the files were already copied and opened.
-        if (savedInstanceState == null) handleSharedFiles(intent)
+        if (savedInstanceState == null) {
+            handleSharedFiles(intent)
+            handleSharedLink(intent)
+        }
 
         setContent {
             val dynamic by settings.dynamicColor.collectAsState(initial = false)
@@ -173,7 +185,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun noteTarget(intent: Intent): NoteTarget? = when {
-        SharedFiles.uris(intent).isNotEmpty() -> null
+        SharedFiles.uris(intent).isNotEmpty() || sharedLink(intent) != null -> null
         intent.action == Intent.ACTION_SEND -> {
             sharedText(intent).takeIf { it.isNotEmpty() }?.let { NoteTarget(null, text = it) }
         }
@@ -189,6 +201,27 @@ class MainActivity : ComponentActivity() {
         handleDebugSignIn(intent)
         noteTarget(intent)?.let { openNote.value = it }
         handleSharedFiles(intent)
+        handleSharedLink(intent)
+    }
+
+    /** Text shared from another app that is nothing but a web address. */
+    private fun sharedLink(intent: Intent): String? =
+        if (intent.action != Intent.ACTION_SEND) null
+        else intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf { Regex("https?://\\S+").matches(it) }
+
+    /** A shared link is clipped on the server and the note opens; if that fails it becomes a plain note holding the link. */
+    private fun handleSharedLink(intent: Intent) {
+        val url = sharedLink(intent) ?: return
+        val fallback = sharedText(intent)
+        android.widget.Toast.makeText(this, "Clipping…", android.widget.Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val session = (application as SinkApp).settings.session.first()
+            val result = if (session == null) Result.failure(Exception("Signed out")) else runCatching { Api(session).clipUrl(url) }
+            result.onSuccess { openNote.value = NoteTarget(it.path) }.onFailure {
+                android.widget.Toast.makeText(this@MainActivity, "Couldn't clip: ${it.message}", android.widget.Toast.LENGTH_LONG).show()
+                openNote.value = NoteTarget(null, text = fallback)
+            }
+        }
     }
 
     /** Shared text: the subject (a page title, say) as its heading. */
@@ -283,6 +316,19 @@ class MainActivity : ComponentActivity() {
         // A note (unless beside the list) and Settings are full-screen pages; the tabs keep the bar.
         val showBar = TABS.any { it.route == route }
         val openNoteAt = { path: String, line: Int? -> open(NoteTarget(path, line)) }
+        // A predictive back gesture out of a note: a tick as it passes halfway, past which the note is mostly gone.
+        val haptics = rememberHaptics()
+        val backs = LocalNavigationEventDispatcherOwner.current?.navigationEventDispatcher
+        LaunchedEffect(backs) {
+            var past = false
+            backs?.transitionState?.collect { s ->
+                val back = s as? NavigationEventTransitionState.InProgress
+                val now = back != null && back.direction == NavigationEventTransitionState.TRANSITIONING_BACK &&
+                    back.latestEvent.progress >= 0.5f && nav.currentBackStackEntry?.destination?.route?.startsWith("note?") == true
+                if (now && !past) haptics.threshold()
+                past = now
+            }
+        }
         // Screen changes use the theme's expressive motion (read here: the transition lambdas aren't composable).
         // Fades use the effects spec (no overshoot); movement and scale the spatial one (a little spring).
         val motion = MaterialTheme.motionScheme
@@ -326,6 +372,10 @@ class MainActivity : ComponentActivity() {
         ) { _ ->
           Box(Modifier.fillMaxSize()) {
             // Screens draw to the bottom edge; the tabs float over them (each screen leaves room, see toolbarClearance).
+            // Notes grow out of the card tapped (when there's one on screen) and shrink back into it.
+            SharedTransitionLayout(Modifier.fillMaxSize()) {
+            val morph = remember(this) { CardMorph(this) }
+            CompositionLocalProvider(LocalCardMorph provides morph.takeIf { !wide }) {
             NavHost(
                 nav,
                 startDestination = "notes",
@@ -346,10 +396,11 @@ class MainActivity : ComponentActivity() {
                 },
             ) {
                 composable("notes") {
+                  CompositionLocalProvider(LocalNavScope provides this) {
                     val list = @Composable {
                         NotesScreen(
                             notesVm,
-                            onOpen = { if (it != beside?.path) openNoteAt(it, null) },
+                            onOpen = { if (it != beside?.path) open(NoteTarget(it, from = morph.take())) },
                             onNew = { text -> open(NoteTarget(null, folder = notesVm.state.value.folder, text = text)) },
                             onSettings = { flusher.flush { nav.navigate("settings") } },
                         )
@@ -377,19 +428,22 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                  }
                 }
                 composable("todos") { TodosScreen(notesVm, onOpenNote = { p, l -> openNoteAt(p, l) }) }
                 composable(
-                    "note?path={path}&line={line}&folder={folder}&text={text}&files={files}",
+                    "note?path={path}&line={line}&folder={folder}&text={text}&files={files}&from={from}",
                     arguments = listOf(
                         navArgument("path") { type = NavType.StringType; defaultValue = "" },
                         navArgument("line") { type = NavType.IntType; defaultValue = -1 },
                         navArgument("folder") { type = NavType.StringType; defaultValue = "" },
                         navArgument("text") { type = NavType.StringType; defaultValue = "" },
                         navArgument("files") { type = NavType.StringType; defaultValue = "" },
+                        navArgument("from") { type = NavType.StringType; defaultValue = "" },
                     ),
                 ) { e ->
                     val path = e.arguments?.getString("path").orEmpty().ifEmpty { null }
+                    CompositionLocalProvider(LocalNavScope provides this) {
                     NoteScreen(
                         notesVm,
                         path = path,
@@ -400,9 +454,14 @@ class MainActivity : ComponentActivity() {
                         onSwitch = { switching.value = true },
                         initialText = e.arguments?.getString("text").orEmpty(),
                         sharedFiles = e.arguments?.getString("files").orEmpty().split('\n').filter { it.isNotEmpty() }.map(::File),
+                        morphKey = e.arguments?.getString("from").orEmpty().ifEmpty { null },
+                        navBack = true,
                     )
+                    }
                 }
                 composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onBack = { nav.popBackStack() }, onCheckForUpdates = checkForUpdates) }
+            }
+            }
             }
             // The tabs slide away when a note opens over them and come back with the list.
             AnimatedVisibility(

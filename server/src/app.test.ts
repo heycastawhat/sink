@@ -9,6 +9,7 @@ import { createApp } from "./app";
 import { Backups } from "./backup";
 import { Users } from "./users";
 import { robotsFor } from "./routes/publish";
+import { icsFeed } from "./routes/calendar";
 import { pageText } from "./html";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
@@ -356,6 +357,7 @@ describe("mcp", () => {
     const tools = (await rpc(token, "tools/list")).body.result.tools.map((t: any) => t.name);
     expect(tools.sort()).toEqual([
       "add_todo",
+      "clip_url",
       "complete_todo",
       "create_folder",
       "list_todos",
@@ -401,6 +403,14 @@ describe("mcp", () => {
     const passport = (await call(token, "list_todos")).data.todos[0];
     const moved = await call(token, "update_todo", { path: passport.path, line: passport.line, raw: passport.raw, due: "2026-12-01" });
     expect(moved.data.updated).toBe("- [ ] passport 📅 2026-12-01");
+  });
+
+  test("clip_url goes through the clip API and refuses private addresses", async () => {
+    const token = await login();
+    const clipped = await call(token, "clip_url", { url: "http://169.254.169.254/latest/meta-data/" });
+    expect(clipped.result.isError).toBe(true);
+    expect(clipped.result.content[0].text).toBe("that address isn't allowed");
+    expect((await setup.app.request("/api/clip", { method: "POST", body: "{}" })).status).toBe(401);
   });
 
   test("folders, moving, trash and pin/colour", async () => {
@@ -629,6 +639,53 @@ describe("notes", () => {
     await send(token, "DELETE", q("Log/Monday.md"));
     const after = await get(token, `/api/notes/backlinks?path=${encodeURIComponent("Garden/Soil.md")}`);
     expect((((await after.json()) as any).items as { path: string }[]).map((i) => i.path).sort()).toEqual(["Links.md", "Table.md"]);
+  });
+
+  test("unlinked mentions: plain title and alias mentions, not links, code or frontmatter; linking keeps the hash rule", async () => {
+    const token = await login();
+    const make = (folder: string, title: string, content: string) => send(token, "POST", "/api/notes", { folder, title, content });
+    const mentions = async (path: string) => ((await (await get(token, `/api/notes/mentions?path=${encodeURIComponent(path)}`)).json()) as any).items as any[];
+    await make("Garden", "Église", "---\naliases: [Old church, Chapelle]\n---\n# Église\n\nStone.\n");
+    await make("", "Diary", "# Diary\n\n- Visited the église today, then the old CHURCH.\n");
+    await make("", "Linked", "# Linked\n\nThe [[Église]] is nice. Also église.\n");
+    await make("", "Code", "# Code\n\nUse `église` here.\n\n```\nÉglise in a fence\n```\n[église](other.md) and https://x.y/église/ and [[x|église]]\n");
+    await make("", "Front", "---\nnote: église\n---\n# Front\n\nNothing.\n");
+    await make("", "Words", "# Words\n\nÉglises and églised are other words.\n");
+    await make("", "Table", "# Table\n\n| Where | Note |\n| --- | --- |\n| Chapelle | x |\n");
+
+    const items = await mentions("Garden/Église.md");
+    expect(items.map((i) => i.path).sort()).toEqual(["Diary.md", "Linked.md", "Table.md"]);
+    expect(items.find((i) => i.path === "Linked.md").mentions.map((m: any) => m.text)).toEqual(["église"]);
+    const diary = items.find((i) => i.path === "Diary.md");
+    // The alias "Old church" is two words, matched across the case difference.
+    expect(diary.mentions.map((m: any) => m.text)).toEqual(["église", "old CHURCH"]);
+    expect(diary.mentions[0]).toMatchObject({ before: "Visited the ", after: " today, then the old CHURCH." });
+
+    // Linking: the exact title keeps its form, anything else becomes an alias; a stale hash is a conflict.
+    const link = (body: object) => send(token, "POST", "/api/notes/mentions/link", { path: "Diary.md", target: "Garden/Église.md", base_hash: diary.hash, ...body });
+    const stale = await link({ start: diary.mentions[1].start, text: "old CHURCH", base_hash: "0".repeat(64) });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as any).current.content).toContain("old CHURCH");
+    expect((await link({ start: diary.mentions[1].start + 1, text: "ld CHURCH" })).status).toBe(409);
+    const ok = await link({ start: diary.mentions[1].start, text: "old CHURCH" });
+    expect(ok.status).toBe(200);
+    expect(await Bun.file(file("Diary.md")).text()).toBe("# Diary\n\n- Visited the église today, then the [[Église|old CHURCH]].\n");
+    // The old hash no longer matches: a second link from the same listing must not overwrite.
+    expect((await link({ start: diary.mentions[0].start, text: "église" })).status).toBe(409);
+
+    // A note that links here can still have other plain mentions.
+    const fresh = (await mentions("Garden/Église.md")).find((i) => i.path === "Diary.md");
+    expect(fresh.mentions.map((m: any) => m.text)).toEqual(["église"]);
+    await link({ start: fresh.mentions[0].start, text: "église", base_hash: fresh.hash });
+    expect(await Bun.file(file("Diary.md")).text()).toContain("Visited the [[Église|église]] today");
+    expect((await mentions("Garden/Église.md")).map((i) => i.path).sort()).toEqual(["Linked.md", "Table.md"]);
+
+    // In a table the alias's pipe is escaped.
+    const table = (await mentions("Garden/Église.md")).find((i) => i.path === "Table.md");
+    await link({ path: "Table.md", start: table.mentions[0].start, text: "Chapelle", base_hash: table.hash });
+    expect(await Bun.file(file("Table.md")).text()).toContain("| [[Église\\|Chapelle]] | x |");
+
+    expect(readFrontmatter("aliases:\n  - One two\n  - 'Three'\n").aliases).toEqual(["One two", "Three"]);
   });
 
   test("version previews drop list, task, quote and callout markers", async () => {
@@ -1702,5 +1759,135 @@ describe("obsidian sync support", () => {
     expect(readFileSync(join(setup.vaultDir, ".trash/photos/kitten.png"))).toEqual(Buffer.from(png));
     expect((await get(token, "/api/notes/attachment?name=kitten.png")).status).toBe(404);
     expect(await listed(token)).toEqual([]);
+  });
+});
+
+describe("calendar feed", () => {
+  const feedUrl = (token: string) => `/api/calendar/${token}.ics`;
+  const row = (over: Partial<Parameters<typeof icsFeed>[0][number]> = {}) => ({
+    path: "Plan.md",
+    raw: "- [ ] Pay rates 📅 2026-11-02",
+    text: "Pay rates",
+    due: "2026-11-02",
+    remind_at: Date.parse("2026-11-02T09:00:00+13:00"),
+    note_title: "Plan",
+    mtime: Date.parse("2026-10-30T01:02:03Z"),
+    ...over,
+  });
+  const unfold = (ics: string) => ics.replace(/\r\n /g, "");
+
+  test("open dated todos become events in the token owner's vault, nothing else", async () => {
+    setup.users.for("abc123");
+    await setup.vault.write(
+      "Plan.md",
+      [
+        "# Plan",
+        "- [ ] Pay rates 📅 2026-11-02",
+        "- [ ] Call mum 📅 2026-11-03 (@2026-11-03 18:30)",
+        "- [ ] Someday",
+        "- [x] Book flights 📅 2026-10-20 ✅ 2026-10-20",
+        "",
+      ].join("\n"),
+      null,
+    );
+    await setup.users.for("someone-else").vault.write("Theirs.md", "- [ ] Secret 📅 2026-11-04\n", null);
+    const token = setup.auth.issueCalendarToken("abc123");
+    const res = await setup.app.request(feedUrl(token));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toStartWith("text/calendar");
+    const ics = await res.text();
+    expect(ics.startsWith("BEGIN:VCALENDAR\r\n")).toBe(true);
+    expect(ics.endsWith("END:VCALENDAR\r\n")).toBe(true);
+    expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(2);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20261102\r\n");
+    expect(ics).toContain("SUMMARY:Pay rates\r\n");
+    expect(ics).toContain("DTSTART:20261103T183000Z\r\n");
+    expect(ics).toContain("BEGIN:VALARM");
+    expect(ics.match(/BEGIN:VALARM/g)).toHaveLength(1);
+    expect(ics).not.toContain("Someday");
+    expect(ics).not.toContain("Book flights");
+    expect(ics).not.toContain("Secret");
+    // The same todos give the same ids on the next fetch, so calendar apps update rather than duplicate.
+    const uids = (text: string) => text.match(/^UID:.*$/gm);
+    expect(uids(await (await setup.app.request(feedUrl(token))).text())).toEqual(uids(ics)!);
+    const theirs = setup.auth.issueCalendarToken("someone-else");
+    expect(await (await setup.app.request(feedUrl(theirs))).text()).toContain("SUMMARY:Secret");
+  });
+
+  test("an event keeps its id when the todo moves to another date or line", () => {
+    const uid = (r: ReturnType<typeof row>) => /^UID:(.*)$/m.exec(icsFeed([r], "UTC"))![1];
+    expect(uid(row({ due: "2026-12-01", raw: "- [ ] Pay rates 📅 2026-12-01" }))).toBe(uid(row()));
+    expect(uid(row({ text: "Pay water rates" }))).not.toBe(uid(row()));
+    const twice = unfold(icsFeed([row(), row()], "UTC")).match(/^UID:.*$/gm)!;
+    expect(new Set(twice).size).toBe(2);
+  });
+
+  test("timed todos use the configured zone; all-day ones have no time", () => {
+    const ics = icsFeed([row({ raw: "- [ ] Call 📅 2026-11-02 (@2026-11-02 18:30)", remind_at: Date.parse("2026-11-02T18:30:00+13:00") })], "Pacific/Auckland");
+    expect(ics).toContain("X-WR-TIMEZONE:Pacific/Auckland");
+    expect(ics).toContain("DTSTART;TZID=Pacific/Auckland:20261102T183000\r\n");
+    expect(ics).toContain("TRIGGER:PT0S");
+    const allDay = icsFeed([row()], "Pacific/Auckland");
+    expect(allDay).toContain("DTSTART;VALUE=DATE:20261102\r\n");
+    expect(allDay).not.toContain("VALARM");
+  });
+
+  test("text is escaped and long lines are folded without splitting characters", () => {
+    const text = "Buy milk, eggs; bread \\ butter\nsecond line " + "é🥛".repeat(60);
+    const ics = icsFeed([row({ text })], "UTC");
+    for (const line of ics.split("\r\n")) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(75);
+    const summary = /^SUMMARY:(.*)$/m.exec(unfold(ics))![1]!;
+    expect(summary.startsWith("Buy milk\\, eggs\\; bread \\\\ butter\\nsecond line é🥛")).toBe(true);
+    expect(summary).not.toContain("\ufffd");
+  });
+
+  test("recurring todos get an RRULE when it says the same thing", () => {
+    const rule = (every: string, due = "2026-11-02") => /^RRULE:(.*)$/m.exec(icsFeed([row({ raw: `- [ ] Bins 🔁 ${every} 📅 ${due}`, due })], "UTC"))?.[1] ?? null;
+    expect(rule("every week")).toBe("FREQ=WEEKLY");
+    expect(rule("every 3 days")).toBe("FREQ=DAILY;INTERVAL=3");
+    expect(rule("every weekday")).toBe("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR");
+    expect(rule("every Monday, Thursday")).toBe("FREQ=WEEKLY;BYDAY=MO,TH");
+    expect(rule("every week on Friday")).toBe("FREQ=WEEKLY;BYDAY=FR");
+    expect(rule("every month")).toBe("FREQ=MONTHLY");
+    expect(rule("every month", "2026-01-31")).toBeNull();
+    expect(rule("every week when done")).toBeNull();
+    expect(rule("every fortnight")).toBeNull();
+  });
+
+  test("the token only opens the feed", async () => {
+    const owner = await login();
+    const created = await setup.app.request("/api/auth/calendar", { method: "POST", headers: { authorization: `Bearer ${owner}` } });
+    expect(created.status).toBe(201);
+    const token = ((await created.json()) as any).token;
+    expect((await setup.app.request(feedUrl(token))).status).toBe(200);
+    for (const path of ["/api/notes", "/api/todos", "/api/auth/tokens", "/api/auth/me", "/api/events"]) {
+      expect((await get(token, path)).status).toBe(401);
+      expect((await setup.app.request(path, { headers: { cookie: `sink_session=${token}` } })).status).toBe(401);
+    }
+    expect((await setup.app.request("/api/auth/calendar", { method: "POST", headers: { authorization: `Bearer ${token}` } })).status).toBe(401);
+    expect((await setup.app.request("/mcp", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: "{}" })).status).toBe(401);
+    expect(setup.auth.check(token)).toBeNull();
+    expect(setup.auth.verify(token)).toBeNull();
+  });
+
+  test("only full sign-ins make a feed link, and other tokens don't open the feed", async () => {
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    expect((await setup.app.request("/api/auth/calendar", { method: "POST", headers: { authorization: `Bearer ${mcp}` } })).status).toBe(403);
+    expect((await setup.app.request("/api/auth/calendar", { method: "POST" })).status).toBe(401);
+    for (const other of [mcp, await login(), "sink_nope"]) expect((await setup.app.request(feedUrl(other))).status).toBe(404);
+  });
+
+  test("a new link replaces the old one, and a revoked one stops working", async () => {
+    const owner = await login();
+    const first = setup.auth.issueCalendarToken("abc123");
+    const second = setup.auth.issueCalendarToken("abc123");
+    expect((await setup.app.request(feedUrl(first))).status).toBe(404);
+    expect((await setup.app.request(feedUrl(second))).status).toBe(200);
+    const listed = ((await (await get(owner, "/api/auth/tokens")).json()) as any).tokens;
+    const feed = listed.find((t: any) => t.scope === "calendar");
+    expect(feed.last_used_at).not.toBeNull();
+    const revoke = await setup.app.request(`/api/auth/tokens/${feed.id}`, { method: "DELETE", headers: { authorization: `Bearer ${owner}` } });
+    expect(revoke.status).toBe(200);
+    expect((await setup.app.request(feedUrl(second))).status).toBe(404);
   });
 });

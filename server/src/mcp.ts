@@ -56,7 +56,7 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
         "Sink is the user's notes app: markdown files in their vault (Obsidian-compatible, organised in folders), plus " +
         "todos, which are `- [ ]` checkbox lines inside notes (Tasks plugin syntax: `📅 YYYY-MM-DD` due date, " +
         "`(@YYYY-MM-DD HH:mm)` reminder). Search first, then read_note for the full text. save_note creates or replaces " +
-        "a note; add_todo appends a todo to Todo.md, complete_todo ticks one off and update_todo changes or reschedules one. Notes and folders can be moved, " +
+        "a note, clip_url saves a web page as one; add_todo appends a todo to Todo.md, complete_todo ticks one off and update_todo changes or reschedules one. Notes and folders can be moved, " +
         "renamed and trashed; the trash keeps them for the user to restore, so nothing is ever deleted for good from here.",
     },
   );
@@ -187,6 +187,27 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
       }
       const n = await json<NoteMeta>(
         await api("/api/notes", { method: "POST", headers, body: JSON.stringify({ content, title: title ?? "", folder: folder ?? "" }) }),
+      );
+      return text({ created: noteBrief(n), hash: n.hash });
+    }),
+  );
+
+  server.registerTool(
+    "clip_url",
+    {
+      title: "Clip web page",
+      description:
+        "Save a web page's main article as a markdown note (with its source URL), fetched by the Sink server. Give the page's " +
+        "http(s) URL and optionally a folder. Only public pages work.",
+      inputSchema: {
+        url: z.string().max(2048).describe("http(s) address of the page"),
+        folder: z.string().max(1024).optional().describe('e.g. "Inbox" or "Reading". Default: vault root'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    safe(async ({ url, folder }) => {
+      const n = await json<NoteMeta>(
+        await api("/api/clip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, folder: folder ?? "" }) }),
       );
       return text({ created: noteBrief(n), hash: n.hash });
     }),

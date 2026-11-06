@@ -3,22 +3,27 @@
 //   SinkBridge.ready()                      page loaded, send a note
 //   SinkBridge.changed(text)                text edited (debounced)
 //   SinkBridge.openLink(target)             [[wikilink]] or url tapped
+//   SinkBridge.linkMention(src, hash, start, text)   "Link" pressed on an unlinked mention; reply with sink.backlinks/mentions again
 //   SinkBridge.pickImage()                  user wants to attach an image; reply with sink.insert(text)
 //   SinkBridge.pickTemplate()               /template: user wants a template; reply with sink.template(text or null)
+//   SinkBridge.haptic(kind)                 tick, confirm, reject or toggle (haptics.js; the WebView can't vibrate)
+//   SinkBridge.embed(target)                ![[Note]] needs that note; reply with sink.embed(target, note or null)
 // The app drives it with:
-//   sink.load({ text, dark, colors, links, line, plugins, board })   colors: { '--md-sys-color-primary': '#...', ... }
+//   sink.load({ text, path, dark, colors, links, line, plugins, board })   colors: { '--md-sys-color-primary': '#...', ... }
 //     board: the text is an Excalidraw board (.excalidraw.md); it opens in Excalidraw instead of the text editor.
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
 //   sink.setText(text)  sink.insert(text)  sink.getText()  sink.focus()
 //   sink.format(kind)   the bar above the keyboard: heading, h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike,
 //                       code, link, indent, outdent, undo, redo (see editor.js format)
+//   sink.embed(target, note)   a note for ![[target]]: { path, title, content } as GET /api/notes/file gives it, or null
 //   sink.backlinks(items)   GET /api/notes/backlinks' items, shown under the note; tapping one calls openLink(path)
+//   sink.mentions(items)   GET /api/notes/mentions' items: unlinked mentions, a collapsed section after the backlinks
 //   sink.inset(px)      how much of the page's bottom the app's floating toolbar covers; the cursor stays above it
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
 
 import { EditorView } from '@codemirror/view';
-import { backlinksHtml } from './backlinks.js';
+import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { createEditor } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
@@ -27,6 +32,7 @@ const bridge = window.SinkBridge ?? {
   ready() {},
   changed() {},
   openLink() {},
+  linkMention() {},
   pickImage() {},
 };
 
@@ -39,6 +45,14 @@ const pickTemplate = () =>
     bridge.pickTemplate();
   });
 
+// ![[Note]]s waiting on the app, by target.
+const embeds = new Map();
+const loadEmbed = (target) =>
+  new Promise((resolve) => {
+    embeds.set(target, [...(embeds.get(target) ?? []), resolve]);
+    bridge.embed(target);
+  });
+
 let editor = null;
 let links = [];
 let timer = null;
@@ -47,7 +61,7 @@ let inset = 0;
 const attachment = (ref) => `https://sink.attachment/${ref.split('/').map(encodeURIComponent).join('/')}`;
 
 window.sink = {
-  async load({ text = '', dark = false, colors = {}, links: targets = [], line = null, plugins = [], board = false } = {}) {
+  async load({ text = '', path = null, dark = false, colors = {}, links: targets = [], line = null, plugins = [], board = false } = {}) {
     if (board) return loadBoard(text, dark, colors);
     await loadPlugins(
       {
@@ -72,6 +86,9 @@ window.sink = {
       onOpenLink: (target) => bridge.openLink(target),
       resolveEmbed: attachment,
       resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
+      // An older app can't fetch them: embeds show just the note's name.
+      loadEmbed: bridge.embed ? loadEmbed : undefined,
+      path,
       linkTargets: () => links,
       bottomMargin: () => inset,
       // Only when the app can pick one (an older app has no pickTemplate, so the command stays hidden).
@@ -118,12 +135,28 @@ window.sink = {
     if (!view?.hasFocus) return;
     requestAnimationFrame(() => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest' }) }));
   },
+  embed(target, note) {
+    for (const resolve of embeds.get(target) ?? []) resolve(note);
+    embeds.delete(target);
+  },
   backlinks(items = []) {
-    const box = document.getElementById('links');
-    box.hidden = !items.length;
-    box.innerHTML = items.length ? backlinksHtml(items, { href: () => '#' }) : '';
+    linked = items;
+    drawLinks();
+  },
+  mentions(items = []) {
+    unlinked = items;
+    drawLinks();
   },
 };
+
+let linked = [];
+let unlinked = [];
+function drawLinks() {
+  const box = document.getElementById('links');
+  const href = () => '#';
+  box.innerHTML = (linked.length ? backlinksHtml(linked, { href }) : '') + mentionsHtml(unlinked, { href, open: box.querySelector('.unlinked')?.open });
+  box.hidden = !box.innerHTML;
+}
 
 // Excalidraw and React only download (here: load from the APK) when a board opens. Its fonts are bundled too, bar
 // the large CJK one, which falls back to the system's.
@@ -147,6 +180,7 @@ async function loadBoard(text, dark, colors) {
   });
 }
 
+onLinkMention(document.getElementById('links'), (m) => bridge.linkMention(m.src, m.hash, m.start, m.text));
 document.getElementById('links').addEventListener('click', (e) => {
   const a = e.target.closest('[data-path]');
   if (!a) return;

@@ -46,7 +46,9 @@ database loses nothing a rescan can't rebuild.
   per vault; tokens, OAuth, `users` and `allowed_users` (who
   may sign in, added by the owner in Settings → People; `routes/admin.ts`) live in the main DB. `passkeys.ts`
   passkey sign-in (`@simplewebauthn/server`) for invited people without a provider account; they're allowed as
-  `sub:passkey:…`. The web sign-in screen also handles `?invite=` links and the Android app's `?client=android` sign-in. `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
+  `sub:passkey:…`. The web sign-in screen also handles `?invite=` links and the Android app's `?client=android` sign-in. `push.ts` todo reminders
+  for browsers over Web Push (dependency-free; VAPID keys in the main DB, subscriptions and sent reminders in each
+  account's DB, a 30s tick in `index.ts`). `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
 
 ### Web (`web/src/`)
 
@@ -55,11 +57,13 @@ database loses nothing a rescan can't rebuild.
 - `notes.js` grid, cards (formatted excerpts), Recent row, folders/tree/tags sidebar, search (`#tag` filters
   locally), note screen (editor, autosave, conflicts, history, share, archive, backlinks), todos, trash, live changes.
 - `editor.js` CodeMirror live preview (headings, tasks, callouts, tables, wikilinks, images, plugin code blocks,
-  properties widget, slash commands incl. `/table`, `/template`). Must keep `root: document` (the page lives in
+  properties widget, slash commands incl. `/table`, `/template`, `![[Note]]`/`![[Note#Heading]]` embeds as nested read-only
+  editors via `opts.loadEmbed`: depth 2, never a note above itself; share links get the name only, public pages
+  only published notes). Must keep `root: document` (the page lives in
   `<m3e-theme>`'s shadow root; without it the caret desyncs).
 - `dialogs.js` native `<dialog>` helpers (text prompt, folder picker, version history, share, list picker).
 - `util.js` shared `esc`, `folderOf`, `inlineHtml`, `tableCells`. Always `esc()` before putting text in HTML.
-- `board.js` Excalidraw (Obsidian plugin file format). `backlinks.js`, `templates.js`, `keep-import.js`
+- `board.js` Excalidraw (Obsidian plugin file format). `backlinks.js` (linked and unlinked mentions), `templates.js`, `keep-import.js`
   (zip read in the browser with `DecompressionStream`), `notion-import.js` (reuses its zip reader), `plugin-api.js` +
   `plugins/`.
 - Extra entry pages: `editor.html` + `embed-editor.js` (the Android WebView editor; talks over `window.SinkBridge`),

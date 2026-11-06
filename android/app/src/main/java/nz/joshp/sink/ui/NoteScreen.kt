@@ -141,6 +141,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import nz.joshp.sink.data.backlinksJson
+import nz.joshp.sink.data.linkMention
+import nz.joshp.sink.data.mentionsJson
 import nz.joshp.sink.data.pluginFile
 import nz.joshp.sink.data.saveNote
 import nz.joshp.sink.data.templatesIn
@@ -174,16 +176,22 @@ private class Bridge(
     val onReady: () -> Unit,
     val onChanged: (String) -> Unit,
     val onLink: (String) -> Unit,
+    val onLinkMention: (src: String, hash: String, start: Int, text: String) -> Unit,
     val onPickImage: () -> Unit,
     val onPickTemplate: () -> Unit,
+    val onHaptic: (String) -> Unit,
+    val onEmbed: (String) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
 
     @JavascriptInterface fun ready() = main.post(onReady).let { }
     @JavascriptInterface fun changed(text: String) = main.post { onChanged(text) }.let { }
     @JavascriptInterface fun openLink(target: String) = main.post { onLink(target) }.let { }
+    @JavascriptInterface fun haptic(kind: String) = main.post { onHaptic(kind) }.let { }
+    @JavascriptInterface fun linkMention(src: String, hash: String, start: Int, text: String) = main.post { onLinkMention(src, hash, start, text) }.let { }
     @JavascriptInterface fun pickImage() = main.post(onPickImage).let { }
     @JavascriptInterface fun pickTemplate() = main.post(onPickTemplate).let { }
+    @JavascriptInterface fun embed(target: String) = main.post { onEmbed(target) }.let { }
 }
 
 private enum class TemplateAsk { Slash, Menu }
@@ -221,6 +229,9 @@ private class Editing(var path: String?, val draftKey: String, var folder: Strin
     var loaded = false
     val key get() = path ?: draftKey
     val dirty get() = loaded && current != saved
+    /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */
+    var flushing = 0
+    var closed = false
 }
 
 /**
@@ -245,6 +256,13 @@ fun NoteScreen(
     sharedFiles: List<File> = emptyList(),
     /** Set to this note's save-then-continue, for a list beside it that swaps in another note. */
     flusher: NoteFlusher? = null,
+    /** The card this note grows out of and shrinks back into (see [morphBounds]). */
+    morphKey: String? = null,
+    /**
+     * Back is the NavHost's, so a predictive back gesture can animate the note away as it's dragged; the note saves as
+     * it pauses (when the gesture starts, or when it's popped) instead of before leaving.
+     */
+    navBack: Boolean = false,
 ) {
     // A board opens in the same page, in Excalidraw, and saves like a note: hash-checked, queued offline, with history.
     val board = path?.endsWith(".excalidraw.md", ignoreCase = true) == true
@@ -257,6 +275,7 @@ fun NoteScreen(
     val snackbar = remember { SnackbarHostState() }
     val store = remember { NoteStore(context) }
     val draftKey = rememberSaveable { NoteSaver.newDraftKey() }
+    val main = remember { Handler(Looper.getMainLooper()) }
     // A new note goes in the folder being browsed, unless it was opened for a specific one.
     val ed = remember(path) { Editing(path, draftKey, if (path == null && folder.isEmpty()) vm.state.value.folder else folder) }
     val colors = MaterialTheme.colorScheme
@@ -264,7 +283,8 @@ fun NoteScreen(
 
     var status by remember { mutableStateOf("") }
     var pinned by remember { mutableStateOf(false) }
-    var color by remember { mutableStateOf<String?>(null) }
+    // Known from the list already, so the page opens in its card's colour rather than changing once loaded.
+    var color by remember { mutableStateOf(vm.state.value.notes.find { it.path == path }?.color) }
     // Where the note is now (it moves when a new one is first saved, renamed or filed), for the toolbar's name and folder.
     var shownPath by remember { mutableStateOf(path) }
     var menu by remember { mutableStateOf(false) }
@@ -284,6 +304,14 @@ fun NoteScreen(
     fun setEditorText(text: String) = js("window.sink.setText(${JsonPrimitive(text)})")
 
     suspend fun api(): Api? = vm.api()
+
+    // Linked mentions, then the unlinked ones (slower: the server reads notes); a failure just leaves a section out.
+    suspend fun showLinks(p: String) {
+        api()?.let { a ->
+            runCatching { a.backlinksJson(p) }.onSuccess { js("window.sink.backlinks($it)") }
+            runCatching { a.mentionsJson(p) }.onSuccess { js("window.sink.mentions($it)") }
+        }
+    }
 
     fun applyMeta(n: Note) {
         pinned = n.pinned
@@ -339,6 +367,7 @@ fun NoteScreen(
                     ed.saved = text
                     status = "Saved"
                 } else if (theirs != null) {
+                    haptics.reject()
                     ed.hash = theirs.hash
                     ed.saved = theirs.content
                     ed.current = theirs.content
@@ -348,6 +377,7 @@ fun NoteScreen(
                     snackbar.showSnackbar("Changed somewhere else. Your version was saved as “${result.copy?.fileName}”.")
                 } else {
                     // Deleted elsewhere: keep going in the copy.
+                    haptics.reject()
                     result.copy?.let {
                         ed.path = it.path
                         ed.hash = it.hash
@@ -413,10 +443,18 @@ fun NoteScreen(
         val w = web
         if (w == null || !ed.loaded) return then()
         w.evaluateJavascript("document.activeElement && document.activeElement.blur()", null)
-        w.postDelayed({ readAndSave(w, then) }, 120)
+        ed.flushing++
+        // Not w.postDelayed, which waits for the view to be attached: a note popped mid-flush never is again.
+        main.postDelayed({
+            readAndSave(w) {
+                if (--ed.flushing == 0 && ed.closed) w.destroy()
+                then()
+            }
+        }, 120)
     }
 
-    fun flushAndLeave() = flush(onBack)
+    // Not if it's gone meanwhile (back pressed again): it would leave whatever's under it too.
+    fun flushAndLeave() = flush { if (!ed.closed) onBack() }
     // Handed back when this note goes, so a later tap in the list doesn't wait on a closed page.
     if (flusher != null) DisposableEffect(flusher) {
         flusher.flush = ::flush
@@ -447,7 +485,7 @@ fun NoteScreen(
         onDispose { lifecycle.removeObserver(observer) }
     }
 
-    BackHandler { flushAndLeave() }
+    BackHandler(enabled = !navBack) { flushAndLeave() }
 
     // Load: the phone's copy first (works offline), then the server's.
     LaunchedEffect(path) {
@@ -522,6 +560,7 @@ fun NoteScreen(
         if (!pageReady) return@LaunchedEffect
         val payload = buildJsonObject {
             put("text", text)
+            ed.path?.let { put("path", it) }
             put("dark", dark)
             putJsonObject("colors") { colors.css().forEach { (k, v) -> put(k, v) } }
             put("links", buildJsonArray {
@@ -532,10 +571,9 @@ fun NoteScreen(
             put("board", board)
         }
         js("window.sink.load($payload)")
-        // Linked mentions after the text, so a slow or offline server never holds the note up.
+        // Mentions after the text, so a slow or offline server never holds the note up.
         val p = ed.path?.takeIf { !board } ?: return@LaunchedEffect
-        val items = runCatching { api()?.backlinksJson(p) }.getOrNull() ?: return@LaunchedEffect
-        js("window.sink.backlinks($items)")
+        showLinks(p)
     }
 
     // Edits made elsewhere show up while the note sits open and untouched: at once from the live stream, and by a
@@ -579,6 +617,18 @@ fun NoteScreen(
         }
     }
 
+    fun linkMention(src: String, hash: String, start: Int, text: String) {
+        val p = ed.path ?: return
+        scope.launch {
+            runCatching { api()!!.linkMention(src, p, start, text, hash) }.onFailure {
+                snackbar.showSnackbar(
+                    if ((it as? ApiException)?.code == 409) "That note changed. Try again." else "Couldn't link: ${it.message}",
+                )
+            }
+            showLinks(p)
+        }
+    }
+
     fun openLink(target: String) {
         if (Regex("^(https?:|mailto:)", RegexOption.IGNORE_CASE).containsMatchIn(target)) {
             runCatching { CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(target)) }
@@ -590,6 +640,16 @@ fun NoteScreen(
             save()
             val hit = vm.resolveLink(target) ?: vm.createLinked(target)
             if (hit != null) onOpenNote(hit.path) else snackbar.showSnackbar("Couldn't open “$target”")
+        }
+    }
+
+    /** A note for the page's `![[target]]`: fresh from the server, else the offline copy, else none. */
+    fun sendEmbed(target: String) {
+        scope.launch {
+            val hit = vm.resolveLink(target)
+            val n = hit?.let { runCatching { api()?.note(it.path) }.getOrNull() ?: store.note(it.path) }
+            val note = if (hit != null && n != null) buildJsonObject { put("path", n.path); put("title", hit.title); put("content", n.content) } else null
+            js("window.sink.embed(${JsonPrimitive(target)}, ${note ?: "null"})")
         }
     }
 
@@ -713,7 +773,8 @@ fun NoteScreen(
     }
 
     val paper = noteTint(color, MaterialTheme.colorScheme.surfaceContainerLowest, 0.16f)
-    Box(Modifier.fillMaxSize().background(paper)) {
+    Box(Modifier.fillMaxSize().morphBounds(morphKey, note = true).background(paper)) {
+      Box(Modifier.fillMaxSize().morphContent()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             AndroidView(
                 factory = { ctx -> editorWebView(ctx, vm, Bridge(
@@ -726,8 +787,21 @@ fun NoteScreen(
                         }
                     },
                     onLink = ::openLink,
+                    onLinkMention = ::linkMention,
                     onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onPickTemplate = { templating = TemplateAsk.Slash },
+                    onHaptic = { kind ->
+                        when (kind) {
+                            "tick" -> haptics.tick()
+                            "confirm" -> haptics.confirm()
+                            "reject" -> haptics.reject()
+                            // The page only sends a toggle for unticking; ticking is a confirm.
+                            "toggle" -> haptics.toggle(false)
+                            "longPress" -> haptics.longPress()
+                            "threshold" -> haptics.threshold()
+                        }
+                    },
+                    onEmbed = ::sendEmbed,
                 )).also { web = it } },
                 // Excalidraw's tools sit along the bottom, so a board stops above the floating toolbar instead of under it.
                 modifier = Modifier.fillMaxWidth().weight(1f)
@@ -797,6 +871,7 @@ fun NoteScreen(
             Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
                 .padding(bottom = if (keyboardUp) 56.dp else TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 8.dp),
         )
+      }
     }
 
     if (menu) {
@@ -829,7 +904,12 @@ fun NoteScreen(
         )
     }
 
-    DisposableEffect(Unit) { onDispose { web?.destroy() } }
+    DisposableEffect(Unit) {
+        onDispose {
+            ed.closed = true
+            if (ed.flushing == 0) web?.destroy()
+        }
+    }
 
     templating?.let { ask ->
         // /template is waiting on an answer; anything but a template is null, so it stops waiting.

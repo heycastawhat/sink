@@ -16,10 +16,14 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Leaving Notion:** import its Markdown & CSV export from Settings: the page tree, links between pages, images, and
   databases as tables with each row's properties in its page's frontmatter.
+- **Web clipper:** New → Clip a web page, a bookmarklet from Settings, or Share → Sink on Android saves a page's article as a
+  markdown note with its source address. Sink fetches public pages only, never anything on your own network.
 - **Todos:** every `- [ ]` in every note, in one list, with due dates and reminders (Obsidian Tasks syntax).
   Recurring todos (`🔁 every week`) add their next copy when ticked; tick with Undo, tap to edit, reschedule in a tap.
   Quick add reads dates off the end ("call mum tomorrow 6pm", "bins every tuesday"); priorities sort and show,
   start dates (`🛫`) keep a todo out of the way until then, and the Todos tab counts what's overdue or due today.
+- **Calendar feed:** Settings makes a private link that Google or Apple Calendar can subscribe to: open todos with a date
+  or reminder show up as all-day or timed events (repeats included), and the link can't open anything else. Revoke it any time.
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
 - **Obsidian plugin:** keeps a local Obsidian vault (desktop or mobile) in sync with Sink over the internet.
@@ -102,9 +106,11 @@ Or let [Obtainium](https://github.com/ImranR98/Obtainium) install and update it:
 - Edits made offline are saved on the phone and sent when you're back online.
 - Todo reminders arrive as notifications, with Done, 1 hour and Tomorrow buttons.
 - "New note" Quick Settings tile, and "Share → Sink" from any app turns text into a note, or photos and PDFs into a
-  note with them attached.
+  note with them attached. A shared link on its own is clipped as a web page.
 
-On iPhone or anywhere else, the web app works on phones too.
+On iPhone or anywhere else, the web app works on phones too. Install it (Add to Home Screen) and turn on Settings →
+Todo reminders to get reminders there as notifications too (Web Push; on iPhone only from the installed app). It's
+per browser, so turn it on only where you don't already have the Android app.
 
 ## Using it with Obsidian
 
@@ -138,7 +144,7 @@ on the same page and run the command it shows.
 
 Tools:
 
-- **Notes:** `search_notes` (by words, or list a folder), `read_note`, `save_note`, `style_note` (pin, colour)
+- **Notes:** `search_notes` (by words, or list a folder), `read_note`, `save_note`, `style_note` (pin, colour), `clip_url` (save a web page as a note)
 - **Folders:** `create_folder`, `move_note` (move or rename a note or a whole folder)
 - **Todos:** `list_todos`, `add_todo`, `complete_todo`, `update_todo`
 - **Trash:** `trash_note`, `list_trash`, `restore_from_trash`. Assistants can't delete anything for good; only you can
@@ -170,6 +176,8 @@ accepted; everything else is moved to a "Rejected" folder.
 
 - Run it behind HTTPS and list every address you use in `SINK_PUBLIC_URLS`; browser requests from anywhere else
   are refused.
+- The calendar feed link is a secret in a URL (calendar apps can't send headers). Its token only works on the feed,
+  not the API or MCP; anyone holding the link can read your dated todos until you revoke or replace it in Settings.
 - Tokens for AI assistants can read and write notes and todos but can't see or create other sign-ins. Revoke them
   in Settings.
 - Sink won't follow symlinks out of the notes folder, so a link synced into it can't expose the server's files.

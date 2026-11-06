@@ -146,3 +146,59 @@ body.board .note-editor {
     display: inline;
   }
 }
+
+/* Unlinked mentions: collapsed under the linked ones, a "Link" button on each. */
+.unlinked {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.unlinked > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.unlinked > summary::before {
+  content: '▸';
+  width: 1em;
+}
+
+.unlinked[open] > summary::before {
+  content: '▾';
+}
+
+.unlinked .backlink-title {
+  color: inherit;
+  text-decoration: none;
+}
+
+.mention {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mention .backlink-line {
+  flex: 1;
+  min-width: 0;
+}
+
+.mention-link {
+  flex: none;
+  padding: 4px 12px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 999px;
+  background: none;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mention-link:disabled {
+  opacity: 0.5;
+}

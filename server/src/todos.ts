@@ -103,7 +103,7 @@ export function todoLine(text: string, due?: string, time?: string, every?: stri
   return `- [ ] ${clean}${repeat}${due ? ` 📅 ${due}` : ""}`;
 }
 
-const REMINDER = new RegExp(String.raw`\s*\(@(${DATE})(?:[ T](\d{1,2}:\d{2}))?\)`);
+export const REMINDER = new RegExp(String.raw`\s*\(@(${DATE})(?:[ T](\d{1,2}:\d{2}))?\)`);
 const DUE = new RegExp(String.raw`\s*📅\uFE0F?\s*(${DATE})`, "u");
 const SCHEDULED = new RegExp(String.raw`\s*⏳\uFE0F?\s*(${DATE})`, "u");
 
@@ -278,6 +278,9 @@ export function nextDate(rule: string, from: string): string | null {
   return null;
 }
 
+/** The Tasks rule on a task line ("every week"), if it has one. */
+export const repeatRule = (raw: string) => /🔁\uFE0F?\s*([^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(^]*)/u.exec(raw)?.[1]?.trim() || null;
+
 /**
  * The next copy of a recurring task (`🔁 every week`), open again with its dates moved on, or null if it doesn't
  * recur. Like Tasks: the next date counts from the due date (else scheduled, else start), or from today with
@@ -287,7 +290,7 @@ export function nextOccurrence(raw: string, today: string): string | null {
   const m = TASK.exec(raw);
   if (!m) return null;
   const rest = m[4]!;
-  const rule = /🔁\uFE0F?\s*([^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(^]*)/u.exec(rest)?.[1]?.trim();
+  const rule = repeatRule(raw);
   if (!rule) return null;
   const whenDone = /\s+when done$/i.test(rule);
   const base = [/📅\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /⏳\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /🛫\uFE0F?\s*(\d{4}-\d{2}-\d{2})/u, /\(@(\d{4}-\d{2}-\d{2})/u]
