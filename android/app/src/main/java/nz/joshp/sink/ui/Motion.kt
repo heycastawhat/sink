@@ -8,6 +8,7 @@ import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -68,6 +69,12 @@ object BackMotion {
     fun <T> track(): FiniteAnimationSpec<T> = tween(MS, easing = LinearEasing)
 
     /** The same, starting part way (from [from] to the end of the gesture's travel). */
+    /**
+     * A note opening (and the screen it opens over settling back): critically damped and a touch slower than the
+     * expressive spring, so it glides into place rather than bouncing.
+     */
+    fun <T> open(): FiniteAnimationSpec<T> = spring(dampingRatio = 1f, stiffness = 300f)
+
     fun <T> late(from: Float): FiniteAnimationSpec<T> = tween((MS * (1 - from)).toInt(), delayMillis = (MS * from).toInt(), easing = LinearEasing)
 }
 
@@ -93,7 +100,7 @@ fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
     // which a shape refuses (that crashed the app mid-transition): held at zero. Under a back gesture it tracks the
     // finger instead of springing.
     val corner = if (note) {
-        nav.transition.animateDp({ if (BackMotion.predictive) BackMotion.track() else motion.defaultSpatialSpec() }, label = "morph-corner") {
+        nav.transition.animateDp({ if (BackMotion.predictive) BackMotion.track() else BackMotion.open() }, label = "morph-corner") {
             if (it == EnterExitState.Visible) 0.dp else if (key != null && morph != null) 16.dp else 28.dp
         }.value.coerceAtLeast(0.dp)
     } else 16.dp
@@ -108,7 +115,7 @@ fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
             nav,
             enter = fadeIn(motion.defaultEffectsSpec()),
             exit = fadeOut(motion.fastEffectsSpec()),
-            boundsTransform = BoundsTransform { _, _ -> if (BackMotion.predictive) BackMotion.track() else motion.defaultSpatialSpec() },
+            boundsTransform = BoundsTransform { _, _ -> if (BackMotion.predictive) BackMotion.track() else BackMotion.open() },
             resizeMode = SharedTransitionScope.ResizeMode.RemeasureToBounds,
             clipInOverlayDuringTransition = OverlayClip(RoundedCornerShape(corner)),
         )

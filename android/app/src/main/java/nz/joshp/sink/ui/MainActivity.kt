@@ -51,6 +51,8 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -445,11 +447,11 @@ class MainActivity : ComponentActivity() {
                 // A note rises over the screen it came from, which settles back a little; tabs fade through.
                 enterTransition = {
                     BackMotion.predictive = false
-                    if (isNote(targetState)) slideInVertically(motion.defaultSpatialSpec()) { it / 10 } + fadeIn(motion.defaultEffectsSpec())
+                    if (isNote(targetState)) slideInVertically(BackMotion.open()) { it / 12 } + fadeIn(tween(260, easing = LinearOutSlowInEasing))
                     else fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f)
                 },
                 exitTransition = {
-                    if (isNote(targetState)) fadeOut(motion.defaultEffectsSpec()) + scaleOut(motion.defaultSpatialSpec(), targetScale = 0.96f)
+                    if (isNote(targetState)) fadeOut(tween(300)) + scaleOut(BackMotion.open(), targetScale = 0.96f)
                     else fadeOut(motion.fastEffectsSpec())
                 },
                 popEnterTransition = {
