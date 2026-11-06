@@ -14,7 +14,7 @@
 }
 
 .note-editor .cm-editor .cm-scroller {
-  font-family: 'Roboto Flex', system-ui, sans-serif;
+  font-family: 'Roboto Flex Variable', system-ui, sans-serif;
   line-height: inherit;
   overflow: visible;
 }
@@ -288,7 +288,7 @@
   background: var(--md-sys-color-surface-container-high);
   box-shadow: 0 8px 24px color-mix(in srgb, var(--md-sys-color-shadow) 24%, transparent);
   color: var(--md-sys-color-on-surface);
-  font-family: 'Roboto Flex', system-ui, sans-serif;
+  font-family: 'Roboto Flex Variable', system-ui, sans-serif;
 }
 
 /* !important beats CodeMirror's base theme (monospace list, italic details, underlined matches), whose selectors

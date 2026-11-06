@@ -1,0 +1,12 @@
+/* Self-hosted so the installed app opens offline (sw.js caches /assets/) and pages don't call Google. */
+@import '@fontsource-variable/roboto-flex/full.css';
+
+/* The family name m3e-icon asks for. Every axis, as m3e-icon sets FILL, wght, GRAD and opsz. Block, not swap:
+   until the symbols arrive, icons would show as their ligature names ("add", "folder"). */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('@fontsource-variable/material-symbols-outlined/files/material-symbols-outlined-latin-full-normal.woff2') format('woff2');
+}

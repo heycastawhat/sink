@@ -337,7 +337,11 @@ describe("web app", () => {
     expect((await app.request("/sw.js")).headers.get("cache-control")).toBe("no-cache");
     expect((await app.request("/assets/main-abc.js")).headers.get("cache-control")).toContain("immutable");
     expect((await app.request("/assets/main-old.js")).status).toBe(404);
-    expect((await app.request("/")).headers.get("cache-control")).toBe("no-cache");
+    const page = await app.request("/");
+    expect(page.headers.get("cache-control")).toBe("no-cache");
+    // Fonts are bundled, so pages never load anything from Google.
+    expect(page.headers.get("content-security-policy")).toContain("font-src 'self' data:;");
+    expect(page.headers.get("content-security-policy")).not.toContain("google");
   });
 });
 

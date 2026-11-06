@@ -1,3 +1,5 @@
+@import './fonts.css';
+
 /* A shared note (/s/<id>): the editor's look, read-only, centred, light or dark with the reader's system. */
 :root {
   --md-sys-color-surface-container-lowest: #fff;
@@ -72,7 +74,7 @@ body {
   border-radius: 12px;
   background: var(--md-sys-color-surface-container);
   color: var(--md-sys-color-on-surface-variant);
-  font: 14px/1.4 'Roboto Flex', system-ui, sans-serif;
+  font: 14px/1.4 'Roboto Flex Variable', system-ui, sans-serif;
 }
 
 .share-bar label {

@@ -33,7 +33,7 @@ body {
   margin: 0;
   background: transparent;
   color: var(--md-sys-color-on-surface);
-  font-family: 'Roboto Flex', Roboto, system-ui, sans-serif;
+  font-family: 'Roboto Flex Variable', Roboto, system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
 
