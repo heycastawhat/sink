@@ -254,7 +254,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
 
     // Pulling up for a new note works from the search field and toolbar area too, not just the list.
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest).pullUpFromAnywhere(pullUp)) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(Modifier.fillMaxSize().liftedByPullUp(pullUp).statusBarsPadding()) {
             ScreenTitle(
                 state.folder.substringAfterLast('/').ifEmpty { "Notes" },
                 sub = subtitle,
