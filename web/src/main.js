@@ -97,6 +97,17 @@ const state = {
 
 // ---------- auth ----------
 
+// The installed app is a share target (manifest.webmanifest): the share sheet opens /shared?title=…&text=…&url=….
+// A link (Android often sends it as the text) goes to the clip route, anything else to a new note; the address is
+// swapped for that route straight away so reload and back don't share it again.
+if (location.pathname === '/shared') {
+  const shared = new URLSearchParams(location.search);
+  const [title, text, url] = ['title', 'text', 'url'].map((k) => shared.get(k)?.trim() ?? '');
+  const link = url || (/^https?:\/\/\S+$/i.test(text) ? text : '');
+  const body = title ? `# ${title}\n\n${text}` : text;
+  history.replaceState(null, '', link ? `/#/clip?url=${encodeURIComponent(link)}` : body ? `/#/new?text=${encodeURIComponent(body)}` : '/#/new');
+}
+
 // The sign-in screen also takes invite links (?invite=…) and the Android app's sign-in (?client=android&…), which
 // always show it, even in a browser that's already signed in.
 const params = new URLSearchParams(location.search);
@@ -112,8 +123,8 @@ async function boot() {
     await api.me();
     showApp();
   } catch (err) {
-    // Signing in comes back to the bare address, so a clip from the bookmarklet waits until then.
-    if (err instanceof Unauthorized && location.hash.startsWith('#/clip')) sessionStorage.setItem(AFTER_SIGN_IN, location.hash);
+    // Signing in comes back to the bare address, so a clip from the bookmarklet or a share waits until then.
+    if (err instanceof Unauthorized && /^#\/(clip|new)\?/.test(location.hash)) sessionStorage.setItem(AFTER_SIGN_IN, location.hash);
     if (err instanceof Unauthorized) showLogin();
     else toast(`Can't reach server: ${err.message}`);
   }
@@ -244,18 +255,21 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme
 
 // ---------- routing ----------
 // Hash routes so reloads, the back button and links keep their place:
-// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new[?folder=F]  #/clip?url=U  #/todos  #/trash  #/settings
+// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new[?folder=F&text=T]  #/clip?url=U  #/todos  #/trash  #/settings
 
 function parseHash() {
   const [path, query = ''] = (location.hash.replace(/^#/, '') || '/').split('?');
   const [, first = '', ...rest] = path.split('/');
-  const base = { view: 'notes', folder: '', note: null, line: null, draft: false, clip: null };
+  const base = { view: 'notes', folder: '', note: null, line: null, draft: false, text: '', clip: null };
   if (!first || first === 'notes') return { ...base, folder: decodeURIComponent(rest.join('/')) };
   if (first === 'n' && rest.length) {
     const line = new URLSearchParams(query).get('line');
     return { ...base, note: rest.map(decodeURIComponent).join('/'), line: line == null ? null : Number(line) };
   }
-  if (first === 'new') return { ...base, draft: true, folder: new URLSearchParams(query).get('folder') ?? '' };
+  if (first === 'new') {
+    const q = new URLSearchParams(query);
+    return { ...base, draft: true, folder: q.get('folder') ?? '', text: q.get('text') ?? '' };
+  }
   if (first === 'clip') return { ...base, clip: new URLSearchParams(query).get('url') };
   if (['todos', 'trash', 'settings'].includes(first)) return { ...base, view: first };
   return base;
@@ -282,7 +296,11 @@ function applyRoute() {
       notes.setQuery('');
     }
     if (route.note) notes.openNote(route.note, { line: route.line });
-    else if (route.draft) notes.openDraft({ folder: state.folder });
+    else if (route.draft && route.text) {
+      // Shared text: once it's in a draft, leave it out of the address so reload doesn't make a second note.
+      history.replaceState(null, '', state.folder ? `#/new?folder=${encodeURIComponent(state.folder)}` : '#/new');
+      notes.openDraft({ folder: state.folder, text: route.text });
+    } else if (route.draft) notes.openDraft({ folder: state.folder });
     else if (notes.noteIsOpen()) notes.closeNote();
   }
   if (state.view !== 'notes' && notes.noteIsOpen()) notes.closeNote();
