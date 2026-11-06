@@ -19,7 +19,7 @@ import { api, Unauthorized } from './api.js';
 import * as notes from './notes.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
-import { askConfirm } from './dialogs.js';
+import { askConfirm, showQr } from './dialogs.js';
 import { hapticsEnabled, setHaptics } from './haptics.js';
 import { esc } from './util.js';
 import { acceptInvite, inviteName, passkeysWork, signInWithPasskey } from './passkey.js';
@@ -102,13 +102,18 @@ const state = {
 const params = new URLSearchParams(location.search);
 const signInParams = ['client', 'device', 'challenge', 'next'].filter((k) => params.has(k)).map((k) => [k, params.get(k)]);
 
+const AFTER_SIGN_IN = 'sink.afterSignIn';
+
 async function boot() {
   if (params.has('invite')) return showInvite(params.get('invite'));
+  if (params.has('login')) return showPhoneLogin(params.get('login'));
   if (params.get('client') === 'android') return showLogin();
   try {
     await api.me();
     showApp();
   } catch (err) {
+    // Signing in comes back to the bare address, so a clip from the bookmarklet waits until then.
+    if (err instanceof Unauthorized && location.hash.startsWith('#/clip')) sessionStorage.setItem(AFTER_SIGN_IN, location.hash);
     if (err instanceof Unauthorized) showLogin();
     else toast(`Can't reach server: ${err.message}`);
   }
@@ -121,7 +126,7 @@ function showLogin() {
     .then((r) => r.json())
     .then(({ provider, passkeys }) => {
       if (provider) $('login-label').textContent = `Sign in with ${provider}`;
-      $('login-passkey').hidden = !passkeys || !passkeysWork() || params.has('invite');
+      $('login-passkey').hidden = !passkeys || !passkeysWork() || params.has('invite') || params.has('login');
       // The Android app opens this screen; with nothing to choose, straight on to the provider.
       if (params.get('client') === 'android' && $('login-passkey').hidden) $('login-submit').click();
     })
@@ -155,6 +160,26 @@ async function showInvite(token) {
   }
 }
 
+/** A phone's camera opened the link in a QR code from Settings on a signed-in browser. */
+function showPhoneLogin(code) {
+  showLogin();
+  $('login-submit').hidden = true;
+  $('login-tagline').textContent = 'Sign this browser in with the code you scanned?';
+  $('phone-accept').hidden = false;
+  $('phone-accept').onclick = async () => {
+    loginError('');
+    const res = await fetch('/api/auth/qr/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code, device: 'Phone browser', cookie: true }),
+    });
+    if (res.ok) return location.replace('/');
+    loginError((await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`);
+    $('phone-accept').hidden = true;
+    $('login-submit').hidden = false;
+  };
+}
+
 async function showApp() {
   $('login').hidden = true;
   $('app').hidden = false;
@@ -172,7 +197,11 @@ async function showApp() {
     },
     bundledPlugins,
   );
+  const after = sessionStorage.getItem(AFTER_SIGN_IN);
+  sessionStorage.removeItem(AFTER_SIGN_IN);
+  if (after) history.replaceState(null, '', after);
   applyRoute();
+  syncReminders().catch(() => {});
 }
 
 $('login-submit').addEventListener('click', () => {
@@ -471,6 +500,10 @@ async function renderSettings() {
 
 <section class="setting-card">
   <h2>Signed-in devices and assistants</h2>
+  <div class="setting-row">
+    <div class="grow"><div>Sign in on your phone</div><div class="muted small">Scan a code with the Sink app, or your phone's camera to use Sink in its browser.</div></div>
+    <m3e-button id="phone-login" variant="tonal">${ic('qr_code_2', 'icon')}Show code</m3e-button>
+  </div>
   <div id="connect-tokens" class="token-list"><m3e-loading-indicator></m3e-loading-indicator></div>
 </section>
 
@@ -671,6 +704,10 @@ async function pushSubscription() {
   return reg ? { reg, sub: await reg.pushManager.getSubscription() } : null;
 }
 
+// Which account turned reminders on in this browser, so someone else signing in here doesn't get them.
+const PUSH_ACCOUNT = 'sink.pushAccount';
+const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
 async function setReminders(on) {
   const push = await pushSubscription();
   if (!push) return;
@@ -678,12 +715,39 @@ async function setReminders(on) {
     await api.pushUnsubscribe(push.sub.endpoint).catch(() => {});
     await push.sub.unsubscribe();
   }
+  localStorage.removeItem(PUSH_ACCOUNT);
   if (!on) return;
   if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are blocked for this site');
-  const { key } = await api.pushKey();
+  const [{ key }, me] = await Promise.all([api.pushKey(), api.me()]);
   const applicationServerKey = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-  const sub = await push.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
-  await api.pushSubscribe(sub.toJSON());
+  // The registration can still be installing on a first visit; subscribing needs an active worker.
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+  try {
+    await api.pushSubscribe(sub.toJSON());
+  } catch (err) {
+    await sub.unsubscribe();
+    throw err;
+  }
+  localStorage.setItem(PUSH_ACCOUNT, me.subject);
+}
+
+/**
+ * On each start, makes this browser's subscription match the server: dropped if another account turned it on or the
+ * server's key changed (a new database), else sent again, which also restores one the server lost.
+ */
+async function syncReminders() {
+  const push = await pushSubscription();
+  if (!push?.sub || Notification.permission !== 'granted') return;
+  const [{ key }, me] = await Promise.all([api.pushKey(), api.me()]);
+  const owner = localStorage.getItem(PUSH_ACCOUNT) ?? me.subject;
+  const subKey = push.sub.options.applicationServerKey;
+  if (owner !== me.subject || (subKey && b64u(subKey) !== key)) {
+    localStorage.removeItem(PUSH_ACCOUNT);
+    return push.sub.unsubscribe();
+  }
+  await api.pushSubscribe(push.sub.toJSON());
+  localStorage.setItem(PUSH_ACCOUNT, me.subject);
 }
 
 /** Google Keep and Notion imports from Settings: loaded only when used. */
@@ -793,7 +857,22 @@ $('settings').addEventListener('click', async (e) => {
     } catch (err) {
       toast(err.message);
     }
+  } else if (id === 'phone-login') {
+    try {
+      const { url, expiresIn } = await api.phoneLogin();
+      await showQr({
+        title: 'Sign in on your phone',
+        body: 'Scan this with the Sink app (Scan sign-in code) or your phone’s camera. It works once, for 5 minutes, and signs the phone into this account, so don’t share it.',
+        url,
+        ttl: expiresIn,
+      });
+      renderTokens();
+    } catch (err) {
+      toast(err.message);
+    }
   } else if (id === 'calendar-create') {
+    const replacing = !$('calendar-revoke').hidden;
+    if (replacing && !(await askConfirm({ title: 'Replace the calendar link?', body: 'Calendars subscribed to the old link stop updating.', action: 'Replace', danger: true }))) return;
     try {
       const { token } = await api.createCalendarToken();
       $('calendar-url').textContent = `${location.origin}/api/calendar/${token}.ics`;
@@ -803,8 +882,11 @@ $('settings').addEventListener('click', async (e) => {
       toast(err.message);
     }
   } else if (id === 'calendar-copy') {
-    await navigator.clipboard.writeText($('calendar-url').textContent);
-    toast('Copied');
+    // No clipboard on a plain-http page.
+    await navigator.clipboard
+      .writeText($('calendar-url').textContent)
+      .then(() => toast('Copied'))
+      .catch(() => toast("Couldn't copy: select the link instead"));
   } else if (id === 'calendar-revoke') {
     if (!(await askConfirm({ title: 'Revoke the calendar link?', body: 'Calendars subscribed to it stop updating.', action: 'Revoke', danger: true }))) return;
     await api.revokeToken($('calendar-revoke').dataset.id).catch((err) => toast(err.message));

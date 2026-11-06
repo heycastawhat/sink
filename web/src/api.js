@@ -35,6 +35,7 @@ export const api = {
   tokens: () => request('/auth/tokens'),
   createToken: (name) => request('/auth/tokens', json('POST', { name })),
   createCalendarToken: () => request('/auth/calendar', { method: 'POST' }),
+  phoneLogin: () => request('/auth/qr', { method: 'POST' }),
   revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
   publishInfo: () => request('/publish'),
   setHandle: (handle) => request('/publish', json('PUT', { handle })),

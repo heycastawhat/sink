@@ -69,13 +69,22 @@ class Api(private val session: Session) {
     suspend fun logout() = call(request("/api/auth/logout").post(ByteArray(0).toRequestBody()).build()) { }
 
     companion object {
+        /** Swaps the one-time code from a QR code shown on a signed-in browser for a device token. */
+        suspend fun exchangeQr(serverUrl: String, code: String, device: String): String =
+            login("$serverUrl/api/auth/qr/exchange", buildJsonObject {
+                put("code", code)
+                put("device", device)
+            })
+
         /** Swaps the one-time code from the sign-in redirect (plus our PKCE verifier) for a device token. */
-        suspend fun exchange(serverUrl: String, code: String, verifier: String): String = withContext(Dispatchers.IO) {
-            val body = buildJsonObject {
+        suspend fun exchange(serverUrl: String, code: String, verifier: String): String =
+            login("$serverUrl/api/auth/oidc/exchange", buildJsonObject {
                 put("code", code)
                 put("verifier", verifier)
-            }.toString().toRequestBody("application/json".toMediaType())
-            val req = Request.Builder().url("$serverUrl/api/auth/oidc/exchange").post(body).build()
+            })
+
+        private suspend fun login(url: String, body: JsonObject): String = withContext(Dispatchers.IO) {
+            val req = Request.Builder().url(url).post(body.toString().toRequestBody("application/json".toMediaType())).build()
             Http.client.newCall(req).execute().use { res ->
                 val parsed = runCatching { json.decodeFromString<LoginResponse>(res.body.string()) }.getOrNull()
                 if (!res.isSuccessful || parsed?.token == null) {

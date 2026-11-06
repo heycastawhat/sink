@@ -27,6 +27,20 @@ object SignIn {
         CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(context, url)
     }
 
+    /** Signs in with a QR code from Settings on a signed-in browser: <server>/?login=<code>. Null on success, or an error. */
+    suspend fun fromQr(settings: Settings, scanned: String): String? {
+        val uri = Uri.parse(scanned)
+        val code = uri.getQueryParameter("login")
+        if (uri.scheme !in setOf("http", "https") || uri.host == null || code == null) return "That isn't a Sink sign-in code"
+        val server = "${uri.scheme}://${uri.encodedAuthority}"
+        return try {
+            settings.saveSession(server, Api.exchangeQr(server, code, "${Build.MANUFACTURER} ${Build.MODEL}"))
+            null
+        } catch (e: Exception) {
+            e.message ?: "Couldn't sign in"
+        }
+    }
+
     fun isCallback(uri: Uri?) = uri?.scheme == "nz.joshp.sink" && uri.host == "auth"
 
     /** Returns null on success, or an error message. */
