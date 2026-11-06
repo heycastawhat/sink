@@ -2,7 +2,7 @@
 // CodeMirror edits the raw text (files are the truth, and Obsidian edits them too), with Obsidian-style live preview:
 // markup hides on lines the cursor isn't on, checkboxes tick, `![[images]]` show, `[[links]]` open.
 
-import { EditorSelection, EditorState, RangeSetBuilder, StateField, Transaction } from '@codemirror/state';
+import { EditorSelection, EditorState, RangeSetBuilder, StateEffect, StateField, Transaction } from '@codemirror/state';
 import {
   EditorView,
   Decoration,
@@ -395,12 +395,15 @@ const EMBED_DEPTH = 2;
 function headingSection(text, heading) {
   const lines = text.split('\n');
   const want = heading.trim().toLowerCase();
-  let fenced = false;
+  let fence = null;
   let start = -1;
   let level = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (/^\s*(```|~~~)/.test(lines[i])) fenced = !fenced;
-    const m = !fenced && /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(lines[i]);
+    // A fence closes only with a run of its own character at least as long as the one that opened it.
+    const f = /^\s*(`{3,}|~{3,})/.exec(lines[i])?.[1];
+    if (f && !fence) fence = f;
+    else if (f && f[0] === fence[0] && f.length >= fence.length && /^\s*[`~]+\s*$/.test(lines[i])) fence = null;
+    const m = !fence && !f && /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(lines[i]);
     if (!m) continue;
     if (start < 0 && m[2].toLowerCase() === want) [start, level] = [i, m[1].length];
     else if (start >= 0 && m[1].length <= level) return lines.slice(start, i).join('\n');
@@ -419,9 +422,10 @@ class NoteEmbedWidget extends WidgetType {
     super();
     this.target = target;
     this.opts = opts;
+    this.gen = opts.embedGen;
   }
   eq(other) {
-    return other.target === this.target;
+    return other.target === this.target && other.gen === this.gen;
   }
   toDOM(view) {
     const { opts, target } = this;
@@ -456,8 +460,17 @@ class NoteEmbedWidget extends WidgetType {
     body.textContent = 'Loading…';
     wrap.append(body);
     const cache = opts.embedCache;
-    if (!cache.has(name)) cache.set(name, Promise.resolve(opts.loadEmbed(name)).catch(() => null));
+    if (!cache.has(name)) {
+      const load = Promise.resolve(opts.loadEmbed(name)).catch(() => {
+        // Not kept, so the next time the embed is drawn tries again.
+        cache.delete(name);
+        return null;
+      });
+      cache.set(name, load);
+    }
     cache.get(name).then((note) => {
+      // Scrolled away, edited into source or the note closed while it loaded.
+      if (wrap.destroyed) return;
       body.textContent = '';
       if (note) title.textContent = heading ? `${note.title} › ${heading}` : note.title;
       // A board, or a note already showing above this one (it would embed itself forever): just the title.
@@ -486,6 +499,7 @@ class NoteEmbedWidget extends WidgetType {
     return wrap;
   }
   destroy(dom) {
+    dom.destroyed = true;
     dom.querySelector(':scope > .cm-note-embed-body')?.editor?.destroy();
   }
 }
@@ -505,13 +519,19 @@ function noteEmbedsDeco(state, opts) {
   return Decoration.set(ranges);
 }
 
-// One fetch per note for the whole page, embeds within embeds included.
+const redrawEmbeds = StateEffect.define();
+
+// One fetch per note for the whole page (`opts.embedCache`), embeds within embeds included. `redrawEmbeds` draws
+// every embed again, from the cache as it is then.
 function noteEmbeds(opts) {
-  const o = { ...opts, embedCache: opts.embedCache ?? new Map() };
+  const o = { ...opts, embedGen: 0 };
   return StateField.define({
     create: (state) => noteEmbedsDeco(state, o),
-    update: (deco, tr) =>
-      tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? noteEmbedsDeco(tr.state, o) : deco,
+    update: (deco, tr) => {
+      const redraw = tr.effects.some((e) => e.is(redrawEmbeds));
+      if (redraw) o.embedGen++;
+      return redraw || tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? noteEmbedsDeco(tr.state, o) : deco;
+    },
     provide: (f) => EditorView.decorations.from(f),
   });
 }
@@ -954,6 +974,7 @@ function pasteLink(e, view) {
  *  uploadFile(file) -> Promise<string>  pasted/dropped file; returns the text to insert
  */
 export function createEditor(opts) {
+  const embedCache = opts.embedCache ?? new Map();
   const completeLinks = (ctx) => {
     const m = ctx.matchBefore(/\[\[[^\]\n]*/);
     if (!m || !opts.linkTargets) return null;
@@ -1049,7 +1070,7 @@ export function createEditor(opts) {
         titleFirst,
         pluginBlocks,
         tables,
-        noteEmbeds(opts),
+        noteEmbeds({ ...opts, embedCache }),
         autocompletion({ override: [completeLinks, completeCommands], icons: false, addToOptions: [{ render: commandIcon, position: 20 }] }),
         placeholderExt(opts.placeholder ?? (opts.readOnly ? '' : newNoteHint())),
         ...(opts.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
@@ -1127,6 +1148,14 @@ export function createEditor(opts) {
   return {
     view,
     getText: () => view.state.doc.toString(),
+    /** After the note at `path` changed elsewhere: if an embed (at any depth) shows it, every embed is fetched again. */
+    async refreshEmbed(path) {
+      const shown = await Promise.all(embedCache.values());
+      // Also gone if the note closed meanwhile.
+      if (!view.dom.isConnected || !shown.some((note) => note?.path === path)) return;
+      embedCache.clear();
+      view.dispatch({ effects: redrawEmbeds.of(null) });
+    },
     /** Replaces the text (a newer version from elsewhere), keeping the cursor near where it was. Not undoable into. */
     setText(text) {
       const head = Math.min(view.state.selection.main.head, text.length);
