@@ -67,10 +67,12 @@ fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
     val nav = LocalNavScope.current
     if (key == null || morph == null || nav == null) return this
     val motion = MaterialTheme.motionScheme
+    // The spatial spring overshoots, so on its way to square the corner dips below zero, which a shape refuses (it
+    // crashed the app mid-transition): held at zero.
     val corner = if (note) {
         nav.transition.animateDp({ motion.defaultSpatialSpec() }, label = "morph-corner") {
             if (it == EnterExitState.Visible) 0.dp else 16.dp
-        }.value
+        }.value.coerceAtLeast(0.dp)
     } else 16.dp
     return with(morph.shared) {
         this@morphBounds.sharedBounds(
