@@ -50,13 +50,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /** How far (after resistance) the drawer has to come up before letting go makes a note. */
-private val THRESHOLD = 120.dp
+private val THRESHOLD = 96.dp
 
 /** How far the rubber band can stretch: the drawer slows towards this however far the finger goes. */
 private val STRETCH = 360.dp
 
-/** A flick up this fast (px/s) makes a note even short of [THRESHOLD], once the drawer's at least half way there. */
-private const val FLICK = 1400f
+/** A flick up this fast (px/s) makes a note even short of [THRESHOLD], once the drawer's at least a third of the way there. */
+private const val FLICK = 1000f
 
 /**
  * Pull up past the bottom of the notes to start a new one: a drawer follows the finger up from the bottom edge, and
@@ -85,8 +85,8 @@ class PullUpToCreate internal constructor(
     internal val progress get() = (pull / thresholdPx).coerceIn(0f, 1f)
     private var settling = false
 
-    /** The rubber band: close to the finger at first (a little under half its travel), then ever stiffer towards [stretch]. */
-    private fun band(x: Float) = stretch * (1f - 1f / (x * 0.55f / stretch + 1f))
+    /** The rubber band: close to the finger at first (about three quarters of its travel), then ever stiffer towards [stretch]. */
+    private fun band(x: Float) = stretch * (1f - 1f / (x * 0.75f / stretch + 1f))
 
     /** The finger moved [by] px up (negative: down). */
     internal fun drag(by: Float) {
@@ -125,7 +125,7 @@ class PullUpToCreate internal constructor(
     internal fun release(speed: Float = 0f) {
         if (pull <= 0f || settling) return
         settling = true
-        val create = ready || (speed > FLICK && pull >= thresholdPx / 2)
+        val create = ready || (speed > FLICK && pull >= thresholdPx / 3)
         raw = 0f
         scope.launch {
             try {
