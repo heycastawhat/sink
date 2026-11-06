@@ -42,6 +42,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -316,15 +317,18 @@ class MainActivity : ComponentActivity() {
         val openNoteAt = { path: String, line: Int? -> open(NoteTarget(path, line)) }
         // A predictive back gesture out of a note: a tick as it passes halfway, past which the note is mostly gone.
         val haptics = rememberHaptics()
+        // And the tabs come back as soon as the gesture heads for a screen that has them, so they're there as the page
+        // under it rises, not only once it's let go (they go again if the gesture is cancelled).
+        var backToTabs by remember { mutableStateOf(false) }
         val backs = LocalNavigationEventDispatcherOwner.current?.navigationEventDispatcher
         LaunchedEffect(backs) {
             var past = false
             backs?.transitionState?.collect { s ->
-                val back = s as? NavigationEventTransitionState.InProgress
-                val now = back != null && back.direction == NavigationEventTransitionState.TRANSITIONING_BACK &&
-                    back.latestEvent.progress >= 0.5f && nav.currentBackStackEntry?.destination?.route?.startsWith("note?") == true
+                val back = (s as? NavigationEventTransitionState.InProgress)?.takeIf { it.direction == NavigationEventTransitionState.TRANSITIONING_BACK }
+                val now = back != null && back.latestEvent.progress >= 0.5f && nav.currentBackStackEntry?.destination?.route?.startsWith("note?") == true
                 if (now && !past) haptics.threshold()
                 past = now
+                backToTabs = back != null && TABS.any { it.route == nav.previousBackStackEntry?.destination?.route }
             }
         }
         // Screen changes use the theme's expressive motion (read here: the transition lambdas aren't composable).
@@ -380,6 +384,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxSize(),
                 // A note rises over the screen it came from, which settles back a little; tabs fade through.
                 enterTransition = {
+                    BackMotion.predictive = false
                     if (isNote(targetState)) slideInVertically(motion.defaultSpatialSpec()) { it / 10 } + fadeIn(motion.defaultEffectsSpec())
                     else fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f)
                 },
@@ -387,10 +392,33 @@ class MainActivity : ComponentActivity() {
                     if (isNote(targetState)) fadeOut(motion.defaultEffectsSpec()) + scaleOut(motion.defaultSpatialSpec(), targetScale = 0.96f)
                     else fadeOut(motion.fastEffectsSpec())
                 },
-                popEnterTransition = { fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f) },
+                popEnterTransition = {
+                    BackMotion.predictive = false
+                    fadeIn(motion.defaultEffectsSpec()) + scaleIn(motion.defaultSpatialSpec(), initialScale = 0.96f)
+                },
                 popExitTransition = {
                     if (isNote(initialState)) slideOutVertically(motion.defaultSpatialSpec()) { it / 10 } + fadeOut(motion.fastEffectsSpec())
                     else fadeOut(motion.fastEffectsSpec())
+                },
+                // A back gesture out of a note or Settings: the page shrinks and drifts with the finger (away from the
+                // edge it came from), its corners rounding, and only fades in the last stretch, so it reads as the
+                // page being pushed away rather than vanishing; the screen under it rises back into place. All of it
+                // tracks the gesture 1:1, and letting go carries it on from there. (A card the note came from takes
+                // the note's bounds instead: see morphBounds.)
+                predictivePopEnterTransition = {
+                    BackMotion.predictive = true
+                    scaleIn(BackMotion.track(), initialScale = 0.94f) + fadeIn(BackMotion.track(), initialAlpha = 0.5f)
+                },
+                predictivePopExitTransition = { edge ->
+                    BackMotion.predictive = true
+                    if (!isNote(initialState)) fadeOut(BackMotion.track())
+                    else {
+                        // Edge 0 is the left (NavigationEvent.EDGE_LEFT): the page drifts right, and vice versa.
+                        val drift = if (edge == 0) 1 else -1
+                        scaleOut(BackMotion.track(), targetScale = 0.86f) +
+                            slideOutHorizontally(BackMotion.track()) { w -> drift * w / 12 } +
+                            fadeOut(BackMotion.late(0.6f))
+                    }
                 },
             ) {
                 composable("notes") {
@@ -463,7 +491,7 @@ class MainActivity : ComponentActivity() {
             }
             // The tabs slide away when a note opens over them and come back with the list.
             AnimatedVisibility(
-                visible = showBar,
+                visible = showBar || backToTabs,
                 enter = slideInVertically(motion.defaultSpatialSpec()) { it } + fadeIn(motion.defaultEffectsSpec()),
                 exit = slideOutVertically(motion.fastSpatialSpec()) { it } + fadeOut(motion.fastEffectsSpec()),
                 modifier = Modifier.align(Alignment.BottomStart),
