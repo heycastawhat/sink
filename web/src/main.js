@@ -102,6 +102,8 @@ const state = {
 const params = new URLSearchParams(location.search);
 const signInParams = ['client', 'device', 'challenge', 'next'].filter((k) => params.has(k)).map((k) => [k, params.get(k)]);
 
+const AFTER_SIGN_IN = 'sink.afterSignIn';
+
 async function boot() {
   if (params.has('invite')) return showInvite(params.get('invite'));
   if (params.get('client') === 'android') return showLogin();
@@ -109,6 +111,8 @@ async function boot() {
     await api.me();
     showApp();
   } catch (err) {
+    // Signing in comes back to the bare address, so a clip from the bookmarklet waits until then.
+    if (err instanceof Unauthorized && location.hash.startsWith('#/clip')) sessionStorage.setItem(AFTER_SIGN_IN, location.hash);
     if (err instanceof Unauthorized) showLogin();
     else toast(`Can't reach server: ${err.message}`);
   }
@@ -172,7 +176,11 @@ async function showApp() {
     },
     bundledPlugins,
   );
+  const after = sessionStorage.getItem(AFTER_SIGN_IN);
+  sessionStorage.removeItem(AFTER_SIGN_IN);
+  if (after) history.replaceState(null, '', after);
   applyRoute();
+  syncReminders().catch(() => {});
 }
 
 $('login-submit').addEventListener('click', () => {
@@ -671,6 +679,10 @@ async function pushSubscription() {
   return reg ? { reg, sub: await reg.pushManager.getSubscription() } : null;
 }
 
+// Which account turned reminders on in this browser, so someone else signing in here doesn't get them.
+const PUSH_ACCOUNT = 'sink.pushAccount';
+const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
 async function setReminders(on) {
   const push = await pushSubscription();
   if (!push) return;
@@ -678,12 +690,39 @@ async function setReminders(on) {
     await api.pushUnsubscribe(push.sub.endpoint).catch(() => {});
     await push.sub.unsubscribe();
   }
+  localStorage.removeItem(PUSH_ACCOUNT);
   if (!on) return;
   if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are blocked for this site');
-  const { key } = await api.pushKey();
+  const [{ key }, me] = await Promise.all([api.pushKey(), api.me()]);
   const applicationServerKey = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-  const sub = await push.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
-  await api.pushSubscribe(sub.toJSON());
+  // The registration can still be installing on a first visit; subscribing needs an active worker.
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+  try {
+    await api.pushSubscribe(sub.toJSON());
+  } catch (err) {
+    await sub.unsubscribe();
+    throw err;
+  }
+  localStorage.setItem(PUSH_ACCOUNT, me.subject);
+}
+
+/**
+ * On each start, makes this browser's subscription match the server: dropped if another account turned it on or the
+ * server's key changed (a new database), else sent again, which also restores one the server lost.
+ */
+async function syncReminders() {
+  const push = await pushSubscription();
+  if (!push?.sub || Notification.permission !== 'granted') return;
+  const [{ key }, me] = await Promise.all([api.pushKey(), api.me()]);
+  const owner = localStorage.getItem(PUSH_ACCOUNT) ?? me.subject;
+  const subKey = push.sub.options.applicationServerKey;
+  if (owner !== me.subject || (subKey && b64u(subKey) !== key)) {
+    localStorage.removeItem(PUSH_ACCOUNT);
+    return push.sub.unsubscribe();
+  }
+  await api.pushSubscribe(push.sub.toJSON());
+  localStorage.setItem(PUSH_ACCOUNT, me.subject);
 }
 
 /** Google Keep and Notion imports from Settings: loaded only when used. */
@@ -794,6 +833,8 @@ $('settings').addEventListener('click', async (e) => {
       toast(err.message);
     }
   } else if (id === 'calendar-create') {
+    const replacing = !$('calendar-revoke').hidden;
+    if (replacing && !(await askConfirm({ title: 'Replace the calendar link?', body: 'Calendars subscribed to the old link stop updating.', action: 'Replace', danger: true }))) return;
     try {
       const { token } = await api.createCalendarToken();
       $('calendar-url').textContent = `${location.origin}/api/calendar/${token}.ics`;
@@ -803,8 +844,11 @@ $('settings').addEventListener('click', async (e) => {
       toast(err.message);
     }
   } else if (id === 'calendar-copy') {
-    await navigator.clipboard.writeText($('calendar-url').textContent);
-    toast('Copied');
+    // No clipboard on a plain-http page.
+    await navigator.clipboard
+      .writeText($('calendar-url').textContent)
+      .then(() => toast('Copied'))
+      .catch(() => toast("Couldn't copy: select the link instead"));
   } else if (id === 'calendar-revoke') {
     if (!(await askConfirm({ title: 'Revoke the calendar link?', body: 'Calendars subscribed to it stop updating.', action: 'Revoke', danger: true }))) return;
     await api.revokeToken($('calendar-revoke').dataset.id).catch((err) => toast(err.message));

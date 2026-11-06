@@ -864,10 +864,13 @@ private val INLINE = Regex(
     """`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|==([^=]+)==|(?<![*\w])\*([^*\s][^*]*)\*(?!\w)|(?<!\w)_([^_\s][^_]*)_(?!\w)""",
 )
 
+// `\*`, `\[`, `\#`: the character itself, never formatting.
+private val ESCAPED = Regex("""\\([!-/:-@\[-`{-~])""")
+
 /** Inline markdown as styled text: links as their text, Tasks dates dropped, bold/italic/strike/code/highlight kept. */
 private fun inlineMarkdown(s: String, codeBg: Color, markBg: Color): AnnotatedString {
-    val plain = clean(s)
-    return buildAnnotatedString {
+    val plain = clean(s.replace(ESCAPED) { (0xE000 + it.groupValues[1][0].code).toChar().toString() })
+    val styled = buildAnnotatedString {
         var at = 0
         for (m in INLINE.findAll(plain)) {
             append(plain.substring(at, m.range.first))
@@ -883,6 +886,8 @@ private fun inlineMarkdown(s: String, codeBg: Color, markBg: Color): AnnotatedSt
         }
         append(plain.substring(at))
     }
+    // Escaped marks back to themselves: one character each, so the styles' ranges still fit.
+    return AnnotatedString(styled.text.replace(Regex("[\uE021-\uE07E]")) { (it.value[0].code - 0xE000).toChar().toString() }, styled.spanStyles)
 }
 
 /** Links as their text, embeds and Tasks fields (dates, reminders, priority, repeat) dropped. Formatting marks stay for [inlineMarkdown]. */

@@ -54,7 +54,10 @@ self.addEventListener('fetch', (event) => {
 
 // Todo reminders (server/src/push.ts), for browsers that turned them on in Settings.
 self.addEventListener('push', (event) => {
-  const r = event.data?.json() ?? {};
+  let r = {};
+  try {
+    r = event.data?.json() ?? {};
+  } catch {}
   event.waitUntil(
     self.registration.showNotification(r.title ?? 'Todo', { body: r.body, tag: r.tag, data: r, icon: '/icon-192.png', badge: '/icon-192.png' }),
   );

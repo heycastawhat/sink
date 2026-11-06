@@ -51,6 +51,18 @@ type Dom = {
 const SKIPPED = new Set(["script", "style", "noscript", "svg", "iframe", "form", "button", "select", "textarea", "template"]);
 const BLOCKS = new Set(["p", "div", "section", "article", "main", "figure", "figcaption", "header", "address", "details", "summary", "dl", "dt", "dd"]);
 
+// A page's text is literal, so whatever Sink or Obsidian would read as markup in it is escaped: a stray `%%` would hide
+// the rest of the note, `[ ]` would add a todo, `[[x]]` a link and `#word` a tag.
+const literal = (t: string) =>
+  t
+    .replace(/[\\`*[\]]|(?<![\p{L}\p{N}])_|_(?![\p{L}\p{N}])/gu, "\\$&")
+    .replace(/%%/g, "%\\%")
+    .replace(/(^|\s)#(?=[\p{L}\p{N}_])/gu, "$1\\#");
+// The same for what a paragraph starts with: a heading, list item or quote marker.
+const leading = (t: string) => t.replace(/^(#{1,6}|[-+>]|\d+[.)])(?=\s|$)/, (m) => m.replace(/[#\-+>.)]/, "\\$&"));
+/** A run of backticks longer than any inside `code`, so the code can't close its own fence. */
+const ticks = (code: string, min: number) => "`".repeat(Math.max(min, ...Array.from(code.matchAll(/`+/g), (m) => m[0].length + 1)));
+
 const BREAKS = /^(p|div|section|article|main|figure|figcaption|h[1-6]|ul|ol|li|pre|table|blockquote|hr|br)$/i;
 
 /** A parsed DOM subtree as markdown, with links and images made absolute against `base`. Only http(s) and mailto links survive. */
@@ -74,12 +86,13 @@ export function htmlToMarkdown(root: Dom, base: string): string {
     if (n.nodeType === 3) {
       const t = (n.nodeValue ?? "").replace(/\s+/g, " ");
       // Spacing next to a block (or at the edge of a container) is layout, not content.
-      return t === " " && [n.previousSibling, n.nextSibling].some((s) => !s || (s.nodeType === 1 && BREAKS.test(s.nodeName))) ? "" : t;
+      return t === " " && [n.previousSibling, n.nextSibling].some((s) => !s || (s.nodeType === 1 && BREAKS.test(s.nodeName))) ? "" : literal(t);
     }
     if (n.nodeType !== 1) return "";
     const tag = n.nodeName.toLowerCase();
     if (SKIPPED.has(tag)) return "";
     if (/^h[1-6]$/.test(tag)) return `\n\n${"#".repeat(Number(tag[1]))} ${kids(n).replace(/\s+/g, " ").trim()}\n\n`;
+    if (tag === "p") return `\n\n${leading(kids(n).trim())}\n\n`;
     if (BLOCKS.has(tag)) return `\n\n${kids(n).trim()}\n\n`;
     switch (tag) {
       case "br":
@@ -92,10 +105,18 @@ export function htmlToMarkdown(root: Dom, base: string): string {
       case "em":
       case "i":
         return wrap(n, "*");
-      case "code":
-        return n.textContent?.trim() ? `\`${n.textContent.replace(/\n/g, " ")}\`` : "";
-      case "pre":
-        return `\n\n\`\`\`\n${(n.textContent ?? "").replace(/\n$/, "")}\n\`\`\`\n\n`;
+      case "code": {
+        const code = (n.textContent ?? "").replace(/\n/g, " ");
+        if (!code.trim()) return "";
+        const fence = ticks(code, 1);
+        const pad = /^`|`$/.test(code) ? " " : "";
+        return `${fence}${pad}${code}${pad}${fence}`;
+      }
+      case "pre": {
+        const code = (n.textContent ?? "").replace(/\n$/, "");
+        const fence = ticks(code, 3);
+        return `\n\n${fence}\n${code}\n${fence}\n\n`;
+      }
       case "a": {
         const text = kids(n);
         const href = absolute(n.getAttribute("href"));

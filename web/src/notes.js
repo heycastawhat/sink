@@ -63,7 +63,12 @@ function relative(ts) {
 
 // ---------- grid ----------
 
-export async function loadNotes() {
+let listing = null;
+export function loadNotes() {
+  return (listing = listNotes());
+}
+
+async function listNotes() {
   try {
     const { notes, folders } = await api.notes();
     state.notes = notes;
@@ -892,7 +897,9 @@ function mountEditor(text) {
     onOpenLink: openLink,
     resolveEmbed: (name) => api.attachmentUrl(name),
     resolveImage: (src) => (/^(https?:|data:|\/)/i.test(src) ? src : api.attachmentUrl(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
-    loadEmbed: (target) => {
+    loadEmbed: async (target) => {
+      // A note opened straight from the address bar can be up before the list it's looked up in.
+      if (!state.loaded) await listing?.catch(() => {});
       const hit = findLinked(target);
       return hit ? api.note(hit.path) : null;
     },
@@ -1121,7 +1128,10 @@ export function newNote() {
 
 /** New → Clip a web page (or the bookmarklet, which passes the address): the server saves the page's article as a note. */
 export async function clipPage(address) {
-  const url = address ?? (await askText({ title: 'Clip a web page', label: 'Page address', action: 'Clip' }));
+  // An address from the page's URL could come from any site's link, so it's only clipped once you say so.
+  const url = address
+    ? (await askConfirm({ title: 'Clip this page?', body: address, action: 'Clip' })) && address
+    : await askText({ title: 'Clip a web page', label: 'Page address', action: 'Clip' });
   if (!url) return;
   toast('Clipping…');
   try {
@@ -1328,6 +1338,7 @@ export function listenForChanges() {
       applyLook();
     }
     if (screen.path && (change.path === screen.path || change.from === screen.path)) refreshOpenNote();
+    else if (screen.editor && change.path) screen.editor.refreshEmbed?.(change.from ?? change.path);
     // A burst of autosaves is one refresh.
     clearTimeout(changeTimer);
     changeTimer = setTimeout(async () => {

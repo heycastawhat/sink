@@ -1494,7 +1494,9 @@ describe("accounts", () => {
   test("the owner lets people in from Settings, and taking them off signs them out", async () => {
     setup = makeSetup(["sam@example.com"]);
     const owner = await login();
-    expect(((await (await get(owner, "/api/auth/me")).json()) as any).admin).toBe(true);
+    const me = (await (await get(owner, "/api/auth/me")).json()) as any;
+    expect(me.admin).toBe(true);
+    expect(typeof me.subject).toBe("string");
     // Someone not on the list can't sign in yet.
     setup.authentik.state.user = { sub: "kim1", email: "kim@example.com", email_verified: true };
     expect((await signIn()).callback.status).toBe(403);
