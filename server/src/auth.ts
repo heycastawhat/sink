@@ -15,6 +15,8 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 // Pending logins: OIDC round-trips (state) and app hand-back codes (Android, Obsidian) both expire quickly.
 const PENDING_TTL_MS = 10 * 60 * 1000;
 const HANDBACK_TTL_MS = 2 * 60 * 1000;
+// Long enough to find your phone and open the app.
+const QR_TTL_MS = 5 * 60 * 1000;
 const MAX_PENDING = 500;
 export const ANDROID_REDIRECT = "nz.joshp.sink://auth";
 export const OBSIDIAN_REDIRECT = "obsidian://sink-auth";
@@ -168,17 +170,26 @@ const exchangeBody = z.object({
   verifier: z.string().min(43).max(128),
 });
 
+const qrBody = z.object({
+  code: z.string().min(20).max(100),
+  device: z.string().trim().min(1).max(100),
+  // A phone's browser that opened the QR code's link wants a session cookie, not a token.
+  cookie: z.boolean().default(false),
+});
+
 export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolean; publicUrls: string[]; users?: Users; passkeys?: Passkeys }) {
   const app = new Hono<AuthEnv>();
   const pending = new Map<string, Pending>();
   const handbacks = new Map<string, Handback>();
+  const qrs = new Map<string, { subject: string; created: number }>();
 
   const sweep = () => {
     const t = now();
     for (const [k, v] of pending) if (t - v.created > PENDING_TTL_MS) pending.delete(k);
     for (const [k, v] of handbacks) if (t - v.created > HANDBACK_TTL_MS) handbacks.delete(k);
+    for (const [k, v] of qrs) if (t - v.created > QR_TTL_MS) qrs.delete(k);
     // Anyone can start a login; a flood of them drops the oldest instead of growing without end.
-    for (const map of [pending, handbacks] as Map<string, unknown>[]) {
+    for (const map of [pending, handbacks, qrs] as Map<string, unknown>[]) {
       while (map.size > MAX_PENDING) map.delete(map.keys().next().value!);
     }
   };
@@ -198,7 +209,12 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
       return `${to.client === "android" ? ANDROID_REDIRECT : OBSIDIAN_REDIRECT}?code=${handback}`;
     }
     const origin = to.origin ?? allowedOrigin(c);
-    setCookie(c, SESSION_COOKIE, auth.issueToken(to.device, subject), {
+    setSession(c, origin, to.device, subject);
+    return `${origin}${to.next ?? "/"}`;
+  };
+
+  const setSession = (c: Context, origin: string, device: string, subject: string) =>
+    setCookie(c, SESSION_COOKIE, auth.issueToken(device, subject), {
       httpOnly: true,
       secure: opts.secureCookies || origin.startsWith("https://"),
       // Lax so the cookie survives the redirect back from the sign-in provider.
@@ -206,8 +222,6 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
       path: "/",
       maxAge: COOKIE_MAX_AGE,
     });
-    return `${origin}${to.next ?? "/"}`;
-  };
 
   if (opts.users && opts.passkeys) {
     app.route("/passkey", passkeyRoutes({ passkeys: opts.passkeys, users: opts.users, oidc, publicUrls: opts.publicUrls, finish }));
@@ -288,6 +302,27 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     handbacks.delete(body.data.code);
     if (!entry || s256(body.data.verifier) !== entry.challenge) return c.json({ error: "invalid or expired code" }, 400);
     return c.json({ ok: true, token: auth.issueToken(entry.device, entry.subject) });
+  });
+
+  // Signing a phone in from a browser that's already signed in: a one-time link shown as a QR code. The Sink app
+  // scans it and swaps the code for a token; a phone's camera opens it in the browser, which gets a session instead.
+  app.post("/qr", authed, requireFullScope, (c) => {
+    sweep();
+    const code = randomString();
+    qrs.set(code, { subject: c.get("subject"), created: now() });
+    return c.json({ url: `${allowedOrigin(c)}/?login=${code}`, expiresIn: QR_TTL_MS }, 201);
+  });
+
+  app.post("/qr/exchange", async (c) => {
+    sweep();
+    const body = qrBody.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: "invalid body" }, 400);
+    const entry = qrs.get(body.data.code);
+    qrs.delete(body.data.code);
+    if (!entry) return c.json({ error: "That code expired or was already used. Make a new one." }, 400);
+    if (!body.data.cookie) return c.json({ ok: true, token: auth.issueToken(body.data.device, entry.subject) });
+    setSession(c, allowedOrigin(c), body.data.device, entry.subject);
+    return c.json({ ok: true });
   });
 
   app.post("/logout", authed, (c) => {

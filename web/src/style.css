@@ -2777,3 +2777,17 @@ m3e-form-field:not(:focus-within) > label[slot='label'] {
     --m3e-icon-size: 20px;
   }
 }
+
+/* Dark modules on white whatever the theme: scanners expect it. */
+.qr-code {
+  width: min(260px, 70vw);
+  margin: 8px auto;
+  background: #fff;
+  border-radius: 12px;
+  padding: 8px;
+}
+.qr-code svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}

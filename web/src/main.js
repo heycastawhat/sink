@@ -19,7 +19,7 @@ import { api, Unauthorized } from './api.js';
 import * as notes from './notes.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
-import { askConfirm } from './dialogs.js';
+import { askConfirm, showQr } from './dialogs.js';
 import { hapticsEnabled, setHaptics } from './haptics.js';
 import { esc } from './util.js';
 import { acceptInvite, inviteName, passkeysWork, signInWithPasskey } from './passkey.js';
@@ -106,6 +106,7 @@ const AFTER_SIGN_IN = 'sink.afterSignIn';
 
 async function boot() {
   if (params.has('invite')) return showInvite(params.get('invite'));
+  if (params.has('login')) return showPhoneLogin(params.get('login'));
   if (params.get('client') === 'android') return showLogin();
   try {
     await api.me();
@@ -125,7 +126,7 @@ function showLogin() {
     .then((r) => r.json())
     .then(({ provider, passkeys }) => {
       if (provider) $('login-label').textContent = `Sign in with ${provider}`;
-      $('login-passkey').hidden = !passkeys || !passkeysWork() || params.has('invite');
+      $('login-passkey').hidden = !passkeys || !passkeysWork() || params.has('invite') || params.has('login');
       // The Android app opens this screen; with nothing to choose, straight on to the provider.
       if (params.get('client') === 'android' && $('login-passkey').hidden) $('login-submit').click();
     })
@@ -157,6 +158,26 @@ async function showInvite(token) {
   } catch (err) {
     loginError(err.message);
   }
+}
+
+/** A phone's camera opened the link in a QR code from Settings on a signed-in browser. */
+function showPhoneLogin(code) {
+  showLogin();
+  $('login-submit').hidden = true;
+  $('login-tagline').textContent = 'Sign this browser in with the code you scanned?';
+  $('phone-accept').hidden = false;
+  $('phone-accept').onclick = async () => {
+    loginError('');
+    const res = await fetch('/api/auth/qr/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code, device: 'Phone browser', cookie: true }),
+    });
+    if (res.ok) return location.replace('/');
+    loginError((await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`);
+    $('phone-accept').hidden = true;
+    $('login-submit').hidden = false;
+  };
 }
 
 async function showApp() {
@@ -479,6 +500,10 @@ async function renderSettings() {
 
 <section class="setting-card">
   <h2>Signed-in devices and assistants</h2>
+  <div class="setting-row">
+    <div class="grow"><div>Sign in on your phone</div><div class="muted small">Scan a code with the Sink app, or your phone's camera to use Sink in its browser.</div></div>
+    <m3e-button id="phone-login" variant="tonal">${ic('qr_code_2', 'icon')}Show code</m3e-button>
+  </div>
   <div id="connect-tokens" class="token-list"><m3e-loading-indicator></m3e-loading-indicator></div>
 </section>
 
@@ -828,6 +853,19 @@ $('settings').addEventListener('click', async (e) => {
       $('connect-command').textContent =
         `claude mcp add --transport http --scope user sink ${location.origin}/mcp \\\n  --header "Authorization: Bearer ${token}"`;
       $('connect-result').hidden = false;
+      renderTokens();
+    } catch (err) {
+      toast(err.message);
+    }
+  } else if (id === 'phone-login') {
+    try {
+      const { url, expiresIn } = await api.phoneLogin();
+      await showQr({
+        title: 'Sign in on your phone',
+        body: 'Scan this with the Sink app (Scan sign-in code) or your phone’s camera. It works once, for 5 minutes, and signs the phone into this account, so don’t share it.',
+        url,
+        ttl: expiresIn,
+      });
       renderTokens();
     } catch (err) {
       toast(err.message);

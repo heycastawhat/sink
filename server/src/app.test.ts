@@ -287,6 +287,32 @@ describe("auth", () => {
     expect((await get(token, "/api/notes")).status).toBe(200);
   });
 
+  test("a QR code signs a phone in once, as the same account", async () => {
+    const token = await login();
+    const make = async (t: string) => {
+      const res = await setup.app.request("/api/auth/qr", { method: "POST", headers: { authorization: `Bearer ${t}` } });
+      return { status: res.status, url: res.ok ? new URL(((await res.json()) as { url: string }).url) : null };
+    };
+    expect((await make(setup.auth.issueToken("assistant", "abc123", "mcp"))).status).toBe(403);
+    const { url } = await make(token);
+    expect(url!.origin).toBe(PUBLIC);
+    const redeem = (code: string, cookie = false) =>
+      setup.app.request("/api/auth/qr/exchange", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code, device: "Pixel", cookie }),
+      });
+    const code = url!.searchParams.get("login")!;
+    const res = await redeem(code);
+    const phone = ((await res.json()) as { token: string }).token;
+    expect(((await (await get(phone, "/api/auth/me")).json()) as { subject: string }).subject).toBe("abc123");
+    expect((await redeem(code)).status).toBe(400);
+
+    const web = await redeem((await make(token)).url!.searchParams.get("login")!, true);
+    const session = web.headers.get("set-cookie")!.split(";")[0]!;
+    expect((await setup.app.request("/api/notes", { headers: { cookie: session } })).status).toBe(200);
+  });
+
   test("revoked token stops working", async () => {
     const token = await login();
     await setup.app.request("/api/auth/logout", { method: "POST", headers: { authorization: `Bearer ${token}` } });
