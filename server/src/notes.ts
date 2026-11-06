@@ -123,13 +123,14 @@ export function splitFrontmatter(content: string): { yaml: string | null; body: 
 export function readFrontmatter(yaml: string): {
   title?: string;
   tags: string[];
+  aliases: string[];
   pinned?: boolean;
   color?: string;
   publish?: boolean;
   searchable?: boolean;
 } {
   const unquote = (s: string) => s.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
-  const out: ReturnType<typeof readFrontmatter> = { tags: [] };
+  const out: ReturnType<typeof readFrontmatter> = { tags: [], aliases: [] };
   const lines = yaml.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const m = /^(\w[\w-]*):\s*(.*)$/.exec(lines[i]!);
@@ -147,8 +148,17 @@ export function readFrontmatter(yaml: string): {
         while (i + 1 < lines.length && /^\s*-\s+/.test(lines[i + 1]!)) out.tags.push(unquote(lines[++i]!.replace(/^\s*-\s+/, "")));
       }
     }
+    // Unlike tags, aliases may hold spaces: only commas separate them.
+    if (key === "aliases" || key === "alias") {
+      if (value) {
+        out.aliases.push(...value.replace(/^\[|\]$/g, "").split(",").map(unquote));
+      } else {
+        while (i + 1 < lines.length && /^\s*-\s+/.test(lines[i + 1]!)) out.aliases.push(unquote(lines[++i]!.replace(/^\s*-\s+/, "")));
+      }
+    }
   }
   out.tags = out.tags.map((t) => t.replace(/^#/, "")).filter(Boolean);
+  out.aliases = out.aliases.filter(Boolean);
   return out;
 }
 
@@ -188,7 +198,7 @@ export function parseNote(
   // `%% … %%` is an Obsidian comment; Excalidraw boards keep their whole drawing JSON in one.
   // The Excalidraw plugin's "==⚠ Switch to EXCALIDRAW VIEW … ==" banner isn't content either.
   const body = full.replace(/%%[\s\S]*?(?:%%|$)/g, " ").replace(/^==⚠[^\n]*$/gm, "");
-  const fm = yaml ? readFrontmatter(yaml) : { tags: [] };
+  const fm = yaml ? readFrontmatter(yaml) : { tags: [], aliases: [] };
   const heading = isBoard(path) ? undefined : /^#[ \t]+(.+?)[ \t#]*$/m.exec(body)?.[1]?.trim();
   const title = heading || fm.title || basename(path).replace(/(\.excalidraw)?\.md$/i, "");
   const seen = new Map<string, string>();
@@ -226,6 +236,44 @@ export function parseLinks(content: string): { target: string; line: string }[] 
     for (const target of targets) out.push({ target, line });
   }
   return out;
+}
+
+export type Mention = { start: number; end: number; text: string; before: string; after: string };
+
+/**
+ * Plain-text occurrences of any of `terms` as whole words (any case; `\p{L}` knows more than SQLite's ASCII
+ * `lower()`), skipping what isn't prose or is already a link: frontmatter, code, `[[wikilinks]]`, `[text](links)`,
+ * bare URLs and `%%comments%%`. `before`/`after` are the rest of the line around it, for a snippet.
+ */
+export function findMentions(content: string, terms: string[]): Mention[] {
+  const skip: [number, number][] = [];
+  const fm = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
+  if (fm) skip.push([0, fm[0].length]);
+  for (const re of [
+    /^[ \t]*(`{3,}|~{3,})[\s\S]*?(?:\n[ \t]*\1[^\n]*|(?![\s\S]))/gm,
+    /`[^`\n]*`/g,
+    /!?\[\[[^\]]*\]\]/g,
+    /!?\[[^\]\n]*\]\([^)\n]*\)/g,
+    /https?:\/\/[^\s)>\]]+/g,
+    /%%[\s\S]*?(?:%%|(?![\s\S]))/g,
+  ])
+    for (const m of content.matchAll(re)) skip.push([m.index, m.index + m[0].length]);
+  const found: Mention[] = [];
+  // Longest first, so "Soil mix" claims its words before an alias "Soil" can.
+  for (const term of [...terms].sort((a, b) => b.length - a.length)) {
+    const words = term.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const re = new RegExp(`(?<![\\p{L}\\p{N}_])${words.join("[ \\t]+")}(?![\\p{L}\\p{N}_])`, "giu");
+    for (const m of content.matchAll(re)) {
+      const start = m.index, end = start + m[0].length;
+      if (skip.some(([a, b]) => start < b && end > a) || found.some((f) => start < f.end && end > f.start)) continue;
+      const lineStart = content.lastIndexOf("\n", start - 1) + 1;
+      const lineEnd = content.indexOf("\n", end) < 0 ? content.length : content.indexOf("\n", end);
+      const from = Math.max(lineStart, start - 60), to = Math.min(lineEnd, end + 80);
+      const before = content.slice(from, start).replace(from === lineStart ? /^\s*(?:[-*+]\s+(?:\[.\]\s+)?|\d+[.)]\s+|#{1,6}\s+|>\s*)*/ : /^/, "");
+      found.push({ start, end, text: m[0], before: (from > lineStart ? "…" : "") + before, after: content.slice(end, to).trimEnd() + (to < lineEnd ? "…" : "") });
+    }
+  }
+  return found.sort((a, b) => a.start - b.start);
 }
 
 /** Rewrites links to a note that moved (see Vault.relink). `oldFull`/`oldName` are lower case, without ".md". */
@@ -526,6 +574,63 @@ export class Vault {
       if (hit.lines.length < 3 && !hit.lines.includes(r.line)) hit.lines.push(r.line);
     }
     return [...out.values()];
+  }
+
+  /** What to look for in other notes: this note's title and its frontmatter `aliases`. */
+  private async mentionTerms(clean: string): Promise<string[]> {
+    const note = await this.read(clean);
+    const yaml = splitFrontmatter(note.content).yaml;
+    const all = [note.title, ...(yaml ? readFrontmatter(yaml).aliases : [])];
+    return all.filter((t, i) => /[\p{L}\p{N}]/u.test(t) && all.findIndex((u) => u.toLowerCase() === t.toLowerCase()) === i);
+  }
+
+  /**
+   * Obsidian's "unlinked mentions": notes that write this note's title (or an alias) as plain text, outside any link
+   * (a note that links here elsewhere can still have some). The FTS index narrows the notes to read (a phrase per term, so a superset: it stems); `findMentions`
+   * decides. Each note comes with its hash, which `linkMention` needs.
+   */
+  async mentions(path: string): Promise<{ path: string; title: string; hash: string; mentions: Mention[] }[]> {
+    const clean = cleanPath(path, "note");
+    const terms = await this.mentionTerms(clean);
+    const phrases = terms.map((t) => t.match(/[\p{L}\p{N}]+/gu)!.join(" "));
+    if (!phrases.length) return [];
+    const candidates = this.db
+      .query<{ path: string }, string[]>(
+        `SELECT n.path FROM notes_fts JOIN notes n ON n.rowid = notes_fts.rowid
+         WHERE notes_fts MATCH ? AND n.path != ? AND n.path NOT LIKE '%.excalidraw.md'
+         ORDER BY n.mtime DESC LIMIT 100`,
+      )
+      .all(`body : (${phrases.map((p) => `"${p}"`).join(" OR ")})`, clean);
+    const out = [];
+    for (const c of candidates) {
+      if (out.length >= 50) break;
+      const note = await this.read(c.path).catch(() => null);
+      const found = note ? findMentions(note.content, terms) : [];
+      if (note && found.length) out.push({ path: note.path, title: note.title, hash: note.hash, mentions: found.slice(0, 5) });
+    }
+    return out;
+  }
+
+  /**
+   * Turns one unlinked mention (as `mentions` listed it) in `path` into a link to `target`. Offsets only mean
+   * something in the text they came from, so anything but the exact `baseHash` is a conflict, as in `write`.
+   */
+  async linkMention(path: string, target: string, start: number, text: string, baseHash: string): Promise<NoteMeta> {
+    const clean = cleanPath(path, "note");
+    const to = cleanPath(target, "note");
+    const note = await this.read(clean);
+    if (note.hash !== baseHash) throw new VaultError(409, "note changed since it was read", note);
+    const hit = findMentions(note.content, await this.mentionTerms(to)).find((m) => m.start === start && m.text === text);
+    if (!hit) throw new VaultError(409, "mention not found", note);
+    // The file name is what a link resolves to elsewhere (Obsidian); the whole path when another folder shares it.
+    const name = basename(to).replace(/\.md$/i, "");
+    const taken = this.db.query<{ path: string }, []>("SELECT path FROM notes").all().filter((r) => basename(r.path).toLowerCase() === `${name.toLowerCase()}.md`);
+    const ref = taken.length > 1 ? to.replace(/\.md$/i, "") : name;
+    const lineStart = note.content.lastIndexOf("\n", start - 1) + 1;
+    // A table cell escapes the alias's pipe.
+    const bar = /^\s*\|/.test(note.content.slice(lineStart, start)) ? "\\|" : "|";
+    const link = `[[${ref}${text === name ? "" : bar + text}]]`;
+    return this.write(clean, note.content.slice(0, start) + link + note.content.slice(hit.end), baseHash);
   }
 
   search(fts: string, limit: number) {

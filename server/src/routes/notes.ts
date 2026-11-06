@@ -35,6 +35,13 @@ const createBody = z.object({
   title: z.string().trim().max(200).default(""),
   content: z.string().default(""),
 });
+const linkMentionBody = z.object({
+  path: z.string().min(1).max(1024),
+  target: z.string().min(1).max(1024),
+  start: z.number().int().min(0),
+  text: z.string().min(1).max(500),
+  base_hash: z.string().max(64),
+});
 const fileQuery = pathQuery.extend({ base_hash: z.string().max(64).optional() });
 const moveBody = z.object({ from: z.string().min(1).max(1024), to: z.string().min(1).max(1024) });
 const listQuery = z.object({
@@ -119,6 +126,25 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const q = pathQuery.safeParse(c.req.query());
       if (!q.success) return c.json({ error: "invalid query" }, 400);
       return c.json({ items: vault.backlinks(q.data.path) });
+    }),
+  );
+
+  // Notes that name this one without linking, and turning one such mention into a link (a save of the mentioning
+  // note, so it needs the hash `mentions` returned).
+  app.get("/notes/mentions", (c) =>
+    run(c, async () => {
+      const q = pathQuery.safeParse(c.req.query());
+      if (!q.success) return c.json({ error: "invalid query" }, 400);
+      return c.json({ items: await vault.mentions(q.data.path) });
+    }),
+  );
+
+  app.post("/notes/mentions/link", (c) =>
+    run(c, async () => {
+      const body = linkMentionBody.safeParse(await c.req.json().catch(() => null));
+      if (!body.success) return c.json({ error: "invalid request" }, 400);
+      const { path, target, start, text, base_hash } = body.data;
+      return c.json(await vault.linkMention(path, target, start, text, base_hash));
     }),
   );
 
