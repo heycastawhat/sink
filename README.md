@@ -104,7 +104,9 @@ Or let [Obtainium](https://github.com/ImranR98/Obtainium) install and update it:
 - "New note" Quick Settings tile, and "Share → Sink" from any app turns text into a note, or photos and PDFs into a
   note with them attached.
 
-On iPhone or anywhere else, the web app works on phones too.
+On iPhone or anywhere else, the web app works on phones too. Install it (Add to Home Screen) and turn on Settings →
+Todo reminders to get reminders there as notifications too (Web Push; on iPhone only from the installed app). It's
+per browser, so turn it on only where you don't already have the Android app.
 
 ## Using it with Obsidian
 

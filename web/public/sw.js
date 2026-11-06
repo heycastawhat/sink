@@ -51,3 +51,24 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
+// Todo reminders (server/src/push.ts), for browsers that turned them on in Settings.
+self.addEventListener('push', (event) => {
+  const r = event.data?.json() ?? {};
+  event.waitUntil(
+    self.registration.showNotification(r.title ?? 'Todo', { body: r.body, tag: r.tag, data: r, icon: '/icon-192.png', badge: '/icon-192.png' }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const { path, line } = event.notification.data ?? {};
+  const url = path ? `/#/n/${path.split('/').map(encodeURIComponent).join('/')}?line=${line}` : '/#/todos';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then((windows) => {
+      const open = windows.find((w) => new URL(w.url).origin === location.origin);
+      // Focus first: it's only allowed straight after the click. navigate() fails on a page this worker doesn't control.
+      return open ? open.focus().then(() => open.navigate(url)).catch(() => self.clients.openWindow(url)) : self.clients.openWindow(url);
+    }),
+  );
+});

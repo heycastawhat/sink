@@ -46,7 +46,9 @@ database loses nothing a rescan can't rebuild.
   per vault; tokens, OAuth, `users` and `allowed_users` (who
   may sign in, added by the owner in Settings → People; `routes/admin.ts`) live in the main DB. `passkeys.ts`
   passkey sign-in (`@simplewebauthn/server`) for invited people without a provider account; they're allowed as
-  `sub:passkey:…`. The web sign-in screen also handles `?invite=` links and the Android app's `?client=android` sign-in. `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
+  `sub:passkey:…`. The web sign-in screen also handles `?invite=` links and the Android app's `?client=android` sign-in. `push.ts` todo reminders
+  for browsers over Web Push (dependency-free; VAPID keys in the main DB, subscriptions and sent reminders in each
+  account's DB, a 30s tick in `index.ts`). `ratelimit.ts`, `zip.ts`, `backup.ts`, `time.ts`.
 
 ### Web (`web/src/`)
 
