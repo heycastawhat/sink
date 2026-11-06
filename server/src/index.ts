@@ -9,6 +9,7 @@ import { EmailIngest } from "./email";
 import { PluginHost } from "./plugins";
 import { builtinPlugins } from "./builtin";
 import { Users } from "./users";
+import { sendReminders, vapidKeys, webPush } from "./push";
 
 const db = openDb(config.dbPath);
 const vault = new Vault(db, config.notesDir, config.timeZone);
@@ -63,6 +64,9 @@ const purgeTrash = () =>
   );
 void purgeTrash();
 const trashTimer = setInterval(purgeTrash, 60 * 60 * 1000);
+const push = webPush(vapidKeys(db), config.publicUrls[0]!);
+const remind = () => sendReminders(users.all().map((s) => s.db), push).catch((err) => console.warn(`[push] reminders failed: ${err.message}`));
+const remindTimer = setInterval(remind, 30 * 1000);
 
 const server = Bun.serve({
   port: config.port,
@@ -83,6 +87,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     void email?.stop();
     backups.stop();
     clearInterval(trashTimer);
+    clearInterval(remindTimer);
     server.stop();
     db.close();
     process.exit(0);
