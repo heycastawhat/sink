@@ -1,7 +1,15 @@
 package nz.joshp.sink.ui
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.View
+import android.view.ViewTreeObserver
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
+import androidx.annotation.RequiresApi
+import androidx.compose.ui.graphics.graphicsLayer
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -135,6 +143,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // A fresh start has the system splash to lift away (and an entrance to play under it); a recreation has neither.
+        if (savedInstanceState == null && Build.VERSION.SDK_INT >= 31) holdSplash() else Entrance.finish()
         val settings = (application as SinkApp).settings
         val openSettings = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)
         handleSignIn(intent)
@@ -154,12 +164,54 @@ class MainActivity : ComponentActivity() {
             val lastServer by settings.lastServerUrl.collectAsState(initial = null)
 
             SinkTheme(dynamicColor = dynamic, mode = mode) {
+                if (session != Loading) firstScreenReady = true
                 when (val s = session) {
                     Loading -> Unit
                     null -> LoginScreen(settings, lastServer, signingIn.value, signInError.value)
                     else -> LoggedIn(s, openSettings)
                 }
             }
+        }
+    }
+
+    /** Whether we know yet who's signed in, so the splash can go to a real screen rather than a blank one. */
+    @Volatile private var firstScreenReady = false
+
+    /**
+     * Keeps the splash up until its drop has landed (and we know which screen to show, for [SPLASH_MAX_MS] at most),
+     * then lifts it away: the drop swells as it fades and the splash clears as the app's entrance plays ([Entrance]).
+     */
+    @RequiresApi(31)
+    private fun holdSplash() {
+        val now = SystemClock.uptimeMillis()
+        // The drop starts falling as the splash window goes up, which for a cold start is about when the process did.
+        val processStart = android.os.Process.getStartUptimeMillis()
+        val start = if (now - processStart < SPLASH_MIN_MS) processStart else now
+        val content = findViewById<View>(android.R.id.content)
+        content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                val shown = SystemClock.uptimeMillis() - start
+                if (!(firstScreenReady && shown >= SPLASH_MIN_MS) && shown < SPLASH_MAX_MS) return false
+                content.viewTreeObserver.removeOnPreDrawListener(this)
+                return true
+            }
+        })
+        splashScreen.setOnExitAnimationListener { view ->
+            Entrance.hide()
+            view.iconView?.animate()
+                ?.scaleX(1.6f)?.scaleY(1.6f)?.alpha(0f)
+                ?.setDuration(320)
+                ?.setInterpolator(AccelerateInterpolator(1.5f))
+                ?.start()
+            view.animate()
+                .alpha(0f)
+                .setStartDelay(80)
+                .setDuration(300)
+                .setInterpolator(DecelerateInterpolator())
+                .withEndAction { view.remove() }
+                .start()
+            // Once the splash has started to clear, so the entrance is seen.
+            view.postDelayed({ Entrance.play() }, 80)
         }
     }
 
@@ -375,7 +427,15 @@ class MainActivity : ComponentActivity() {
           Box(Modifier.fillMaxSize()) {
             // Screens draw to the bottom edge; the tabs float over them (each screen leaves room, see toolbarClearance).
             // Notes grow out of the card tapped (when there's one on screen) and shrink back into it.
-            SharedTransitionLayout(Modifier.fillMaxSize()) {
+            // After a splash, the page rises into place and the tabs slide up after it.
+            val entrance = rememberEntrance()
+            SharedTransitionLayout(
+                Modifier.fillMaxSize().graphicsLayer {
+                    val p = entrancePart(entrance(), 0, Entrance.PAGE_END_MS)
+                    alpha = p
+                    translationY = (1f - p) * 48.dp.toPx()
+                },
+            ) {
             val morph = remember(this) { CardMorph(this) }
             CompositionLocalProvider(LocalCardMorph provides morph.takeIf { !wide }) {
             NavHost(
@@ -494,7 +554,11 @@ class MainActivity : ComponentActivity() {
                 visible = showBar || backToTabs,
                 enter = slideInVertically(motion.defaultSpatialSpec()) { it } + fadeIn(motion.defaultEffectsSpec()),
                 exit = slideOutVertically(motion.fastSpatialSpec()) { it } + fadeOut(motion.fastEffectsSpec()),
-                modifier = Modifier.align(Alignment.BottomStart),
+                modifier = Modifier.align(Alignment.BottomStart).graphicsLayer {
+                    val p = entrancePart(entrance(), Entrance.BAR_START_MS, Entrance.BAR_END_MS)
+                    translationY = (1f - p) * size.height * 1.5f
+                    alpha = p
+                },
             ) {
                 val badge by notesVm.todoBadge.collectAsState()
                 LaunchedEffect(Unit) { notesVm.loadTodoBadge() }
@@ -548,5 +612,8 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_OPEN_LINE = "open_line"
         const val EXTRA_NEW_NOTE = "new_note"
         private val Loading = Session("", "")
+        /** The splash's drop has landed and settled by now (see drawable/splash_icon_animated.xml). */
+        private const val SPLASH_MIN_MS = 800L
+        private const val SPLASH_MAX_MS = 2000L
     }
 }

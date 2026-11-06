@@ -1,0 +1,12 @@
+<resources>
+    <!-- API 31+: the system splash, a blue screen whose drop falls into place (drawable/splash_icon_animated.xml).
+         MainActivity holds it until the drop has landed and then lifts it away as the app comes in. -->
+    <style name="Theme.Sink" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/splash</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowSplashScreenBackground">@color/ic_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon_animated</item>
+        <item name="android:windowSplashScreenAnimationDuration">820</item>
+    </style>
+</resources>
