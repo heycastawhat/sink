@@ -302,7 +302,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
 
   // admin: the owner, who manages who else may sign in.
   app.get("/me", authed, (c) =>
-    c.json({ ok: true, tokenId: c.get("tokenId"), admin: c.get("scope") === "full" && (opts.users?.isOwner(c.get("subject")) ?? false) }),
+    c.json({ ok: true, tokenId: c.get("tokenId"), subject: c.get("subject"), admin: c.get("scope") === "full" && (opts.users?.isOwner(c.get("subject")) ?? false) }),
   );
 
   app.get("/tokens", authed, requireFullScope, (c) => c.json({ tokens: auth.listTokens(c.get("subject")) }));

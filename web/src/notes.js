@@ -1128,7 +1128,10 @@ export function newNote() {
 
 /** New → Clip a web page (or the bookmarklet, which passes the address): the server saves the page's article as a note. */
 export async function clipPage(address) {
-  const url = address ?? (await askText({ title: 'Clip a web page', label: 'Page address', action: 'Clip' }));
+  // An address from the page's URL could come from any site's link, so it's only clipped once you say so.
+  const url = address
+    ? (await askConfirm({ title: 'Clip this page?', body: address, action: 'Clip' })) && address
+    : await askText({ title: 'Clip a web page', label: 'Page address', action: 'Clip' });
   if (!url) return;
   toast('Clipping…');
   try {
