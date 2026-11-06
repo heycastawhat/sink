@@ -85,9 +85,19 @@ export const webPush =
     return res.status;
   };
 
+// The browsers' push services. The reminder tick POSTs to whatever endpoint is stored, so an arbitrary URL would
+// let any account make this server send requests into its own network.
+const PUSH_HOSTS = /(^|\.)(googleapis\.com|push\.services\.mozilla\.com|push\.apple\.com|notify\.windows\.com)$/;
 const key = z.string().regex(/^[\w-]+=*$/);
 const subscribeBody = z.object({
-  endpoint: z.string().max(2048).url().startsWith("https://"),
+  endpoint: z
+    .string()
+    .max(2048)
+    .url()
+    .refine((u) => {
+      const url = new URL(u);
+      return url.protocol === "https:" && !url.port && PUSH_HOSTS.test(url.hostname);
+    }),
   keys: z.object({
     p256dh: key.refine((k) => unb64u(k).length === 65),
     auth: key.refine((k) => unb64u(k).length === 16),

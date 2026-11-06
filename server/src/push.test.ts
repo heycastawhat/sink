@@ -11,7 +11,7 @@ import { encrypt, sendReminders, vapidKeys, type Subscription } from "./push";
 
 const PUBLIC = "https://sink.test";
 const SUB = {
-  endpoint: "https://push.example.com/send/abc",
+  endpoint: "https://fcm.googleapis.com/fcm/send/abc",
   keys: { p256dh: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4", auth: "BTBZMqHH6r4Tts7J_aSIgg" },
 };
 
@@ -64,7 +64,10 @@ describe("push routes", () => {
 
   test("rejects bad subscriptions", async () => {
     for (const bad of [
-      { ...SUB, endpoint: "http://push.example.com/x" },
+      { ...SUB, endpoint: "http://fcm.googleapis.com/x" },
+      { ...SUB, endpoint: "https://nas.lan/x" },
+      { ...SUB, endpoint: "https://fcm.googleapis.com.evil.example/x" },
+      { ...SUB, endpoint: "https://fcm.googleapis.com:8443/x" },
       { ...SUB, keys: { ...SUB.keys, auth: "short" } },
       { endpoint: SUB.endpoint },
     ]) {
