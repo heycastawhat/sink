@@ -388,6 +388,133 @@ const tables = StateField.define({
   provide: (f) => EditorView.decorations.from(f),
 });
 
+const EMBED_DEPTH = 2;
+
+/** The lines from a `# heading` (any level, matched case-insensitively) up to the next heading as high or higher. */
+function headingSection(text, heading) {
+  const lines = text.split('\n');
+  const want = heading.trim().toLowerCase();
+  let fenced = false;
+  let start = -1;
+  let level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) fenced = !fenced;
+    const m = !fenced && /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(lines[i]);
+    if (!m) continue;
+    if (start < 0 && m[2].toLowerCase() === want) [start, level] = [i, m[1].length];
+    else if (start >= 0 && m[1].length <= level) return lines.slice(start, i).join('\n');
+  }
+  return start < 0 ? null : lines.slice(start).join('\n');
+}
+
+/**
+ * `![[Note]]` / `![[Note#Heading]]` on a line of its own: the other note's text, read-only, under its title (which
+ * opens it). `opts.loadEmbed(target)` fetches `{ path, title, content }`; pages without one (share links) show only
+ * the title. The embedded note is another read-only editor, so it renders the same way, embeds included, down to
+ * EMBED_DEPTH and never back into a note above it.
+ */
+class NoteEmbedWidget extends WidgetType {
+  constructor(target, opts) {
+    super();
+    this.target = target;
+    this.opts = opts;
+  }
+  eq(other) {
+    return other.target === this.target;
+  }
+  toDOM(view) {
+    const { opts, target } = this;
+    const [name, ...rest] = target.split('#');
+    const heading = rest.filter(Boolean).pop();
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-note-embed';
+    const title = document.createElement('button');
+    title.type = 'button';
+    title.className = 'cm-note-embed-title';
+    title.textContent = heading ? `${name} › ${heading}` : name;
+    // Nowhere to go on a share link's page: a name, not a link.
+    title.disabled = !opts.loadEmbed;
+    title.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      opts.onOpenLink?.(target, { newTab: e.shiftKey });
+    });
+    wrap.append(title);
+    // Like a table: a click on the block (not a link in it) edits the `![[…]]` line.
+    wrap.addEventListener('mousedown', (e) => {
+      if (e.defaultPrevented || view.state.readOnly) return;
+      e.preventDefault();
+      view.dispatch({ selection: { anchor: view.state.doc.lineAt(view.posAtDOM(wrap)).to } });
+      view.focus();
+    });
+    const depth = opts.embedDepth ?? 0;
+    const trail = opts.embedTrail ?? (opts.path ? [opts.path] : []);
+    if (!opts.loadEmbed || depth >= EMBED_DEPTH) return wrap;
+    const body = document.createElement('div');
+    body.className = 'cm-note-embed-body';
+    body.textContent = 'Loading…';
+    wrap.append(body);
+    const cache = opts.embedCache;
+    if (!cache.has(name)) cache.set(name, Promise.resolve(opts.loadEmbed(name)).catch(() => null));
+    cache.get(name).then((note) => {
+      body.textContent = '';
+      if (note) title.textContent = heading ? `${note.title} › ${heading}` : note.title;
+      // A board, or a note already showing above this one (it would embed itself forever): just the title.
+      if (note && (/\.excalidraw\.md$/i.test(note.path) || trail.includes(note.path))) return body.remove();
+      const text = note && note.content.replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '');
+      const shown = text != null && heading ? headingSection(text, heading) : text;
+      if (shown == null) {
+        wrap.classList.add('missing');
+        body.textContent = note ? `No “${heading}” heading` : 'Note not found';
+        return;
+      }
+      body.editor = createEditor({
+        parent: body,
+        doc: shown.trim(),
+        readOnly: true,
+        onOpenLink: opts.onOpenLink,
+        resolveEmbed: note.resolveEmbed ?? opts.resolveEmbed,
+        resolveImage: note.resolveImage ?? opts.resolveImage,
+        loadEmbed: opts.loadEmbed,
+        embedCache: cache,
+        embedDepth: depth + 1,
+        embedTrail: [...trail, note.path],
+      });
+      view.requestMeasure();
+    });
+    return wrap;
+  }
+  destroy(dom) {
+    dom.querySelector(':scope > .cm-note-embed-body')?.editor?.destroy();
+  }
+}
+
+function noteEmbedsDeco(state, opts) {
+  const ranges = [];
+  const sel = state.readOnly ? [] : state.selection.ranges;
+  for (let n = 1; n <= state.doc.lines; n++) {
+    const line = state.doc.line(n);
+    if (!line.text.includes('![[')) continue;
+    const m = /^\s*!\[\[([^\]\n|]+)(?:\|[^\]\n]*)?\]\]\s*$/.exec(line.text);
+    const target = m?.[1].trim();
+    if (!target || IMAGE_EXT.test(target) || line.from < frontmatterEnd(state) || inCode(state, line.from + line.text.indexOf('!'))) continue;
+    if (sel.some((r) => r.to >= line.from && r.from <= line.to)) continue;
+    ranges.push(Decoration.replace({ widget: new NoteEmbedWidget(target, opts), block: true }).range(line.from, line.to));
+  }
+  return Decoration.set(ranges);
+}
+
+// One fetch per note for the whole page, embeds within embeds included.
+function noteEmbeds(opts) {
+  const o = { ...opts, embedCache: opts.embedCache ?? new Map() };
+  return StateField.define({
+    create: (state) => noteEmbedsDeco(state, o),
+    update: (deco, tr) =>
+      tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? noteEmbedsDeco(tr.state, o) : deco,
+    provide: (f) => EditorView.decorations.from(f),
+  });
+}
+
 /** Slash commands that are part of the editor, not a plugin. */
 const CORE_COMMANDS = [
   {
@@ -548,7 +675,7 @@ function commandContext(view, opts) {
   };
 }
 
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg|heic)$/i;
+export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg|heic)$/i;
 
 /** Lines that hold a cursor or selection show their raw markup. */
 function activeLines(state) {
@@ -819,6 +946,8 @@ function pasteLink(e, view) {
  *  readOnly                      a page to read (a shared note), not edit
  *  resolveEmbed(name) -> url     for ![[image.png]]
  *  resolveImage(src) -> url      for ![](relative/path.png)
+ *  loadEmbed(name) -> Promise<{path, title, content, resolveEmbed?, resolveImage?} | null>  for ![[Note]]
+ *  path                          this note's path (so an embed never shows it inside itself)
  *  linkTargets() -> [{label, detail}]  for [[ completion
  *  uploadFile(file) -> Promise<string>  pasted/dropped file; returns the text to insert
  */
@@ -915,6 +1044,7 @@ export function createEditor(opts) {
         titleFirst,
         pluginBlocks,
         tables,
+        noteEmbeds(opts),
         autocompletion({ override: [completeLinks, completeCommands], icons: false, addToOptions: [{ render: commandIcon, position: 20 }] }),
         placeholderExt(opts.placeholder ?? (opts.readOnly ? '' : newNoteHint())),
         ...(opts.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),

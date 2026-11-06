@@ -805,14 +805,20 @@ function linkTargets() {
   return state.notes.filter((n) => !/\.excalidraw\.md$/i.test(n.path)).map((n) => ({ label: fileName(n.path), detail: folderOf(n.path) }));
 }
 
+/** The note a [[link]] means, as Obsidian finds it: by path, then file name, then title. */
+function findLinked(target) {
+  const lower = target.split('#')[0].replace(/\.md$/i, '').trim().toLowerCase();
+  return (
+    state.notes.find((n) => n.path.toLowerCase() === `${lower}.md`) ??
+    state.notes.find((n) => fileName(n.path).toLowerCase() === lower.split('/').pop()) ??
+    state.notes.find((n) => n.title.toLowerCase() === lower)
+  );
+}
+
 async function openLink(target, { external } = {}) {
   if (external) return window.open(target, '_blank', 'noopener');
   const name = target.split('#')[0].replace(/\.md$/i, '').trim();
-  const lower = name.toLowerCase();
-  const hit =
-    state.notes.find((n) => n.path.toLowerCase() === `${lower}.md`) ??
-    state.notes.find((n) => fileName(n.path).toLowerCase() === lower.split('/').pop()) ??
-    state.notes.find((n) => n.title.toLowerCase() === lower);
+  const hit = findLinked(target);
   await flush();
   if (hit) return navigate(noteHash(hit.path));
   // Like Obsidian: following a link to a note that doesn't exist creates it.
@@ -886,6 +892,11 @@ function mountEditor(text) {
     onOpenLink: openLink,
     resolveEmbed: (name) => api.attachmentUrl(name),
     resolveImage: (src) => (/^(https?:|data:|\/)/i.test(src) ? src : api.attachmentUrl(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
+    loadEmbed: (target) => {
+      const hit = findLinked(target);
+      return hit ? api.note(hit.path) : null;
+    },
+    path: screen.path,
     linkTargets,
     uploadFile: async (file) => {
       setStatus('Uploading…');
