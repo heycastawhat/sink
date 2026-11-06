@@ -8,6 +8,7 @@ import { noteRoutes } from "./routes/notes";
 import { publicShareRoutes, shareRoutes } from "./routes/share";
 import { eventRoutes } from "./routes/events";
 import { adminRoutes } from "./routes/admin";
+import { calendarRoutes } from "./routes/calendar";
 import { publicPageRoutes, publishRoutes, robotsFor } from "./routes/publish";
 import { todoRoutes } from "./todos";
 import type { Vault } from "./notes";
@@ -121,6 +122,8 @@ export function createApp(deps: {
   // Shared notes, readable without signing in. Before the signed-in API, which would answer 401.
   app.route("/api/public", publicShareRoutes(() => users?.all() ?? [owner]));
   if (users) app.route("/api/public/pages", publicPageRoutes(users));
+  // Calendar apps can't sign in, so the feed's own token in its URL stands in; it opens nothing else.
+  app.route("/api/calendar", calendarRoutes(auth, spaceOf, config.timeZone ?? "UTC"));
   app.route("/api", api);
 
   // A plugin's client script, styles and assets. Signed in like the API: they're the owner's code, not public.

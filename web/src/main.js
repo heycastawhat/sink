@@ -437,6 +437,20 @@ async function renderSettings() {
 </section>
 
 <section class="setting-card">
+  <h2>Calendar feed</h2>
+  <p class="muted">Subscribe in Google or Apple Calendar to see your todos that have a date or reminder. Anyone with the link can read those todos, so keep it private and revoke it if it leaks.</p>
+  <div class="setting-row">
+    <div class="grow muted small" id="calendar-state"></div>
+    <m3e-button id="calendar-revoke" variant="text" hidden>Revoke</m3e-button>
+    <m3e-button id="calendar-create" variant="tonal">Create link</m3e-button>
+  </div>
+  <div id="calendar-result" hidden>
+    <p class="small">Add this link as a calendar from URL. It's only shown now.</p>
+    <div class="copy-row"><code id="calendar-url"></code><m3e-icon-button id="calendar-copy" aria-label="Copy calendar link" title="Copy">${ic('content_copy')}</m3e-icon-button></div>
+  </div>
+</section>
+
+<section class="setting-card">
   <h2>Signed-in devices and assistants</h2>
   <div id="connect-tokens" class="token-list"><m3e-loading-indicator></m3e-loading-indicator></div>
 </section>
@@ -511,6 +525,11 @@ async function renderTokens() {
     const ago = (ts) => (ts ? `${relativeDay(ts).toLowerCase()} ${timeOf(ts)}` : 'never');
     // Assistant tokens carry the "mcp" scope (made by a connector or the Create token button); the rest are sign-ins.
     const isAssistant = (t) => t.scope === 'mcp';
+    const feed = tokens.find((t) => t.scope === 'calendar');
+    $('calendar-state').textContent = feed ? `Link active. ${feed.last_used_at ? `Last fetched ${ago(feed.last_used_at)}.` : 'Not fetched yet.'}` : 'No link yet.';
+    $('calendar-create').textContent = feed ? 'Replace link' : 'Create link';
+    $('calendar-revoke').hidden = !feed;
+    $('calendar-revoke').dataset.id = feed?.id ?? '';
     const recent = (a, b) => (b.id === me.tokenId) - (a.id === me.tokenId) || (b.last_used_at ?? 0) - (a.last_used_at ?? 0);
     const row = (t) => `<div class="token-row">
   <span class="token-icon">${ic(isAssistant(t) ? 'hub' : 'devices')}</span>
@@ -522,7 +541,7 @@ async function renderTokens() {
       `<h3 class="token-group">${title}<span>${items.length || ''}</span></h3>` +
       (items.length ? items.sort(recent).map(row).join('') : `<p class="muted small">${empty}</p>`);
     $('connect-tokens').innerHTML =
-      group('Devices', tokens.filter((t) => !isAssistant(t)), 'No devices signed in.') +
+      group('Devices', tokens.filter((t) => !isAssistant(t) && t.scope !== 'calendar'), 'No devices signed in.') +
       group('Assistants', tokens.filter(isAssistant), 'No assistants connected yet. Add one with the connector URL above.');
   } catch (err) {
     $('connect-tokens').textContent = err.message;
@@ -718,6 +737,23 @@ $('settings').addEventListener('click', async (e) => {
     } catch (err) {
       toast(err.message);
     }
+  } else if (id === 'calendar-create') {
+    try {
+      const { token } = await api.createCalendarToken();
+      $('calendar-url').textContent = `${location.origin}/api/calendar/${token}.ics`;
+      $('calendar-result').hidden = false;
+      renderTokens();
+    } catch (err) {
+      toast(err.message);
+    }
+  } else if (id === 'calendar-copy') {
+    await navigator.clipboard.writeText($('calendar-url').textContent);
+    toast('Copied');
+  } else if (id === 'calendar-revoke') {
+    if (!(await askConfirm({ title: 'Revoke the calendar link?', body: 'Calendars subscribed to it stop updating.', action: 'Revoke', danger: true }))) return;
+    await api.revokeToken($('calendar-revoke').dataset.id).catch((err) => toast(err.message));
+    $('calendar-result').hidden = true;
+    renderTokens();
   } else if (id === 'export-notes') {
     location.href = '/api/notes/export';
   } else if (id === 'keep-import' || id === 'notion-import') {
