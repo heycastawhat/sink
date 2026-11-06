@@ -1110,7 +1110,8 @@ private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge):
             private fun attachment(ref: String): WebResourceResponse {
                 val (file, type) = kotlinx.coroutines.runBlocking { vm.api() }.cachedAttachment(cache, ref)
                     ?: return WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
-                return WebResourceResponse(type, null, file.inputStream())
+                // Boards fetch() images (to hand Excalidraw data URLs), which needs CORS from this "other origin".
+                return WebResourceResponse(type, null, 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), file.inputStream())
             }
 
             // The page never navigates; links go through the bridge.
