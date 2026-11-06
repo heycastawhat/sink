@@ -174,6 +174,10 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     var cardMenu by remember { mutableStateOf<NoteMeta?>(null) }
     var movingNote by remember { mutableStateOf<NoteMeta?>(null) }
     val pullUp = rememberPullUpToCreate { onNew("") }
+    // The drawer goes once the note it opened into covers the list, and in any case when the list is back (the note
+    // can be closed again before the drawer has finished growing behind it).
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_STOP) { pullUp.reset() }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { pullUp.reset() }
     val haptics = rememberHaptics()
     // Runs a folder action and shows its error, if any.
     fun act(block: suspend () -> String?) {

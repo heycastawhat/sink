@@ -54,6 +54,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.EnterExitState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -495,7 +496,12 @@ fun NoteScreen(
     val pullDown = remember(backDispatcher, pullTravel) {
         PullDownToClose(dispatcher = { backDispatcher }, travel = { pullTravel }, enabled = { pullDownAllowed[0] })
     }
-    pullDownAllowed[0] = navBack && !keyboardUp && !board && !ed.closed
+    // Not while the note is still opening: a back gesture started mid-transition seeks back while the opening carries
+    // on underneath, and the two pages are left blended and stuck (a quick pull up to create, then a pull down, did it).
+    val navScope = LocalNavScope.current
+    val settled = navScope == null ||
+        (navScope.transition.currentState == EnterExitState.Visible && navScope.transition.targetState == EnterExitState.Visible)
+    pullDownAllowed[0] = navBack && settled && !keyboardUp && !board && !ed.closed
 
     // Load: the phone's copy first (works offline), then the server's.
     LaunchedEffect(path) {

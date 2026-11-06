@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** How far (after resistance) the drawer has to come up before letting go makes a note. */
@@ -84,6 +85,7 @@ class PullUpToCreate internal constructor(
     val ready get() = pull >= thresholdPx
     internal val progress get() = (pull / thresholdPx).coerceIn(0f, 1f)
     private var settling = false
+    private var settle: Job? = null
 
     /** The rubber band: close to the finger at first (about three quarters of its travel), then ever stiffer towards [stretch]. */
     private fun band(x: Float) = stretch * (1f - 1f / (x * 0.75f / stretch + 1f))
@@ -121,13 +123,24 @@ class PullUpToCreate internal constructor(
         }
     }
 
+    /**
+     * Clears the drawer at once. The note it opens into starts opening half way up, so the drawer is still growing
+     * behind it; once the note covers the list, or if it's closed again first, the drawer has to be gone.
+     */
+    fun reset() {
+        settle?.cancel()
+        raw = 0f
+        pull = 0f
+        settling = false
+    }
+
     /** The finger's gone, moving up at [speed] px/s (negative: down). */
     internal fun release(speed: Float = 0f) {
         if (pull <= 0f || settling) return
         settling = true
         val create = ready || (speed > FLICK && pull >= thresholdPx / 3)
         raw = 0f
-        scope.launch {
+        settle = scope.launch {
             try {
                 if (create) {
                     if (!ready) tick()
