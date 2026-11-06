@@ -6,6 +6,10 @@ import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.interaction.InteractionSource
@@ -51,6 +55,32 @@ class CardMorph(val shared: SharedTransitionScope) {
     fun take() = tapped.also { tapped = null }
 }
 
+/**
+ * Whether the NavHost's transition is following a predictive back gesture. Not snapshot state: the NavHost's
+ * transition lambdas set it right before the transition they describe starts, and the specs below read it then.
+ * While it's set, everything tracks the gesture 1:1 ([track]): springs would overshoot under the finger.
+ */
+object BackMotion {
+    var predictive = false
+
+    /** The gesture is a note pulled down from its top (PullDownToClose), not a swipe from the edge: it sinks rather than drifts. */
+    var downward = false
+
+    /** How far the gesture's whole travel maps onto. Linear, so the page is where the finger says. */
+    const val MS = 400
+
+    fun <T> track(): FiniteAnimationSpec<T> = tween(MS, easing = LinearEasing)
+
+    /** The same, starting part way (from [from] to the end of the gesture's travel). */
+    /**
+     * A note opening (and the screen it opens over settling back): critically damped and a touch slower than the
+     * expressive spring, so it glides into place rather than bouncing.
+     */
+    fun <T> open(): FiniteAnimationSpec<T> = spring(dampingRatio = 1f, stiffness = 300f)
+
+    fun <T> late(from: Float): FiniteAnimationSpec<T> = tween((MS * (1 - from)).toInt(), delayMillis = (MS * from).toInt(), easing = LinearEasing)
+}
+
 val LocalCardMorph = staticCompositionLocalOf<CardMorph?> { null }
 
 /** The current destination's side of the NavHost transition, for the shared bounds on it. */
@@ -66,20 +96,29 @@ val LocalNavScope = staticCompositionLocalOf<AnimatedVisibilityScope?> { null }
 fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
     val morph = LocalCardMorph.current
     val nav = LocalNavScope.current
-    if (key == null || morph == null || nav == null) return this
+    if (nav == null) return this
     val motion = MaterialTheme.motionScheme
+    // The note's corners round as it leaves (towards the card's, or on its own as a back gesture shrinks it) and
+    // square off as it arrives. The spatial spring overshoots, so on its way to square the corner dips below zero,
+    // which a shape refuses (that crashed the app mid-transition): held at zero. Under a back gesture it tracks the
+    // finger instead of springing.
     val corner = if (note) {
-        nav.transition.animateDp({ motion.defaultSpatialSpec() }, label = "morph-corner") {
-            if (it == EnterExitState.Visible) 0.dp else 16.dp
-        }.value.coerceAtLeast(0.dp) // the expressive spatial spring overshoots past 0, and negative corners throw
+        nav.transition.animateDp({ if (BackMotion.predictive) BackMotion.track() else BackMotion.open() }, label = "morph-corner") {
+            if (it == EnterExitState.Visible) 0.dp else if (key != null && morph != null) 16.dp else 28.dp
+        }.value.coerceAtLeast(0.dp)
     } else 16.dp
+    val rounded = if (note) graphicsLayer {
+        shape = RoundedCornerShape(corner)
+        clip = corner > 0.dp
+    } else this
+    if (key == null || morph == null) return rounded
     return with(morph.shared) {
-        this@morphBounds.sharedBounds(
+        rounded.sharedBounds(
             rememberSharedContentState(key),
             nav,
             enter = fadeIn(motion.defaultEffectsSpec()),
             exit = fadeOut(motion.fastEffectsSpec()),
-            boundsTransform = BoundsTransform { _, _ -> motion.defaultSpatialSpec() },
+            boundsTransform = BoundsTransform { _, _ -> if (BackMotion.predictive) BackMotion.track() else BackMotion.open() },
             resizeMode = SharedTransitionScope.ResizeMode.RemeasureToBounds,
             clipInOverlayDuringTransition = OverlayClip(RoundedCornerShape(corner)),
         )

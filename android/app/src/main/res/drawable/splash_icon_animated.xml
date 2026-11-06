@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The splash screen's icon (API 31+): the drop from ic_launcher_foreground drops the last little way into place, squashes as it lands and
+     springs back up, a ripple spreads out from where it landed, and its highlight fades in. Keep the drop's geometry in
+     step with ic_launcher_foreground. The system caps the animation at windowSplashScreenAnimationDuration
+     (values-v31/themes.xml); the first beat waits a moment so the launcher's zoom into the splash lands first. -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector
+            android:width="108dp"
+            android:height="108dp"
+            android:viewportWidth="108"
+            android:viewportHeight="108">
+            <group android:scaleX="0.72" android:scaleY="0.72" android:translateX="18" android:translateY="14.4">
+                <!-- The ripple: a ring round the drop that spreads out to the splash's edge (the system masks the icon to a
+                     circle, so it's centred on the icon and widens until the mask takes it), fading as it goes. -->
+                <group
+                    android:name="ripple"
+                    android:pivotX="50"
+                    android:pivotY="55"
+                    android:scaleX="0.4"
+                    android:scaleY="0.4">
+                    <path
+                        android:name="ring"
+                        android:pathData="M0,55 a50,50 0 1 0 100,0 a50,50 0 1 0 -100,0 Z"
+                        android:strokeColor="#FFFFFFFF"
+                        android:strokeWidth="4"
+                        android:strokeAlpha="0" />
+                </group>
+                <!-- The drop falls (fall) and squashes on landing about its bottom (squash). -->
+                <group
+                    android:name="fall"
+                    android:translateY="-16">
+                    <group
+                        android:name="squash"
+                        android:pivotX="50"
+                        android:pivotY="90">
+                        <path
+                            android:pathData="M50,18 C50,18 22,47 22,60 A28,28 0 0 0 78,60 C78,47 50,18 50,18 Z"
+                            android:fillColor="#FFFFFFFF"
+                            android:strokeColor="#FFFFFFFF"
+                            android:strokeWidth="8"
+                            android:strokeLineJoin="round" />
+                        <path
+                            android:name="shine"
+                            android:pathData="M34,62 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z"
+                            android:fillColor="#FFC7E1FF"
+                            android:fillAlpha="0" />
+                    </group>
+                </group>
+            </group>
+        </vector>
+    </aapt:attr>
+
+    <!-- The fall: gathering speed, as a drop does. It starts only a little high, so the very first frame (which is all
+         the launcher's zoom into the splash shows, and all a launch that doesn't animate the icon ever shows) has the drop. -->
+    <target android:name="fall">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="200"
+                android:interpolator="@android:interpolator/accelerate_quad"
+                android:propertyName="translateY"
+                android:startOffset="180"
+                android:valueFrom="-16"
+                android:valueTo="0" />
+        </aapt:attr>
+    </target>
+    <!-- The landing: squashed wide and low, then springing back up with a little overshoot. -->
+    <target android:name="squash">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator
+                    android:duration="90"
+                    android:interpolator="@android:interpolator/decelerate_quad"
+                    android:propertyName="scaleY"
+                    android:startOffset="380"
+                    android:valueFrom="1"
+                    android:valueTo="0.78" />
+                <objectAnimator
+                    android:duration="90"
+                    android:interpolator="@android:interpolator/decelerate_quad"
+                    android:propertyName="scaleX"
+                    android:startOffset="380"
+                    android:valueFrom="1"
+                    android:valueTo="1.18" />
+                <objectAnimator
+                    android:duration="330"
+                    android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleY"
+                    android:startOffset="470"
+                    android:valueFrom="0.78"
+                    android:valueTo="1" />
+                <objectAnimator
+                    android:duration="330"
+                    android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleX"
+                    android:startOffset="470"
+                    android:valueFrom="1.18"
+                    android:valueTo="1" />
+            </set>
+        </aapt:attr>
+    </target>
+    <!-- The ripple spreads from the landing and fades as it goes. -->
+    <target android:name="ripple">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator
+                    android:duration="480"
+                    android:interpolator="@android:interpolator/decelerate_cubic"
+                    android:propertyName="scaleX"
+                    android:startOffset="380"
+                    android:valueFrom="0.4"
+                    android:valueTo="1.1" />
+                <objectAnimator
+                    android:duration="480"
+                    android:interpolator="@android:interpolator/decelerate_cubic"
+                    android:propertyName="scaleY"
+                    android:startOffset="380"
+                    android:valueFrom="0.4"
+                    android:valueTo="1.1" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ring">
+        <aapt:attr name="android:animation">
+            <set android:ordering="sequentially">
+                <objectAnimator
+                    android:duration="60"
+                    android:propertyName="strokeAlpha"
+                    android:startOffset="380"
+                    android:valueFrom="0"
+                    android:valueTo="0.8" />
+                <objectAnimator
+                    android:duration="420"
+                    android:interpolator="@android:interpolator/decelerate_quad"
+                    android:propertyName="strokeAlpha"
+                    android:valueFrom="0.8"
+                    android:valueTo="0" />
+            </set>
+        </aapt:attr>
+    </target>
+    <!-- The highlight catches the light once the drop has settled. -->
+    <target android:name="shine">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="220"
+                android:interpolator="@android:interpolator/decelerate_quad"
+                android:propertyName="fillAlpha"
+                android:startOffset="560"
+                android:valueFrom="0"
+                android:valueTo="1" />
+        </aapt:attr>
+    </target>
+</animated-vector>
