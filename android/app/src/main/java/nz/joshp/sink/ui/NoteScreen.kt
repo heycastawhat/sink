@@ -107,6 +107,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.material.icons.outlined.Title
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -187,6 +188,11 @@ private class Bridge(
 
 private enum class TemplateAsk { Slash, Menu }
 
+/** Lets a list shown beside an open note save it before opening another in its place. */
+class NoteFlusher {
+    var flush: (then: () -> Unit) -> Unit = { it() }
+}
+
 /** The app's Material colours as the CSS variables the editor styles use. */
 private fun ColorScheme.css() = mapOf(
     "--md-sys-color-primary" to primary,
@@ -237,6 +243,8 @@ fun NoteScreen(
     initialText: String = "",
     /** For a new note: photos and PDFs shared from another app (copies in the cache), uploaded and embedded. */
     sharedFiles: List<File> = emptyList(),
+    /** Set to this note's save-then-continue, for a list beside it that swaps in another note. */
+    flusher: NoteFlusher? = null,
 ) {
     // A board opens in the same page, in Excalidraw, and saves like a note: hash-checked, queued offline, with history.
     val board = path?.endsWith(".excalidraw.md", ignoreCase = true) == true
@@ -257,7 +265,8 @@ fun NoteScreen(
     var status by remember { mutableStateOf("") }
     var pinned by remember { mutableStateOf(false) }
     var color by remember { mutableStateOf<String?>(null) }
-    var crumb by remember { mutableStateOf(path?.substringBeforeLast('/', "")?.ifEmpty { "Notes" } ?: "New note") }
+    // Where the note is now (it moves when a new one is first saved, renamed or filed), for the toolbar's name and folder.
+    var shownPath by remember { mutableStateOf(path) }
     var menu by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -279,7 +288,7 @@ fun NoteScreen(
     fun applyMeta(n: Note) {
         pinned = n.pinned
         color = n.color
-        crumb = n.path.substringBeforeLast('/', "").ifEmpty { "Notes" }
+        shownPath = n.path
     }
 
     /**
@@ -294,7 +303,7 @@ fun NoteScreen(
                 ed.hash = n.hash
                 if (n.content == ed.queued) ed.saved = n.content
                 ed.queued = null
-                crumb = n.path.substringBeforeLast('/', "").ifEmpty { "Notes" }
+                shownPath = n.path
             }
         }
         val text = ed.current
@@ -316,7 +325,7 @@ fun NoteScreen(
             is SaveResult.Saved -> {
                 if (ed.path == null) {
                     ed.path = result.meta.path
-                    crumb = result.meta.folder.ifEmpty { "Notes" }
+                    shownPath = result.meta.path
                 }
                 ed.hash = result.meta.hash
                 ed.saved = text
@@ -408,6 +417,11 @@ fun NoteScreen(
     }
 
     fun flushAndLeave() = flush(onBack)
+    // Handed back when this note goes, so a later tap in the list doesn't wait on a closed page.
+    if (flusher != null) DisposableEffect(flusher) {
+        flusher.flush = ::flush
+        onDispose { flusher.flush = { it() } }
+    }
 
     val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     // The floating toolbar covers the bottom of the page while the keyboard is down; the editor keeps the cursor above
@@ -750,13 +764,18 @@ fun NoteScreen(
             ) {
                 Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = ::flushAndLeave) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                    // The note's name, then where it lives and how its saving is going.
+                    val sp = shownPath
+                    val name = sp?.substringAfterLast('/')?.removeSuffix(".md")?.removeSuffix(".excalidraw") ?: "New note"
+                    val where = (sp?.substringBeforeLast('/', "") ?: ed.folder).substringAfterLast('/').ifEmpty { "Notes" }
                     Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                        Text(crumb, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (status.isNotEmpty()) Text(
-                            status,
+                        Text(name, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOf(where, status).filter { it.isNotEmpty() }.joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall,
                             color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                     IconButton(onClick = {
@@ -850,7 +869,7 @@ fun NoteScreen(
                     vm.renameOpened(from, dest)
                     ed.path = dest
                     ed.folder = dest.substringBeforeLast('/', "")
-                    crumb = ed.folder.ifEmpty { "Notes" }
+                    shownPath = dest
                     vm.refresh()
                     snackbar.showSnackbar(done)
                 }
@@ -922,12 +941,8 @@ fun NoteScreen(
  */
 @Composable
 private fun FormatBar(onFormat: (String) -> Unit, onImage: () -> Unit, onDone: () -> Unit) {
-    @Composable
-    fun Label(text: String) = Text(text, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
     val tools: List<Pair<String, @Composable () -> Unit>> = listOf(
-        Pair("h1") { Label("H1") },
-        Pair("h2") { Label("H2") },
-        Pair("h3") { Label("H3") },
+        Pair("heading") { Icon(Icons.Outlined.Title, "Heading (again for smaller)") },
         Pair("task") { Icon(Icons.Outlined.CheckBox, "Todo") },
         Pair("bullet") { Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, "Bulleted list") },
         Pair("numbered") { Icon(Icons.Outlined.FormatListNumbered, "Numbered list") },
@@ -943,9 +958,9 @@ private fun FormatBar(onFormat: (String) -> Unit, onImage: () -> Unit, onDone: (
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-                for ((kind, content) in tools.take(6)) IconButton(onClick = { onFormat(kind) }) { content() }
+                for ((kind, content) in tools.take(4)) IconButton(onClick = { onFormat(kind) }) { content() }
                 IconButton(onClick = onImage) { Icon(Icons.Outlined.AddPhotoAlternate, "Add image") }
-                for ((kind, content) in tools.drop(6)) IconButton(onClick = { onFormat(kind) }) { content() }
+                for ((kind, content) in tools.drop(4)) IconButton(onClick = { onFormat(kind) }) { content() }
             }
             VerticalDivider(Modifier.height(28.dp).padding(horizontal = 2.dp))
             IconButton(onClick = { onFormat("undo") }) { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") }

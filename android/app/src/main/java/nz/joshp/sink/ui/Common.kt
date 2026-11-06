@@ -29,7 +29,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -56,7 +58,7 @@ fun ScreenTitle(title: String, sub: String? = null, onBack: (() -> Unit)? = null
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun EmptyState(title: String, body: String) {
+fun EmptyState(title: String, body: String, icon: ImageVector) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -67,12 +69,13 @@ fun EmptyState(title: String, body: String) {
                 .size(112.dp)
                 .clip(MaterialShapes.Ghostish.toShape())
                 .background(MaterialTheme.colorScheme.tertiaryContainer),
-        )
+            contentAlignment = Alignment.Center,
+        ) { Icon(icon, null, Modifier.size(44.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer) }
         Spacer(Modifier.height(24.dp))
-        Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+        Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold), textAlign = TextAlign.Center)
         if (body.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
     }
 }

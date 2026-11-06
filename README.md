@@ -97,7 +97,8 @@ Or let [Obtainium](https://github.com/ImranR98/Obtainium) install and update it:
 [add Sink to Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/heycastawhat/sink)
 (or add `https://github.com/heycastawhat/sink` as an app by hand).
 
-- Notes and Todos tabs; notes open fullscreen in the same editor as the web, and boards in the same Excalidraw.
+- Notes and Todos tabs; notes open fullscreen in the same editor as the web (beside the list on tablets and unfolded
+  phones), and boards in the same Excalidraw.
 - Edits made offline are saved on the phone and sent when you're back online.
 - Todo reminders arrive as notifications, with Done, 1 hour and Tomorrow buttons.
 - "New note" Quick Settings tile, and "Share → Sink" from any app turns text into a note, or photos and PDFs into a
