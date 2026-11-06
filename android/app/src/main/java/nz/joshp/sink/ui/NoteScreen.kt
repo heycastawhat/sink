@@ -341,6 +341,7 @@ fun NoteScreen(
                     ed.saved = text
                     status = "Saved"
                 } else if (theirs != null) {
+                    haptics.reject()
                     ed.hash = theirs.hash
                     ed.saved = theirs.content
                     ed.current = theirs.content
@@ -350,6 +351,7 @@ fun NoteScreen(
                     snackbar.showSnackbar("Changed somewhere else. Your version was saved as “${result.copy?.fileName}”.")
                 } else {
                     // Deleted elsewhere: keep going in the copy.
+                    haptics.reject()
                     result.copy?.let {
                         ed.path = it.path
                         ed.hash = it.hash

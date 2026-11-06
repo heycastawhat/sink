@@ -1230,6 +1230,7 @@ async function resolveConflict(mine, current) {
     Object.assign(screen, { hash: current.hash, saved: mine });
     return setStatus('Saved');
   }
+  buzz('warn');
   try {
     // What's in the editor now, including anything typed while the save was out.
     mine = screen.editor.getText();
@@ -1245,6 +1246,7 @@ async function resolveConflict(mine, current) {
       Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine });
     }
     toast(`Changed somewhere else. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
+    buzz('confirm');
     setStatus('Saved');
     loadNotes();
   } catch (err) {
