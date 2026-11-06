@@ -176,6 +176,7 @@ private class Bridge(
     val onLink: (String) -> Unit,
     val onPickImage: () -> Unit,
     val onPickTemplate: () -> Unit,
+    val onEmbed: (String) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
 
@@ -184,6 +185,7 @@ private class Bridge(
     @JavascriptInterface fun openLink(target: String) = main.post { onLink(target) }.let { }
     @JavascriptInterface fun pickImage() = main.post(onPickImage).let { }
     @JavascriptInterface fun pickTemplate() = main.post(onPickTemplate).let { }
+    @JavascriptInterface fun embed(target: String) = main.post { onEmbed(target) }.let { }
 }
 
 private enum class TemplateAsk { Slash, Menu }
@@ -522,6 +524,7 @@ fun NoteScreen(
         if (!pageReady) return@LaunchedEffect
         val payload = buildJsonObject {
             put("text", text)
+            ed.path?.let { put("path", it) }
             put("dark", dark)
             putJsonObject("colors") { colors.css().forEach { (k, v) -> put(k, v) } }
             put("links", buildJsonArray {
@@ -590,6 +593,16 @@ fun NoteScreen(
             save()
             val hit = vm.resolveLink(target) ?: vm.createLinked(target)
             if (hit != null) onOpenNote(hit.path) else snackbar.showSnackbar("Couldn't open “$target”")
+        }
+    }
+
+    /** A note for the page's `![[target]]`: fresh from the server, else the offline copy, else none. */
+    fun sendEmbed(target: String) {
+        scope.launch {
+            val hit = vm.resolveLink(target)
+            val n = hit?.let { runCatching { api()?.note(it.path) }.getOrNull() ?: store.note(it.path) }
+            val note = if (hit != null && n != null) buildJsonObject { put("path", n.path); put("title", hit.title); put("content", n.content) } else null
+            js("window.sink.embed(${JsonPrimitive(target)}, ${note ?: "null"})")
         }
     }
 
@@ -728,6 +741,7 @@ fun NoteScreen(
                     onLink = ::openLink,
                     onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onPickTemplate = { templating = TemplateAsk.Slash },
+                    onEmbed = ::sendEmbed,
                 )).also { web = it } },
                 // Excalidraw's tools sit along the bottom, so a board stops above the floating toolbar instead of under it.
                 modifier = Modifier.fillMaxWidth().weight(1f)
