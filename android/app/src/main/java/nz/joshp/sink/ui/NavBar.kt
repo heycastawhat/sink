@@ -80,7 +80,7 @@ fun FloatingNavBar(
             .height(TOOLBAR_HEIGHT)
             .shadow(8.dp, CircleShape, ambientColor = Color.Black, spotColor = Color.Black)
             .background(colors.container, CircleShape)
-            .padding(PILL_PADDING)
+            .padding(horizontal = PILL_END_PADDING, vertical = PILL_PADDING)
             .selectableGroup(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -89,6 +89,8 @@ fun FloatingNavBar(
 }
 
 private val PILL_PADDING = 4.dp
+/** Room at the pill's ends, a little more than above and below so the places don't crowd its rounded ends. */
+private val PILL_END_PADDING = 10.dp
 /** An icon-only place's width (every place is as tall as the pill inside its padding). */
 private val ITEM_WIDTH = 48.dp
 
@@ -158,9 +160,9 @@ private fun NavPlaceItem(place: NavPlace, selected: Boolean, badge: Int, colors:
         Modifier
             .fillMaxHeight()
             // The capsule, drawn unclipped and wider than the place by the bounce's lead on the layout, so it
-            // overshoots and settles while the place itself doesn't (at most the pill's padding each way).
+            // overshoots and settles while the place itself doesn't (at most the pill's end padding each way).
             .drawBehind {
-                val most = PILL_PADDING.toPx() * 2
+                val most = PILL_END_PADDING.toPx() * 2
                 val extra = ((bounce.value - open.value) * (labelRoomPx[0] + 2 * (16.dp - cellPadding).toPx())).coerceIn(-most, most)
                 val width = (size.width + extra).coerceAtLeast(0f)
                 drawRoundRect(capsule, topLeft = Offset((size.width - width) / 2f, 0f), size = Size(width, size.height), cornerRadius = CornerRadius(size.height / 2f))
