@@ -1,4 +1,4 @@
-/** HTML to readable text, for HTML-only emails. */
+/** HTML to readable text (for HTML-only emails) and to markdown (for clipped pages). */
 
 const PAGE_TEXT_CHARS = 8000;
 
@@ -34,4 +34,99 @@ export function pageText(html: string): string {
     .filter(Boolean)
     .join("\n\n")
     .slice(0, PAGE_TEXT_CHARS);
+}
+
+type Dom = {
+  nodeType: number;
+  nodeName: string;
+  nodeValue: string | null;
+  previousSibling: Dom | null;
+  nextSibling: Dom | null;
+  textContent: string | null;
+  childNodes: ArrayLike<Dom>;
+  getAttribute(name: string): string | null;
+  querySelectorAll(selector: string): ArrayLike<Dom>;
+};
+
+const SKIPPED = new Set(["script", "style", "noscript", "svg", "iframe", "form", "button", "select", "textarea", "template"]);
+const BLOCKS = new Set(["p", "div", "section", "article", "main", "figure", "figcaption", "header", "address", "details", "summary", "dl", "dt", "dd"]);
+
+const BREAKS = /^(p|div|section|article|main|figure|figcaption|h[1-6]|ul|ol|li|pre|table|blockquote|hr|br)$/i;
+
+/** A parsed DOM subtree as markdown, with links and images made absolute against `base`. Only http(s) and mailto links survive. */
+export function htmlToMarkdown(root: Dom, base: string): string {
+  const absolute = (raw: string | null, schemes = /^(https?|mailto):$/) => {
+    try {
+      const u = new URL(raw?.trim() ?? "", base);
+      return schemes.test(u.protocol) ? u.href.replace(/\(/g, "%28").replace(/\)/g, "%29") : null;
+    } catch {
+      return null;
+    }
+  };
+  const kids = (n: Dom): string => Array.from(n.childNodes, walk).join("");
+  const wrap = (n: Dom, mark: string) => {
+    const inner = kids(n);
+    return inner.trim() ? inner.replace(/^(\s*)(.*?)(\s*)$/s, `$1${mark}$2${mark}$3`) : inner;
+  };
+  const cell = (n: Dom) => kids(n).replace(/\s+/g, " ").replace(/\|/g, "\\|").trim();
+
+  function walk(n: Dom): string {
+    if (n.nodeType === 3) {
+      const t = (n.nodeValue ?? "").replace(/\s+/g, " ");
+      // Spacing next to a block (or at the edge of a container) is layout, not content.
+      return t === " " && [n.previousSibling, n.nextSibling].some((s) => !s || (s.nodeType === 1 && BREAKS.test(s.nodeName))) ? "" : t;
+    }
+    if (n.nodeType !== 1) return "";
+    const tag = n.nodeName.toLowerCase();
+    if (SKIPPED.has(tag)) return "";
+    if (/^h[1-6]$/.test(tag)) return `\n\n${"#".repeat(Number(tag[1]))} ${kids(n).replace(/\s+/g, " ").trim()}\n\n`;
+    if (BLOCKS.has(tag)) return `\n\n${kids(n).trim()}\n\n`;
+    switch (tag) {
+      case "br":
+        return "\n";
+      case "hr":
+        return "\n\n---\n\n";
+      case "strong":
+      case "b":
+        return wrap(n, "**");
+      case "em":
+      case "i":
+        return wrap(n, "*");
+      case "code":
+        return n.textContent?.trim() ? `\`${n.textContent.replace(/\n/g, " ")}\`` : "";
+      case "pre":
+        return `\n\n\`\`\`\n${(n.textContent ?? "").replace(/\n$/, "")}\n\`\`\`\n\n`;
+      case "a": {
+        const text = kids(n);
+        const href = absolute(n.getAttribute("href"));
+        return href && text.trim() ? text.replace(/^(\s*)(.*?)(\s*)$/s, `$1[$2](${href})$3`) : text;
+      }
+      case "img": {
+        const src = absolute(n.getAttribute("src") ?? n.getAttribute("data-src"), /^https?:$/);
+        return src ? `![${(n.getAttribute("alt") ?? "").replace(/[\[\]\n]/g, " ").trim()}](${src})` : "";
+      }
+      case "blockquote":
+        return `\n\n${kids(n).trim().replace(/^/gm, "> ")}\n\n`;
+      case "ul":
+      case "ol": {
+        const items = Array.from(n.childNodes).filter((c) => c.nodeName.toLowerCase() === "li");
+        const lines = items.map((li, i) => {
+          const bullet = tag === "ol" ? `${i + 1}. ` : "- ";
+          return bullet + kids(li).trim().replace(/\n{2,}(?=(?:- |\d+\. ))/g, "\n").replace(/\n/g, "\n" + " ".repeat(bullet.length));
+        });
+        return `\n\n${lines.join("\n")}\n\n`;
+      }
+      case "table": {
+        const rows = Array.from(n.querySelectorAll("tr"), (tr) => Array.from(tr.querySelectorAll("th,td"), cell));
+        const width = Math.max(0, ...rows.map((r) => r.length));
+        if (!width) return "";
+        const line = (r: string[]) => `| ${Array.from({ length: width }, (_, i) => r[i] ?? "").join(" | ")} |`;
+        return `\n\n${[line(rows[0]!), line(Array(width).fill("---")), ...rows.slice(1).map(line)].join("\n")}\n\n`;
+      }
+      default:
+        return kids(n);
+    }
+  }
+
+  return walk(root).replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
 }
