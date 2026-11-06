@@ -69,7 +69,10 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -181,6 +184,24 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     }
 
     val onCardMenu = { n: NoteMeta -> cardMenu = n }
+    // Shared by the card menu and swiping a card. [n] may be stale, so read pinned fresh.
+    fun togglePin(n: NoteMeta) {
+        val on = !(state.notes.firstOrNull { it.path == n.path } ?: n).pinned
+        haptics.toggle(on)
+        act { vm.setCardMeta(n.path, pin = on) }
+    }
+    // Returns once the move is done (or failed); the Undo snackbar carries on in the screen's scope.
+    suspend fun archive(n: NoteMeta) {
+        haptics.confirm()
+        val name = n.path.substringAfterLast('/')
+        val archived = n.path.startsWith("Archive/", ignoreCase = true)
+        val dest = if (archived) name else "Archive/$name"
+        vm.moveCard(n.path, dest)?.let { scope.launch { snackbar.showSnackbar(it) }; return }
+        scope.launch {
+            val result = snackbar.showSnackbar(if (archived) "Unarchived" else "Archived", actionLabel = "Undo")
+            if (result == SnackbarResult.ActionPerformed) vm.moveCard(dest, n.path)?.let { snackbar.showSnackbar(it) }
+        }
+    }
 
     val hideFoldered by vm.hideFoldered.collectAsStateWithLifecycle()
     // Search covers everything; browsing can leave filed notes to their own folders (home and every folder alike).
@@ -334,11 +355,18 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                                 )
                             }
                         }
+                        // Swipe a card one way to pin it, the other to archive it. Pinned and other cards share keys
+                        // (a note is only ever in one), so a pinned card slides between the sections.
+                        val card: @Composable (NoteMeta, Modifier) -> Unit = { n, modifier ->
+                            SwipeCard(n, onPin = { togglePin(n) }, onArchive = { archive(n) }, modifier) {
+                                NoteCard(n, onOpen, onCardMenu, vm::cardImage)
+                            }
+                        }
                         if (pinned.isNotEmpty()) {
-                            items(pinned, key = { "p:" + it.path }) { NoteCard(it, onOpen, onCardMenu, vm::cardImage, Modifier.animateItem()) }
+                            items(pinned, key = { it.path }) { card(it, Modifier.animateItem()) }
                             item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
-                        items(others, key = { it.path }) { NoteCard(it, onOpen, onCardMenu, vm::cardImage, Modifier.animateItem()) }
+                        items(others, key = { it.path }) { card(it, Modifier.animateItem()) }
                         if (pinned.isNotEmpty() && others.isNotEmpty()) {
                             item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         } else if (unfiledHome && others.isNotEmpty() && (subfolders.isNotEmpty() || showRecent)) {
@@ -446,21 +474,10 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
         val current = state.notes.firstOrNull { it.path == n.path } ?: n
         CardActionsSheet(
             current,
-            onPin = { haptics.toggle(!current.pinned); act { vm.setCardMeta(n.path, pin = !current.pinned) } },
+            onPin = { togglePin(current) },
             onColor = { c -> haptics.confirm(); act { if (c == null) vm.setCardMeta(n.path, clearColor = true) else vm.setCardMeta(n.path, color = c) } },
             onMove = { cardMenu = null; movingNote = current },
-            onArchive = {
-                cardMenu = null
-                haptics.confirm()
-                val name = n.path.substringAfterLast('/')
-                val archived = n.path.startsWith("Archive/", ignoreCase = true)
-                val dest = if (archived) name else "Archive/$name"
-                scope.launch {
-                    vm.moveCard(n.path, dest)?.let { snackbar.showSnackbar(it); return@launch }
-                    val result = snackbar.showSnackbar(if (archived) "Unarchived" else "Archived", actionLabel = "Undo")
-                    if (result == SnackbarResult.ActionPerformed) vm.moveCard(dest, n.path)?.let { snackbar.showSnackbar(it) }
-                }
-            },
+            onArchive = { cardMenu = null; scope.launch { archive(n) } },
             onDelete = { cardMenu = null; haptics.reject(); act { vm.trashCard(n.path) } },
             onDismiss = { cardMenu = null },
         )
@@ -572,6 +589,48 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMe
             }
         }
     }
+}
+
+/**
+ * Swipe right to pin or unpin, left to archive (or unarchive, in Archive/). Only on the grid: the Recent row scrolls
+ * sideways, so a swipe there would fight it. The threshold is 40% of the card, so a sideways nudge while scrolling
+ * springs back rather than acting.
+ */
+@Composable
+private fun SwipeCard(n: NoteMeta, onPin: () -> Unit, onArchive: suspend () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val state = rememberSwipeToDismissBoxState(positionalThreshold = { it * 0.4f })
+    val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
+    LaunchedEffect(state.targetValue) {
+        if (state.targetValue != SwipeToDismissBoxValue.Settled) haptics.threshold()
+    }
+    val shape = RoundedCornerShape(16.dp)
+    SwipeToDismissBox(
+        modifier = modifier.clip(shape),
+        state = state,
+        onDismiss = { value ->
+            // Pinned, the card moves sections with the same key, so its state stays: slide it back at once. Archived,
+            // it stays swiped away until the move is done; then it's gone from the list, or comes back if that failed.
+            scope.launch {
+                if (value == SwipeToDismissBoxValue.StartToEnd) onPin() else onArchive()
+                state.reset()
+            }
+        },
+        backgroundContent = {
+            val pin = state.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+            val archived = n.path.startsWith("Archive/", ignoreCase = true)
+            val (bg, fg) = if (pin) MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+                else MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+            Row(
+                Modifier.fillMaxSize().background(bg, shape).padding(horizontal = 20.dp),
+                horizontalArrangement = if (pin) Arrangement.Start else Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (pin) Icon(if (n.pinned) Icons.Outlined.PushPin else Icons.Filled.PushPin, if (n.pinned) "Unpin" else "Pin", tint = fg)
+                else Icon(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive", tint = fg)
+            }
+        },
+    ) { content() }
 }
 
 /** Card columns: as many as fit at 220dp or wider, but always at least two, Keep-style. */
