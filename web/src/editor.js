@@ -1012,8 +1012,13 @@ export function createEditor(opts) {
       view.dispatch({ selection: { anchor: line.to }, scrollIntoView: true });
       view.focus();
     },
-    /** h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike, code, link, indent, outdent, undo, redo. */
+    /** heading (steps through h1–h3), h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike, code, link, indent, outdent, undo, redo. */
     format(kind) {
+      // One heading button: plain → H1 → H2 → H3 → plain, read from the caret's line.
+      if (kind === 'heading') {
+        const now = kindOf(view.state.doc.lineAt(view.state.selection.main.from).text.match(LINE_START)[2]);
+        kind = { h1: 'h2', h2: 'h3', h3: 'h3' }[now] ?? 'h1';
+      }
       if (LINE_KINDS[kind]) formatLines(view, kind);
       else FORMATS[kind]?.(view);
       view.focus();
