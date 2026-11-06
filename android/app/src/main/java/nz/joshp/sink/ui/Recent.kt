@@ -118,15 +118,21 @@ fun RecentFiledRow(items: List<Recent>, onOpen: (String) -> Unit) {
             val n = r.note
             val outline = NOTE_HUES[n.color]?.copy(alpha = 0.45f) ?: MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
             val press = remember { MutableInteractionSource() }
+            val morph = LocalCardMorph.current
+            val key = "recent:" + n.path
             Row(
                 Modifier
                     .animateItem()
                     .widthIn(max = 220.dp)
+                    .morphBounds(key)
                     .pressScale(press)
                     .clip(RoundedCornerShape(18.dp))
                     .background(noteTint(n.color))
                     .border(1.dp, outline, RoundedCornerShape(18.dp))
-                    .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(n.path) }
+                    .clickable(interactionSource = press, indication = LocalIndication.current) {
+                        morph?.tapped = key
+                        onOpen(n.path)
+                    }
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -157,14 +163,20 @@ private fun RecentCard(r: Recent, onOpen: (String) -> Unit, modifier: Modifier =
     val n = r.note
     val press = remember { MutableInteractionSource() }
     val outline = NOTE_HUES[n.color]?.copy(alpha = 0.45f) ?: MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+    val morph = LocalCardMorph.current
+    val key = "recent:" + n.path
     Column(
         modifier
             .width(200.dp)
+            .morphBounds(key)
             .pressScale(press)
             .clip(RoundedCornerShape(16.dp))
             .background(noteTint(n.color))
             .border(1.dp, outline, RoundedCornerShape(16.dp))
-            .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(n.path) }
+            .clickable(interactionSource = press, indication = LocalIndication.current) {
+                morph?.tapped = key
+                onOpen(n.path)
+            }
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

@@ -544,14 +544,20 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMe
     // A note with no heading is named after its first line (Keep-style); showing both would repeat it.
     val showTitle = n.isBoard || n.snippet != null || n.title != n.fileName || !firstLine.startsWith(n.title)
     val outline = NOTE_HUES[n.color]?.copy(alpha = 0.45f) ?: MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+    val morph = LocalCardMorph.current
+    val key = "card:" + n.path
     Column(
         modifier
             .fillMaxWidth()
+            .morphBounds(key)
             .pressScale(press)
             .clip(RoundedCornerShape(16.dp))
             .background(noteTint(n.color))
             .border(1.dp, outline, RoundedCornerShape(16.dp))
-            .combinedClickable(interactionSource = press, indication = LocalIndication.current, onLongClickLabel = "Note actions", onLongClick = { onLongPress(n) }) { onOpen(n.path) },
+            .combinedClickable(interactionSource = press, indication = LocalIndication.current, onLongClickLabel = "Note actions", onLongClick = { onLongPress(n) }) {
+                morph?.tapped = key
+                onOpen(n.path)
+            },
     ) {
         // The note's first image across the top, as Keep does; nothing until (unless) it loads.
         if (n.image != null && n.snippet == null) {
@@ -617,17 +623,20 @@ private fun SwipeCard(n: NoteMeta, onPin: () -> Unit, onArchive: suspend () -> U
             }
         },
         backgroundContent = {
-            val pin = state.dismissDirection == SwipeToDismissBoxValue.StartToEnd
-            val archived = n.path.startsWith("Archive/", ignoreCase = true)
-            val (bg, fg) = if (pin) MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-                else MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
-            Row(
-                Modifier.fillMaxSize().background(bg, shape).padding(horizontal = 20.dp),
-                horizontalArrangement = if (pin) Arrangement.Start else Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (pin) Icon(if (n.pinned) Icons.Outlined.PushPin else Icons.Filled.PushPin, if (n.pinned) "Unpin" else "Pin", tint = fg)
-                else Icon(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive", tint = fg)
+            // Only while swiping: otherwise it would show in the card's place as the card grows into its note.
+            if (state.dismissDirection != SwipeToDismissBoxValue.Settled) {
+                val pin = state.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+                val archived = n.path.startsWith("Archive/", ignoreCase = true)
+                val (bg, fg) = if (pin) MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+                    else MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+                Row(
+                    Modifier.fillMaxSize().background(bg, shape).padding(horizontal = 20.dp),
+                    horizontalArrangement = if (pin) Arrangement.Start else Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (pin) Icon(if (n.pinned) Icons.Outlined.PushPin else Icons.Filled.PushPin, if (n.pinned) "Unpin" else "Pin", tint = fg)
+                    else Icon(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive", tint = fg)
+                }
             }
         },
     ) { content() }

@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.runtime.key
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.animation.SharedTransitionLayout
 import androidx.navigationevent.NavigationEventTransitionState
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.compose.runtime.saveable.listSaver
@@ -102,7 +104,8 @@ private val TABS = listOf(
 
 /**
  * A note to open (or a new draft when [path] is null, optionally starting with [text] and with [files] from the
- * app's cache to attach). [opened] tells two otherwise identical new drafts apart.
+ * app's cache to attach). [opened] tells two otherwise identical new drafts apart. [from] is the card it was opened
+ * from, which it grows out of (see [CardMorph]).
  */
 data class NoteTarget(
     val path: String?,
@@ -111,19 +114,20 @@ data class NoteTarget(
     val text: String = "",
     val files: List<File> = emptyList(),
     val opened: Long = System.nanoTime(),
+    val from: String? = null,
 ) {
     val route get() =
         "note?path=${path?.let(Uri::encode) ?: ""}&line=${line ?: -1}&folder=${Uri.encode(folder)}&text=${Uri.encode(text)}" +
-            "&files=${Uri.encode(files.joinToString("\n") { it.path })}"
+            "&files=${Uri.encode(files.joinToString("\n") { it.path })}&from=${Uri.encode(from.orEmpty())}"
 }
 
 private val NoteTargetSaver = listSaver<NoteTarget?, String>(
-    save = { t -> if (t == null) emptyList() else listOf(t.path ?: "\u0000", "${t.line ?: -1}", t.folder, t.text, t.files.joinToString("\n") { it.path }, "${t.opened}") },
+    save = { t -> if (t == null) emptyList() else listOf(t.path ?: "\u0000", "${t.line ?: -1}", t.folder, t.text, t.files.joinToString("\n") { it.path }, "${t.opened}", t.from.orEmpty()) },
     restore = { v ->
         if (v.isEmpty()) null
         else NoteTarget(
             v[0].takeIf { it != "\u0000" }, v[1].toInt().takeIf { it >= 0 }, v[2], v[3],
-            v[4].split('\n').filter { it.isNotEmpty() }.map(::File), v[5].toLong(),
+            v[4].split('\n').filter { it.isNotEmpty() }.map(::File), v[5].toLong(), v.getOrNull(6)?.ifEmpty { null },
         )
     },
 )
@@ -368,6 +372,10 @@ class MainActivity : ComponentActivity() {
         ) { _ ->
           Box(Modifier.fillMaxSize()) {
             // Screens draw to the bottom edge; the tabs float over them (each screen leaves room, see toolbarClearance).
+            // Notes grow out of the card tapped (when there's one on screen) and shrink back into it.
+            SharedTransitionLayout(Modifier.fillMaxSize()) {
+            val morph = remember(this) { CardMorph(this) }
+            CompositionLocalProvider(LocalCardMorph provides morph.takeIf { !wide }) {
             NavHost(
                 nav,
                 startDestination = "notes",
@@ -388,10 +396,11 @@ class MainActivity : ComponentActivity() {
                 },
             ) {
                 composable("notes") {
+                  CompositionLocalProvider(LocalNavScope provides this) {
                     val list = @Composable {
                         NotesScreen(
                             notesVm,
-                            onOpen = { if (it != beside?.path) openNoteAt(it, null) },
+                            onOpen = { if (it != beside?.path) open(NoteTarget(it, from = morph.take())) },
                             onNew = { text -> open(NoteTarget(null, folder = notesVm.state.value.folder, text = text)) },
                             onSettings = { flusher.flush { nav.navigate("settings") } },
                         )
@@ -419,19 +428,22 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                  }
                 }
                 composable("todos") { TodosScreen(notesVm, onOpenNote = { p, l -> openNoteAt(p, l) }) }
                 composable(
-                    "note?path={path}&line={line}&folder={folder}&text={text}&files={files}",
+                    "note?path={path}&line={line}&folder={folder}&text={text}&files={files}&from={from}",
                     arguments = listOf(
                         navArgument("path") { type = NavType.StringType; defaultValue = "" },
                         navArgument("line") { type = NavType.IntType; defaultValue = -1 },
                         navArgument("folder") { type = NavType.StringType; defaultValue = "" },
                         navArgument("text") { type = NavType.StringType; defaultValue = "" },
                         navArgument("files") { type = NavType.StringType; defaultValue = "" },
+                        navArgument("from") { type = NavType.StringType; defaultValue = "" },
                     ),
                 ) { e ->
                     val path = e.arguments?.getString("path").orEmpty().ifEmpty { null }
+                    CompositionLocalProvider(LocalNavScope provides this) {
                     NoteScreen(
                         notesVm,
                         path = path,
@@ -442,10 +454,14 @@ class MainActivity : ComponentActivity() {
                         onSwitch = { switching.value = true },
                         initialText = e.arguments?.getString("text").orEmpty(),
                         sharedFiles = e.arguments?.getString("files").orEmpty().split('\n').filter { it.isNotEmpty() }.map(::File),
+                        morphKey = e.arguments?.getString("from").orEmpty().ifEmpty { null },
                         navBack = true,
                     )
+                    }
                 }
                 composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onBack = { nav.popBackStack() }, onCheckForUpdates = checkForUpdates) }
+            }
+            }
             }
             // The tabs slide away when a note opens over them and come back with the list.
             AnimatedVisibility(

@@ -256,6 +256,8 @@ fun NoteScreen(
     sharedFiles: List<File> = emptyList(),
     /** Set to this note's save-then-continue, for a list beside it that swaps in another note. */
     flusher: NoteFlusher? = null,
+    /** The card this note grows out of and shrinks back into (see [morphBounds]). */
+    morphKey: String? = null,
     /**
      * Back is the NavHost's, so a predictive back gesture can animate the note away as it's dragged; the note saves as
      * it pauses (when the gesture starts, or when it's popped) instead of before leaving.
@@ -281,7 +283,8 @@ fun NoteScreen(
 
     var status by remember { mutableStateOf("") }
     var pinned by remember { mutableStateOf(false) }
-    var color by remember { mutableStateOf<String?>(null) }
+    // Known from the list already, so the page opens in its card's colour rather than changing once loaded.
+    var color by remember { mutableStateOf(vm.state.value.notes.find { it.path == path }?.color) }
     // Where the note is now (it moves when a new one is first saved, renamed or filed), for the toolbar's name and folder.
     var shownPath by remember { mutableStateOf(path) }
     var menu by remember { mutableStateOf(false) }
@@ -770,7 +773,8 @@ fun NoteScreen(
     }
 
     val paper = noteTint(color, MaterialTheme.colorScheme.surfaceContainerLowest, 0.16f)
-    Box(Modifier.fillMaxSize().background(paper)) {
+    Box(Modifier.fillMaxSize().morphBounds(morphKey, note = true).background(paper)) {
+      Box(Modifier.fillMaxSize().morphContent()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             AndroidView(
                 factory = { ctx -> editorWebView(ctx, vm, Bridge(
@@ -867,6 +871,7 @@ fun NoteScreen(
             Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
                 .padding(bottom = if (keyboardUp) 56.dp else TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 8.dp),
         )
+      }
     }
 
     if (menu) {
