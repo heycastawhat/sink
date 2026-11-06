@@ -1108,6 +1108,19 @@ export function newNote() {
   openFromApp(state.folder ? `#/new?folder=${encodeURIComponent(state.folder)}` : '#/new');
 }
 
+/** New → Clip a web page (or the bookmarklet, which passes the address): the server saves the page's article as a note. */
+export async function clipPage(address) {
+  const url = address ?? (await askText({ title: 'Clip a web page', label: 'Page address', action: 'Clip' }));
+  if (!url) return;
+  toast('Clipping…');
+  try {
+    const created = await api.clip(/^[a-z][a-z\d+.-]*:/i.test(url) ? url : `https://${url}`, state.folder);
+    openFromApp(noteHash(created.path));
+  } catch (err) {
+    toast(`Couldn't clip that page: ${err.message}`);
+  }
+}
+
 /** Text the next draft starts with (New → From template). */
 let draftText = '';
 

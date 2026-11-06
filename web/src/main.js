@@ -215,24 +215,30 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme
 
 // ---------- routing ----------
 // Hash routes so reloads, the back button and links keep their place:
-// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new[?folder=F]  #/todos  #/trash  #/settings
+// #/ or #/notes  #/notes/<folder>  #/n/<note path>[?line=N]  #/new[?folder=F]  #/clip?url=U  #/todos  #/trash  #/settings
 
 function parseHash() {
   const [path, query = ''] = (location.hash.replace(/^#/, '') || '/').split('?');
   const [, first = '', ...rest] = path.split('/');
-  const base = { view: 'notes', folder: '', note: null, line: null, draft: false };
+  const base = { view: 'notes', folder: '', note: null, line: null, draft: false, clip: null };
   if (!first || first === 'notes') return { ...base, folder: decodeURIComponent(rest.join('/')) };
   if (first === 'n' && rest.length) {
     const line = new URLSearchParams(query).get('line');
     return { ...base, note: rest.map(decodeURIComponent).join('/'), line: line == null ? null : Number(line) };
   }
   if (first === 'new') return { ...base, draft: true, folder: new URLSearchParams(query).get('folder') ?? '' };
+  if (first === 'clip') return { ...base, clip: new URLSearchParams(query).get('url') };
   if (['todos', 'trash', 'settings'].includes(first)) return { ...base, view: first };
   return base;
 }
 
 function applyRoute() {
   const route = parseHash();
+  if (route.clip) {
+    // The bookmarklet's address: clip once, then leave it out of history so back and reload don't clip again.
+    location.replace('#/notes');
+    return notes.clipPage(route.clip);
+  }
   const viewChanged = route.view !== state.view;
   state.view = route.view;
   state.folder = route.folder;
@@ -386,6 +392,12 @@ async function renderSettings() {
     </div>
     <m3e-button id="notion-import" variant="tonal">${ic('upload', 'icon')}Import</m3e-button>
     <input id="notion-file" type="file" accept=".zip" hidden />
+  </div>
+  <div class="setting-row">
+    <div class="grow">
+      <div class="setting-title">Clip web pages</div>
+      <div class="muted small">New → Clip a web page saves a page's article as a note, with its address. Or drag this to your bookmarks bar and click it on any page: <a id="clip-bookmarklet" href="javascript:location.href='${esc(location.origin)}/#/clip?url='+encodeURIComponent(location.href)">Clip to Sink</a>.</div>
+    </div>
   </div>
   <div class="setting-row">
     <div class="grow">
@@ -641,6 +653,10 @@ async function runImport(kind, input) {
 }
 
 $('settings').addEventListener('click', async (e) => {
+  if (e.target.closest('#clip-bookmarklet')) {
+    e.preventDefault();
+    return toast('Drag it to your bookmarks bar');
+  }
   const scheme = e.target.closest('[data-scheme]');
   if (scheme) {
     storage.set('scheme', scheme.dataset.scheme);
@@ -738,6 +754,7 @@ const NEW_ITEMS = [
   { id: 'todo', label: 'Todo', icon: 'add_task', run: () => notes.quickTodo() },
   { id: 'folder', label: 'Folder', icon: 'create_new_folder', run: () => notes.newFolderHere(state.view === 'notes' ? state.folder : '') },
   { id: 'board', label: 'Board', icon: 'draw', run: () => notes.newBoard() },
+  { id: 'clip', label: 'Clip a web page', icon: 'link', run: () => notes.clipPage() },
   { id: 'template', label: 'From template', icon: 'content_copy', run: () => notes.newFromTemplate() },
 ];
 const itemHtml = (cls) =>
