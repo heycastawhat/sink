@@ -357,6 +357,7 @@ describe("mcp", () => {
     const tools = (await rpc(token, "tools/list")).body.result.tools.map((t: any) => t.name);
     expect(tools.sort()).toEqual([
       "add_todo",
+      "clip_url",
       "complete_todo",
       "create_folder",
       "list_todos",
@@ -402,6 +403,14 @@ describe("mcp", () => {
     const passport = (await call(token, "list_todos")).data.todos[0];
     const moved = await call(token, "update_todo", { path: passport.path, line: passport.line, raw: passport.raw, due: "2026-12-01" });
     expect(moved.data.updated).toBe("- [ ] passport 📅 2026-12-01");
+  });
+
+  test("clip_url goes through the clip API and refuses private addresses", async () => {
+    const token = await login();
+    const clipped = await call(token, "clip_url", { url: "http://169.254.169.254/latest/meta-data/" });
+    expect(clipped.result.isError).toBe(true);
+    expect(clipped.result.content[0].text).toBe("that address isn't allowed");
+    expect((await setup.app.request("/api/clip", { method: "POST", body: "{}" })).status).toBe(401);
   });
 
   test("folders, moving, trash and pin/colour", async () => {

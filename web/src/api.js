@@ -62,6 +62,7 @@ export const api = {
   unshare: (path) => request(`/notes/share?${p(path)}`, { method: 'DELETE' }),
   version: (path, id) => request(`/notes/versions/${id}?${p(path)}`),
   createNote: (body) => request('/notes', json('POST', body)),
+  clip: (url, folder) => request('/clip', json('POST', { url, folder })),
   noteMeta: (path, body) => request(`/notes/meta?${p(path)}`, json('PATCH', body)),
   moveNote: (from, to) => request('/notes/move', json('POST', { from, to })),
   createFolder: (path) => request('/notes/folders', json('POST', { path })),

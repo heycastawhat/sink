@@ -4,6 +4,7 @@ import { serveStatic } from "hono/bun";
 import { secureHeaders } from "hono/secure-headers";
 import { Auth, authRoutes, requestOrigin, requireAuth, type AuthEnv } from "./auth";
 import type { MiddlewareHandler } from "hono";
+import { clipRoutes } from "./routes/clip";
 import { noteRoutes } from "./routes/notes";
 import { publicShareRoutes, shareRoutes } from "./routes/share";
 import { eventRoutes } from "./routes/events";
@@ -55,6 +56,8 @@ export function createApp(deps: {
   auth: Auth;
   oidc: Oidc;
   config: Pick<Config, "secureCookies" | "maxUploadBytes" | "webDir" | "publicUrls"> & Partial<Pick<Config, "timeZone" | "trashDays">>;
+  // Tests only: a host that web clips may reach even though it's a private address.
+  clipAllowHost?: string;
 }) {
   const { db, vault, plugins, users, auth, oidc, config } = deps;
   const owner: Space = { db, vault };
@@ -77,6 +80,7 @@ export function createApp(deps: {
       await next();
     });
     api.route("/", noteRoutes(space.vault, config.maxUploadBytes, config.trashDays));
+    api.route("/", clipRoutes(space.vault, config.timeZone ?? "UTC", deps.clipAllowHost));
     api.route("/", todoRoutes(space.db, space.vault, config.timeZone ?? "UTC"));
     api.route("/", shareRoutes(space.db, space.vault));
     api.route("/", eventRoutes(space.vault));

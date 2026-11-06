@@ -16,6 +16,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Leaving Notion:** import its Markdown & CSV export from Settings: the page tree, links between pages, images, and
   databases as tables with each row's properties in its page's frontmatter.
+- **Web clipper:** New → Clip a web page, a bookmarklet from Settings, or Share → Sink on Android saves a page's article as a
+  markdown note with its source address. Sink fetches public pages only, never anything on your own network.
 - **Todos:** every `- [ ]` in every note, in one list, with due dates and reminders (Obsidian Tasks syntax).
   Recurring todos (`🔁 every week`) add their next copy when ticked; tick with Undo, tap to edit, reschedule in a tap.
   Quick add reads dates off the end ("call mum tomorrow 6pm", "bins every tuesday"); priorities sort and show,
@@ -104,7 +106,7 @@ Or let [Obtainium](https://github.com/ImranR98/Obtainium) install and update it:
 - Edits made offline are saved on the phone and sent when you're back online.
 - Todo reminders arrive as notifications, with Done, 1 hour and Tomorrow buttons.
 - "New note" Quick Settings tile, and "Share → Sink" from any app turns text into a note, or photos and PDFs into a
-  note with them attached.
+  note with them attached. A shared link on its own is clipped as a web page.
 
 On iPhone or anywhere else, the web app works on phones too. Install it (Add to Home Screen) and turn on Settings →
 Todo reminders to get reminders there as notifications too (Web Push; on iPhone only from the installed app). It's
@@ -142,7 +144,7 @@ on the same page and run the command it shows.
 
 Tools:
 
-- **Notes:** `search_notes` (by words, or list a folder), `read_note`, `save_note`, `style_note` (pin, colour)
+- **Notes:** `search_notes` (by words, or list a folder), `read_note`, `save_note`, `style_note` (pin, colour), `clip_url` (save a web page as a note)
 - **Folders:** `create_folder`, `move_note` (move or rename a note or a whole folder)
 - **Todos:** `list_todos`, `add_todo`, `complete_todo`, `update_todo`
 - **Trash:** `trash_note`, `list_trash`, `restore_from_trash`. Assistants can't delete anything for good; only you can

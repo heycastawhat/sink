@@ -33,7 +33,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="nz.joshp.sink" android:host="auth" />
             </intent-filter>
-            <!-- Text shared from any app (a link, a quote) opens as a new note; photos and PDFs are attached to one. -->
+            <!-- Text shared from any app opens as a new note (a lone link is clipped as a web page instead); photos and PDFs are attached to one. -->
             <intent-filter android:label="@string/share_label">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
