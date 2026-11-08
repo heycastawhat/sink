@@ -888,6 +888,22 @@ describe("notes", () => {
     expect((await put("# Open\n", hash)).status).toBe(200);
   });
 
+  test("an editable share can't extend frontmatter that has no newline after it", async () => {
+    const token = await login();
+    writeFileSync(file("Bare.md"), "---\ntags: a\n---");
+    await send(token, "POST", "/api/notes/scan");
+    const share = (await (await send(token, "POST", "/api/notes/share", { path: "Bare.md", editable: true })).json()) as any;
+    const { hash } = (await (await setup.app.request(`/api/public/share/${share.id}`)).json()) as any;
+    const res = await setup.app.request(`/api/public/share/${share.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "x\npublish: true\n---\nhello", base_hash: hash, name: "Sam" }),
+    });
+    expect(res.status).toBe(200);
+    expect(readFileSync(file("Bare.md"), "utf8")).toBe("---\ntags: a\n---\nx\npublish: true\n---\nhello");
+    expect((await (await send(token, "GET", q("Bare.md"))).json() as any).publish).toBeFalsy();
+  });
+
   test("two saves on the same version: one wins, the other is a conflict", async () => {
     const token = await login();
     const { hash } = (await (await send(token, "POST", "/api/notes", { folder: "", title: "Race", content: "# Race\n" })).json()) as any;
