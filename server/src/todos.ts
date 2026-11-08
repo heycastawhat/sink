@@ -181,8 +181,9 @@ function day(word: string, today: string): string | null {
     // The next one: 3 Jan typed in December is next year's.
     let year = Number(today.slice(0, 4));
     const iso = (y: number) => `${y}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    if (iso(year) < today) year++;
-    return iso(year);
+    const real = (y: number) => d <= new Date(Date.UTC(y, month + 1, 0)).getUTCDate();
+    for (let year = Number(today.slice(0, 4)), n = 0; n < 8; year++, n++) if (real(year) && iso(year) >= today) return iso(year);
+    return null;
   }
   return null;
 }

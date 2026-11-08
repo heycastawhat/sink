@@ -1437,6 +1437,8 @@ describe("todos", () => {
     expect(q("rates fri").due).toBe("2026-10-30");
     expect(q("rates next fri").due).toBe("2026-11-06");
     expect(q("party jan 3").due).toBe("2027-01-03");
+    expect(q("rent 31 feb")).toMatchObject({ text: "rent 31 feb", due: undefined });
+    expect(q("party 29 feb").due).toBe("2028-02-29");
     expect(q("report in 2 weeks").due).toBe("2026-11-13");
     expect(q("drinks tonight")).toMatchObject({ text: "drinks", due: "2026-10-30", time: "19:00" });
     expect(q("call bank at 16:00")).toMatchObject({ text: "call bank", due: "2026-10-30", time: "16:00" });
