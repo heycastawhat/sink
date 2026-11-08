@@ -979,6 +979,15 @@ describe("notes", () => {
     // A whole folder moving updates path links into it.
     await send(token, "POST", "/api/notes/move", { from: "Beds", to: "Garden/Beds" });
     expect(((await (await get(token, q("Mix.md"))).json()) as any).content).toBe("# Mix\n\n[[Loam]] and [[Garden/Beds/Clay]]\n");
+
+    // The same for names with letters SQLite can't lower-case, and links that hold a path with spaces in `<…>`.
+    await make("A", "Été", "# Été\n");
+    await make("B", "Été", "# Été\n");
+    await make("", "Old Note", "# Old Note\n");
+    await make("", "Ref", "# Ref\n\n[[Été]] [x](<Old Note.md#Top>) [y](Old%20Note.md)\n");
+    await send(token, "POST", "/api/notes/move", { from: "A/Été.md", to: "A/Summer.md" });
+    await send(token, "POST", "/api/notes/move", { from: "Old Note.md", to: "New Note.md" });
+    expect(((await (await get(token, q("Ref.md"))).json()) as any).content).toBe("# Ref\n\n[[Été]] [x](<New Note.md#Top>) [y](New%20Note.md)\n");
   });
 
   test("export: every note and attachment in a zip that unzips", async () => {

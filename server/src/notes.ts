@@ -223,8 +223,9 @@ export function parseLinks(content: string): { target: string; line: string }[] 
     if (!raw.includes("[[") && !raw.includes("](")) continue;
     const targets = new Set<string>();
     for (const m of raw.matchAll(/!?\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) targets.add(norm(m[1]!));
-    for (const m of raw.matchAll(/\]\(<?([^)>\s]+\.md)(?:#[^)>]*)?>?\)/gi)) {
-      let href = m[1]!;
+    // `<…>` is how a markdown link holds a path with spaces.
+    for (const m of raw.matchAll(/\]\((?:<([^>\n]+?\.md)(?:#[^>\n]*)?>|([^)>\s]+\.md)(?:#[^)>]*)?)\)/gi)) {
+      let href = (m[1] ?? m[2])!;
       if (/^[a-z][a-z0-9+.-]*:/i.test(href)) continue;
       try {
         href = decodeURIComponent(href);
@@ -289,7 +290,10 @@ export function rewriteLinks(
     if (t.includes("/")) return n === m.oldFull || m.oldFull.endsWith("/" + n) ? `${open}${m.newFull}${ext}${rest}` : all;
     return m.byName && n === m.oldName ? `${open}${m.newName}${ext}${rest}` : all;
   });
-  return wiki.replace(/\]\(<?([^)>\s]+\.md)(#[^)>]*)?(>?)\)/gi, (all, href: string, anchor = "", close: string) => {
+  return wiki.replace(/\]\((?:<([^>\n]+?\.md)(#[^>\n]*)?>|([^)>\s]+\.md)(#[^)>]*)?)\)/gi, (all, angled?: string, angledAnchor?: string, bare?: string, bareAnchor?: string) => {
+    const href = (angled ?? bare)!;
+    const anchor = (angled ? angledAnchor : bareAnchor) ?? "";
+    const close = angled ? ">" : "";
     let decoded = href;
     try {
       decoded = decodeURIComponent(href);
@@ -907,11 +911,11 @@ export class Vault {
     const newFull = to.replace(/\.md$/i, "");
     const newName = newFull.split("/").pop()!;
     const renamed = newName.toLowerCase() !== oldName;
+    // In JS: SQLite's lower() leaves non-ASCII letters alone, so `B/Été.md` wouldn't count as another `Été`.
     const nameIsOurs = !this.db
-      .query<{ n: number }, [string, string, string, string]>(
-        "SELECT count(*) AS n FROM notes WHERE path != ? AND (lower(path) = ? OR substr(lower(path), -length(?)) = ?)",
-      )
-      .get(to, `${oldName}.md`, `/${oldName}.md`, `/${oldName}.md`)!.n;
+      .query<{ path: string }, [string]>("SELECT path FROM notes WHERE path != ?")
+      .all(to)
+      .some((r) => basename(r.path).toLowerCase() === `${oldName}.md`);
     const refs = parts.map((_, i) => parts.slice(i).join("/"));
     const srcs = this.db
       .query<{ src: string }, string[]>(`SELECT DISTINCT src FROM links WHERE target IN (${refs.map(() => "?").join(", ")})`)
