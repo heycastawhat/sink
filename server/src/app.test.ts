@@ -1490,6 +1490,10 @@ describe("helpers", () => {
     expect(localTime("2026-07-01T08:30:00", tz)).toBe(Date.parse("2026-07-01T08:30:00-04:00"));
     expect(localTime("2026-11-07T07:05:00+13:00", tz)).toBe(Date.parse("2026-11-06T18:05:00Z"));
     expect(localTime("next tuesday", tz)).toBeNull();
+    // Either side of a daylight saving change: the evening before it, and the morning it springs forward.
+    expect(localTime("2026-09-26T20:00", "Pacific/Auckland")).toBe(Date.parse("2026-09-26T20:00:00+12:00"));
+    expect(localTime("2026-04-04T20:00", "Pacific/Auckland")).toBe(Date.parse("2026-04-04T20:00:00+13:00"));
+    expect(localTime("2026-03-08T05:00", tz)).toBe(Date.parse("2026-03-08T05:00:00-04:00"));
   });
 
   test("upgrading drops the old screenshot inbox and keeps notes and sign-ins", () => {

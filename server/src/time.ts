@@ -36,7 +36,10 @@ export function localTime(raw: string, timeZone: string): number | null {
   if (/T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value)) {
     const guess = Date.parse(`${value}Z`);
     if (Number.isNaN(guess)) return null;
-    value += utcOffset(new Date(guess), timeZone);
+    // The offset at the wall-clock time read as UTC is off by the zone's own offset, wrong for the hours either
+    // side of a daylight saving change; the offset at the instant that first guess gives is right.
+    const offsetMs = (at: number) => -Date.parse(`1970-01-01T00:00:00${utcOffset(new Date(at), timeZone)}`);
+    value += utcOffset(new Date(guess - offsetMs(guess)), timeZone);
   }
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? null : ms;
