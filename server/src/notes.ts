@@ -1121,14 +1121,23 @@ export class Vault {
     this.db
       .query("DELETE FROM versions WHERE path NOT IN (SELECT path FROM notes) AND substr(path, 1, ?) != ? AND at < ?")
       .run(TRASH.length + 1, TRASH + "/", at - days * 24 * 60 * 60 * 1000);
-    const old = this.db
-      .query<{ path: string }, [number]>("SELECT path FROM trash WHERE at < ?")
-      .all(at - days * 24 * 60 * 60 * 1000);
+    const cutoff = at - days * 24 * 60 * 60 * 1000;
+    const old = this.db.query<{ path: string }, [number]>("SELECT path FROM trash WHERE at < ?").all(cutoff);
     let purged = 0;
     for (const { path } of old) {
       try {
+        // A note trashed later from the same folder lands inside this one's trash folder, and isn't due yet.
+        const keep = this.db
+          .query<{ path: string }, [number, string, number]>("SELECT path FROM trash WHERE substr(path, 1, ?) = ? AND at >= ?")
+          .all(path.length + 1, path + "/", cutoff)
+          .map((r) => r.path);
         const abs = await this.abs(`${TRASH}/${path}`);
         if (await exists(abs)) purged++;
+        if (keep.length) {
+          await this.rmExcept(abs, path, keep);
+          this.db.query("DELETE FROM trash WHERE path = ?").run(path);
+          continue;
+        }
         await rm(abs, { recursive: true, force: true });
         this.forget(`${TRASH}/${path}`);
         await this.tidyTrash(dirname(path), path);
@@ -1143,6 +1152,19 @@ export class Vault {
    * Removes folders left empty in the trash, from `rel` up (never .trash itself), then forgets `row` (the trashed
    * note or folder a change came from) once nothing of it is left.
    */
+  /** Removes everything in the trashed folder `abs` (`.trash/rel`) but the trashed paths in `keep` and the folders above them. */
+  private async rmExcept(abs: string, rel: string, keep: string[]) {
+    for (const entry of await readdir(abs)) {
+      const child = `${rel}/${entry}`;
+      if (keep.includes(child)) continue;
+      if (keep.some((k) => k.startsWith(child + "/"))) await this.rmExcept(join(abs, entry), child, keep);
+      else {
+        await rm(join(abs, entry), { recursive: true, force: true });
+        this.forget(`${TRASH}/${child}`);
+      }
+    }
+  }
+
   private async tidyTrash(rel: string, row?: string) {
     for (let d = rel; d && d !== "."; d = dirname(d)) {
       try {

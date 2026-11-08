@@ -904,6 +904,23 @@ describe("notes", () => {
     expect((await (await send(token, "GET", q("Bare.md"))).json() as any).publish).toBeFalsy();
   });
 
+  test("purging an old trashed folder keeps a note trashed into it since", async () => {
+    mkdirSync(file("A"));
+    writeFileSync(file("A/x.md"), "x");
+    await setup.vault.scan();
+    await setup.vault.trash("A");
+    mkdirSync(file("A"));
+    writeFileSync(file("A/y.md"), "y");
+    await setup.vault.scan();
+    const later = Date.now() + 20 * 86_400_000;
+    setup.db.query("UPDATE trash SET at = ? WHERE path = 'A'").run(Date.now() - 20 * 86_400_000);
+    await setup.vault.trash("A/y.md");
+    expect(await setup.vault.purgeTrash(30, later)).toBe(1);
+    expect(existsSync(file(".trash/A/x.md"))).toBe(false);
+    expect(readFileSync(file(".trash/A/y.md"), "utf8")).toBe("y");
+    expect(setup.db.query("SELECT path FROM trash").all()).toEqual([{ path: "A/y.md" }]);
+  });
+
   test("two saves on the same version: one wins, the other is a conflict", async () => {
     const token = await login();
     const { hash } = (await (await send(token, "POST", "/api/notes", { folder: "", title: "Race", content: "# Race\n" })).json()) as any;
