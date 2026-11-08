@@ -134,9 +134,10 @@ export function pushRoutes(db: Database, publicKey: string) {
 const LOOKBACK_MS = 15 * 60 * 1000;
 
 /**
- * Sends every open todo's reminder that has come due since the last look, once each. A todo is known by its note,
- * text and reminder time, so moving its line doesn't resend it, and re-dating it reminds again at the new time.
- * A browser only hears about reminders due after it subscribed.
+ * Sends every open todo's reminder that has come due since the last look, once each. A todo is known by its note
+ * and reminder time with either its text or its line, so moving its line or fixing a typo doesn't resend it, and
+ * re-dating it reminds again at the new time. A browser only hears about reminders due after it subscribed. If no
+ * push service took a reminder, it's tried again on the next look.
  */
 export async function sendReminders(dbs: Database[], send: Send, at = Date.now()) {
   for (const db of dbs) {
@@ -152,20 +153,27 @@ export async function sendReminders(dbs: Database[], send: Send, at = Date.now()
     const gone = new Set<string>();
     for (const t of due) {
       const tag = `${t.path}\n${t.text}\n${t.remind_at}`;
-      if (!db.query("INSERT OR IGNORE INTO push_sent (key, remind_at) VALUES (?, ?)").run(tag, t.remind_at).changes) continue;
+      const keys = [tag, `${t.path}\n#${t.line}\n${t.remind_at}`];
+      if (keys.some((k) => db.query("SELECT 1 FROM push_sent WHERE key = ?").get(k))) continue;
+      for (const k of keys) db.query("INSERT INTO push_sent (key, remind_at) VALUES (?, ?)").run(k, t.remind_at);
       const payload = JSON.stringify({ title: t.text || "Todo", body: t.note_title, path: t.path, line: t.line, tag });
+      let delivered = false;
+      let tried = false;
       for (const sub of subs) {
         if (sub.created_at >= t.remind_at || gone.has(sub.endpoint)) continue;
+        tried = true;
         const status = await send(sub, payload).catch((err) => {
           console.warn(`[push] ${new URL(sub.endpoint).host}: ${err.message}`);
           return 0;
         });
+        if (status >= 200 && status < 300) delivered = true;
         // The browser unsubscribed or the subscription expired.
         if (status === 404 || status === 410) {
           gone.add(sub.endpoint);
           db.query("DELETE FROM push_subscriptions WHERE endpoint = ?").run(sub.endpoint);
         } else if (status >= 400) console.warn(`[push] ${new URL(sub.endpoint).host} answered ${status}`);
       }
+      if (tried && !delivered) for (const k of keys) db.query("DELETE FROM push_sent WHERE key = ?").run(k);
     }
   }
 }

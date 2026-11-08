@@ -116,6 +116,19 @@ describe("reminders", () => {
     expect(sent.map((x) => x.payload.title)).toEqual(["Call mum"]);
   });
 
+  test("a todo edited after its reminder isn't reminded again, and one no push service took is retried", async () => {
+    subscribe(T("2026-11-01T00:00:00Z"));
+    const note = await s.vault.write("A.md", "- [ ] Call mum (@2026-11-06 18:00)\n", null);
+    const down = fakeSender(503);
+    await sendReminders([s.db], down.send, T("2026-11-06T18:00:00Z"));
+    const { sent, send } = fakeSender();
+    await sendReminders([s.db], send, T("2026-11-06T18:00:30Z"));
+    await s.vault.write("A.md", "- [ ] Call Mum (@2026-11-06 18:00)\n", note.hash);
+    await sendReminders([s.db], send, T("2026-11-06T18:05:00Z"));
+    expect(down.sent.length).toBe(1);
+    expect(sent.map((x) => x.payload.title)).toEqual(["Call mum"]);
+  });
+
   test("skips reminders from before the browser subscribed, and old ones", async () => {
     subscribe(T("2026-11-06T18:00:10Z"));
     await s.vault.write("A.md", "- [ ] Before (@2026-11-06 18:00)\n- [ ] Long ago (@2026-11-05 18:00)\n- [ ] After (@2026-11-06 18:01)\n", null);
