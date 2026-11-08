@@ -1379,6 +1379,8 @@ describe("todos", () => {
     // Dated only by its reminder: that moves on too.
     expect(nextOccurrence("- [ ] Call mum 🔁 every week (@2026-10-30 18:00)", "2026-11-01")).toBe("- [ ] Call mum 🔁 every week (@2026-11-06 18:00)");
     expect(nextOccurrence("- [ ] One-off 📅 2026-10-30", "2026-10-30")).toBeNull();
+    // The block id stays on the ticked line, so links to it still mean one line.
+    expect(nextOccurrence("- [ ] Bins 🔁 every week 📅 2026-11-02 ^bins", "2026-11-02")).toBe("- [ ] Bins 🔁 every week 📅 2026-11-09");
   });
 
   test("editTodo changes text, date and time, keeping the other fields", () => {

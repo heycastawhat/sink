@@ -178,8 +178,7 @@ function day(word: string, today: string): string | null {
     const [d, mon] = /^\d/.test(dm[1]!) ? [Number(dm[1]), dm[2]!] : [Number(dm[0]), dm[1]!];
     const month = MONTHS.indexOf(mon.slice(0, 3));
     if (month < 0 || d < 1 || d > 31) return null;
-    // The next one: 3 Jan typed in December is next year's.
-    let year = Number(today.slice(0, 4));
+    // The next one that exists: 3 Jan typed in December is next year's, 29 Feb the next leap year's.
     const iso = (y: number) => `${y}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     const real = (y: number) => d <= new Date(Date.UTC(y, month + 1, 0)).getUTCDate();
     for (let year = Number(today.slice(0, 4)), n = 0; n < 8; year++, n++) if (real(year) && iso(year) >= today) return iso(year);
@@ -302,7 +301,9 @@ export function nextOccurrence(raw: string, today: string): string | null {
   const shift = base ? dayNumber(next) - dayNumber(base) : 0;
   const moved = rest
     .replace(new RegExp(String.raw`\s*[✅❌]\uFE0F?\s*${DATE}`, "gu"), "")
-    .replace(new RegExp(String.raw`([📅⏳🛫]\uFE0F?\s*|\(@)(${DATE})`, "gu"), (_, mark: string, d: string) => mark + addDays(d, shift));
+    .replace(new RegExp(String.raw`([📅⏳🛫]\uFE0F?\s*|\(@)(${DATE})`, "gu"), (_, mark: string, d: string) => mark + addDays(d, shift))
+    // A block id (`^bins`) stays with the ticked line: two lines with one id would make links to it ambiguous.
+    .replace(/\s+\^[\w-]+\s*$/, "");
   return `${m[1]} ${m[3]}${moved}`;
 }
 
