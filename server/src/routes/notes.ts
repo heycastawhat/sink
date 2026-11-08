@@ -65,11 +65,17 @@ export async function attachmentResponse(vault: Vault, path: string): Promise<Re
 }
 
 export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) {
-  /** Whether an assistant's save would put a note on the public page that isn't there already (`publish: true` frontmatter). */
-  const publishes = async (c: Context<AuthEnv>, path: string | null, content: string) =>
-    c.get("scope") !== "full" &&
-    parseNote(path ?? "new.md", content).publish &&
-    !(path && (await vault.read(path).then((n) => n.publish, () => false)));
+  /**
+   * Whether an assistant's save would put a note on the public page that isn't there already (`publish: true`
+   * frontmatter), or open a published one to search engines (`searchable: true`).
+   */
+  const publishes = async (c: Context<AuthEnv>, path: string | null, content: string) => {
+    if (c.get("scope") === "full") return false;
+    const next = parseNote(path ?? "new.md", content);
+    if (!next.publish && !next.searchable) return false;
+    const was = path ? await vault.read(path).catch(() => null) : null;
+    return (next.publish && !was?.publish) || (next.searchable && !was?.searchable);
+  };
   const app = new Hono<AuthEnv>();
 
   /** Vault errors become their status; the 409 on a stale save carries the file as it is now. */

@@ -924,6 +924,14 @@ describe("notes", () => {
     await send(token, "PATCH", "/api/notes/meta?path=Diary.md", { publish: true });
     const published = ((await (await get(token, q("Diary.md"))).json()) as any);
     expect((await send(mcp, "PUT", q("Diary.md"), { content: published.content + "\nMore.\n", base_hash: published.hash })).status).toBe(200);
+    // Nor open a published note to search engines.
+    const more = ((await (await get(token, q("Diary.md"))).json()) as any);
+    const searchable = more.content.replace("publish: true", "publish: true\nsearchable: true");
+    expect((await send(mcp, "PUT", q("Diary.md"), { content: searchable, base_hash: more.hash })).status).toBe(403);
+    // Nor slip a note in as an upload.
+    const form = new FormData();
+    form.set("file", new File(["---\npublish: true\n---\n# Leak\n"], "Leak.md"));
+    expect((await setup.app.request("/api/notes/attachments", { method: "POST", headers: { authorization: `Bearer ${mcp}` }, body: form })).status).toBe(400);
   });
 
   test("a file asked for by path is that file, even at the top level", async () => {

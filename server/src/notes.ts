@@ -1180,6 +1180,8 @@ export class Vault {
   /** Stores an uploaded file in `attachments/` under a free name. Returns its vault path. */
   async saveAttachment(name: string, bytes: Uint8Array): Promise<string> {
     const ext = extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 10);
+    // A note arriving this way would skip the checks on saving notes (an assistant's token can't publish one, say).
+    if (ext === ".md") throw new VaultError(400, "notes can't be uploaded as attachments");
     const stem = fileNameFor(basename(name, extname(name))).slice(0, 80);
     try {
       await mkdir(await this.abs(ATTACHMENTS), { recursive: true });
