@@ -2793,3 +2793,1321 @@ m3e-form-field:not(:focus-within) > label[slot='label'] {
   width: 100%;
   height: auto;
 }
+/* ---------- desktop layouts: Keep, Split and Tabs (layout.js) ----------
+   Only on wide screens (layout.js leaves narrower ones on Classic, which is the phone layout there). The three share
+   one shell, so switching feels like the same app: the top bar, the sidebar (an icon rail when collapsed), the grid,
+   and the note's bar and details panel. Only where the note opens differs. A denser look than Classic: smaller type,
+   square-ish corners and hairlines, and a note's colour as a stripe rather than a tint. */
+.shell:not(.desk) .desk-only,
+.shell:not(.desk) .card-acts,
+.shell:not(.desk) :is(#note-format, #note-info, #note-info-toggle),
+.shell:not(.desk) .rail-only,
+.shell:not([data-layout='tabs']) #top-tab-new,
+.shell[data-layout='tabs'] #note-back,
+.shell.desk :is(#search-row, #folder-crumbs),
+.note-scrim,
+.pane-splitter {
+  display: none !important;
+}
+
+/* The sidebar's width, registered so it can animate: the column, and in Tabs the top bar's tabs, follow it frame by
+   frame as it folds to the rail and back. */
+@property --nav-w {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 240px;
+}
+
+.shell.desk {
+  --hair: color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent);
+  --side: var(--md-sys-color-surface-container-low);
+  --nav-w: 240px;
+  grid-template-columns: var(--nav-w) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--side);
+}
+
+.shell.desk.nav-shut {
+  --nav-w: 60px;
+}
+
+/* Cards, fields and boxes in panels: white on the light page; in dark, lowest is black, so a step up instead. */
+m3e-theme {
+  --raised: var(--md-sys-color-surface-container-lowest);
+}
+
+m3e-theme[data-dark] {
+  --raised: var(--md-sys-color-surface-container);
+}
+
+/* ---------- top bar ---------- */
+.topbar {
+  grid-area: 1 / 1 / 2 / -1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 52px;
+  padding: 0 16px 0 12px;
+  border-bottom: 1px solid var(--hair);
+  background: var(--side);
+  --m3e-icon-size: 22px;
+}
+
+.top-brand {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 0 14px;
+  text-decoration: none;
+}
+
+.top-brand .wordmark {
+  font-size: 20px;
+}
+
+.top-crumbs {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin-left: 16px;
+  overflow: hidden;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.crumb {
+  color: var(--md-sys-color-on-surface-variant);
+  text-decoration: none;
+}
+
+a.crumb:hover {
+  color: var(--md-sys-color-on-surface);
+  text-decoration: underline;
+}
+
+.crumb.current {
+  color: var(--md-sys-color-on-surface);
+  font-weight: 650;
+}
+
+.crumb-sep {
+  color: var(--md-sys-color-outline);
+}
+
+.top-search {
+  position: relative;
+  flex: 0 1 400px;
+  min-width: 180px;
+  margin: 0 16px 0 auto;
+}
+
+/* Tabs: the open notes take the middle of the bar, so the search gives up some width. */
+[data-layout='tabs'] .top-search {
+  flex-basis: 260px;
+  margin-left: auto;
+}
+
+/* The + at the end of the tabs opens the New menu, so the New button would only repeat it. */
+[data-layout='tabs'] :is(#top-back, #top-forward, #top-crumbs, #top-new) {
+  display: none;
+}
+
+/* A laptop (or a browser with its tabs down the side): the tabs get the bar. The search is a magnifier until you
+   use it, the theme toggle waits in Settings, and Home and the logo drop their words. */
+@media (max-width: 1439px) {
+  [data-layout='tabs'] :is(#top-theme, .top-tab.home span) {
+    display: none;
+  }
+
+  [data-layout='tabs'] .top-tab.home {
+    padding: 0 12px;
+  }
+
+  [data-layout='tabs'] .top-search {
+    flex: 0 0 40px;
+    min-width: 0;
+    margin-right: 4px;
+    border-radius: 12px;
+    transition:
+      flex-basis 160ms var(--ease-emphasized),
+      background-color 120ms ease;
+  }
+
+  /* As a magnifier it's one of the bar's icon buttons: same size, colour and hover. */
+  [data-layout='tabs'] .top-search:not(:focus-within, :has(input:not(:placeholder-shown))):hover {
+    background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  }
+
+  [data-layout='tabs'] .top-search:not(:focus-within, :has(input:not(:placeholder-shown))) {
+    cursor: pointer;
+  }
+
+  [data-layout='tabs'] .top-search:not(:focus-within, :has(input:not(:placeholder-shown))) m3e-search-bar {
+    box-shadow: none;
+    pointer-events: none;
+    --m3e-search-bar-container-color: transparent;
+    --m3e-search-bar-leading-icon-color: var(--md-sys-color-on-surface-variant);
+    --m3e-search-bar-icon-size: 22px;
+    --m3e-search-bar-leading-space: 9px;
+  }
+
+  [data-layout='tabs'] .top-search::after {
+    display: none;
+  }
+
+  [data-layout='tabs'] .top-search:is(:focus-within, :has(input:not(:placeholder-shown))) {
+    flex-basis: 260px;
+  }
+}
+
+/* The logo sits over the sidebar and the tabs start where the page does (10px bar padding, the 40px menu button and a
+   4px gap before them), so the open tab runs down into its note. Folding the sidebar slides the tabs along with it and
+   fades the logo, which has no room over the rail. */
+[data-layout='tabs'] .topbar {
+  position: relative;
+  padding-left: 10px;
+}
+
+[data-layout='tabs'] .top-brand {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 64px;
+  margin: 0;
+  transition:
+    opacity 200ms ease,
+    visibility 200ms;
+}
+
+[data-layout='tabs'].nav-shut .top-brand {
+  opacity: 0;
+  visibility: hidden;
+}
+
+[data-layout='tabs'] .top-tabs {
+  margin-left: calc(var(--nav-w) - 54px);
+  padding-left: 10px;
+}
+
+.top-search m3e-search-bar {
+  width: 100%;
+  --m3e-search-bar-container-height: 38px;
+  --m3e-search-bar-container-shape: 10px;
+  --m3e-search-bar-container-color: var(--raised);
+  --m3e-search-bar-input-text-font-size: 14px;
+  --m3e-search-bar-icon-size: 20px;
+  --m3e-search-bar-leading-space: 10px;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+
+/* Its shortcut, at the end of the field. */
+.top-search::after {
+  content: attr(data-key);
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  translate: 0 -50%;
+  padding: 1px 6px;
+  border: 1px solid var(--hair);
+  border-radius: 5px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11.5px;
+  pointer-events: none;
+}
+
+.top-search:focus-within::after,
+.top-search:has(input:not(:placeholder-shown))::after {
+  display: none;
+}
+
+.top-new {
+  display: flex;
+  margin-right: 8px;
+}
+
+.top-new .add-btn {
+  margin: 0;
+}
+
+.top-account {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: 0 3px 0 6px;
+  border-radius: 50%;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  --m3e-icon-size: 20px;
+}
+
+/* ---------- sidebar, and the icon rail it becomes when collapsed ---------- */
+.shell.desk > .nav {
+  grid-area: 2 / 1;
+  gap: 1px;
+  padding: 10px 8px;
+}
+
+.shell.desk .brand {
+  display: none;
+}
+
+.shell.desk .nav-item {
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 10px 0 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  --m3e-icon-size: 19px;
+}
+
+button.nav-item {
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.shell.desk .tree-item {
+  padding-left: 6px;
+}
+
+.shell.desk .tree-twisty {
+  width: 24px;
+  height: 24px;
+  --m3e-icon-size: 18px;
+}
+
+.shell.desk .nav-heading {
+  margin: 16px 2px 2px 12px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+/* Folded, the sidebar is the same list cut down to its icons: nothing moves but its edge. The icons sit 20px in, so
+   they're centred in the 60px rail, and the highlight narrows with the column. Words fade; folders and tags go once
+   faded (motion section below). */
+.shell.desk .nav-item {
+  overflow: hidden;
+}
+
+/* The icon keeps its size when the row is narrower than icon, gap and padding together. */
+.shell.desk .nav-item > m3e-icon {
+  flex: none;
+}
+
+.shell.desk.nav-shut:not(.rail-open) > .nav :is(.nav-heading, #nav-folders, #nav-tags, #nav-tags-head) {
+  display: none !important;
+}
+
+/* The rail's folders button opens the whole sidebar over the page; it's only there while folded. */
+.shell.desk > .nav .rail-only {
+  height: 0;
+  min-height: 0;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.shell.desk.nav-shut:not(.rail-open) > .nav .rail-only {
+  height: 34px;
+  min-height: 34px;
+  opacity: 1;
+  visibility: visible;
+}
+
+.shell.desk > .nav {
+  position: relative;
+  z-index: 45;
+}
+
+.shell.desk.rail-open > .nav {
+  width: 268px;
+  background: var(--side);
+  box-shadow: 8px 0 32px color-mix(in srgb, var(--md-sys-color-shadow) 22%, transparent);
+}
+
+/* ---------- the page ---------- */
+.shell.desk > .main {
+  grid-area: 2 / 2;
+  margin: 0;
+  padding: 0 24px 40px;
+  border-left: 1px solid var(--hair);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.shell.desk .main-head {
+  margin: 0 -24px;
+  padding: 18px 24px 4px;
+}
+
+.shell.desk .view-title {
+  font-size: 24px;
+  font-stretch: 105%;
+  font-weight: 720;
+}
+
+/* The search is up top, so home needs no heading; a folder keeps its name and actions. */
+.shell.desk[data-view='notes']:not([data-in-folder]) .main-head {
+  display: none;
+}
+
+.shell.desk .notes {
+  gap: 10px;
+  padding-top: 16px;
+}
+
+.shell.desk .notes-head,
+.shell.desk .recent-toggle h2 {
+  margin: 6px 2px -2px;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.shell.desk .recent-toggle h2 {
+  margin: 0;
+}
+
+.shell.desk .take-note {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+/* ---------- cards: neutral, the note's colour a stripe down the left ---------- */
+.shell.desk .note-grid {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  column-gap: 12px;
+}
+
+.shell.desk :is(.note-card, .recent-card) {
+  background: var(--raised);
+  box-shadow:
+    inset 4px 0 0 var(--note, transparent),
+    inset 0 0 0 1px var(--hair);
+}
+
+.shell.desk .note-card {
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 12px 14px 10px 16px;
+  border-radius: 10px;
+}
+
+.shell.desk .note-card:hover,
+.shell.desk .note-card:focus-visible {
+  box-shadow:
+    inset 4px 0 0 var(--note, transparent),
+    inset 0 0 0 1px var(--md-sys-color-outline-variant),
+    0 4px 14px color-mix(in srgb, var(--md-sys-color-shadow) 12%, transparent);
+}
+
+.shell.desk .note-card.open {
+  box-shadow:
+    inset 4px 0 0 var(--note, transparent),
+    0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 70%, transparent);
+}
+
+.shell.desk .note-image {
+  width: calc(100% + 30px);
+  margin: -12px -14px 2px -16px;
+  border-radius: 10px 10px 0 0;
+}
+
+.shell.desk .note-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.shell.desk .note-body {
+  font-size: 13.5px;
+}
+
+.shell.desk .note-foot {
+  font-size: 11.5px;
+}
+
+.shell.desk .note-time {
+  order: -1;
+  margin: 0 2px 0 0;
+}
+
+.shell.desk :is(.note-folder, .note-tag) {
+  padding: 1px 7px;
+  border-radius: 6px;
+}
+
+.shell.desk .recent-card {
+  gap: 4px;
+  padding: 10px 12px 10px 16px;
+  border-radius: 10px;
+}
+
+.shell.desk .recent-card-head m3e-icon,
+.shell.desk .recent-foot {
+  display: none;
+}
+
+.shell.desk .recent-title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.shell.desk .recent-preview {
+  height: calc(2 * 18px);
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.shell.desk .folder-tile {
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--raised);
+  font-size: 14px;
+}
+
+.card-acts {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--hair),
+    0 2px 6px color-mix(in srgb, var(--md-sys-color-shadow) 12%, transparent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.note-card:hover .card-acts,
+.card-acts:focus-within {
+  opacity: 1;
+}
+
+.shell.desk .note-card:hover .pin {
+  opacity: 0;
+}
+
+.card-acts button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  --m3e-icon-size: 17px;
+}
+
+.card-acts button:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 9%, transparent);
+  color: var(--md-sys-color-on-surface);
+}
+
+/* Right-click menu on a card */
+.card-menu {
+  min-width: 220px;
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.card-menu .new-item {
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  font-size: 14px;
+  line-height: 20px;
+  --m3e-icon-size: 18px;
+}
+
+.card-menu .danger {
+  color: var(--md-sys-color-error);
+}
+
+.card-menu .card-menu-label {
+  cursor: default;
+}
+
+.card-menu .card-menu-label:hover {
+  background: none;
+}
+
+.card-menu .menu-divider {
+  margin: 4px 6px;
+}
+
+.card-menu-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 220px;
+  padding: 0 10px 8px 38px;
+}
+
+.card-menu > .card-menu-colors:only-child {
+  padding: 6px;
+}
+
+.card-menu-colors .note-swatch,
+.info-swatches .note-swatch {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  --m3e-icon-size: 14px;
+}
+
+/* ---------- the open note: the same bar and panel wherever it opens ---------- */
+.shell.desk > .note-screen {
+  container: note / inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--sheet);
+}
+
+.shell.desk > .note-screen .note-bar {
+  grid-area: 1 / 1;
+  gap: 0;
+  min-height: 44px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.shell.desk > .note-screen .note-scroll {
+  grid-area: 2 / 1;
+}
+
+.shell.desk .note-status {
+  margin: 0 8px;
+}
+
+/* The note's colour, as a dot before its folder. */
+.shell.desk .note-crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+}
+
+.shell.desk .note-screen:is(.c-red, .c-orange, .c-yellow, .c-green, .c-teal, .c-blue, .c-purple, .c-pink, .c-brown, .c-gray) .note-crumb::before {
+  content: '';
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--note);
+}
+
+.note-format {
+  display: flex;
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--hair);
+}
+
+/* The editor at desktop-app sizes: smaller text, and headings closer to it than Obsidian's scale. */
+.shell.desk .note-editor .cm-editor {
+  font-size: 15px;
+}
+
+.shell.desk .note-editor .cm-h1 {
+  font-size: 1.75em;
+}
+
+.shell.desk .note-editor .cm-h2 {
+  font-size: 1.25em;
+}
+
+.shell.desk .note-editor .cm-h3 {
+  font-size: 1.12em;
+}
+
+.shell.desk .note-filename {
+  font-size: 26px;
+}
+
+.shell.desk > .note-screen :is(.note-editor, .note-filename, .note-links) {
+  max-width: 720px;
+  padding-right: 36px;
+  padding-left: 36px;
+}
+
+/* A narrow note (Split's pane, Keep's dialog) keeps its bar on one row and leaves the details panel out. */
+@container note (max-width: 760px) {
+  #note-format,
+  #note-archive-quick,
+  #note-history-quick,
+  #note-info-toggle,
+  .note-info {
+    display: none !important;
+  }
+
+  .note-crumb {
+    min-width: 0;
+  }
+}
+
+@container note (max-width: 520px) {
+  .note-status {
+    display: none;
+  }
+}
+
+/* Backlinks are in the panel when it shows; under the note otherwise. */
+@container note (min-width: 761px) {
+  .shell.desk:not(.info-shut) .note-screen:has(.note-info:not(:empty)) .note-links {
+    display: none;
+  }
+}
+
+/* Full screen (the expand button) and boards fill the window, as in Classic. */
+.shell.desk > .note-screen:is(.expanded, .board) {
+  z-index: 50;
+}
+
+/* Keep: a dialog over the grid, wider when the details panel is open. */
+body.note-open .shell[data-layout='keep']:has(> .note-screen:not(.expanded, .board)) .note-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  display: block !important;
+  background: color-mix(in srgb, var(--md-sys-color-scrim, #000) 32%, transparent);
+  animation: scrim-in 160ms ease;
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.shell[data-layout='keep'] > .note-screen:not(.expanded, .board) {
+  top: 8vh;
+  right: 0;
+  bottom: auto;
+  left: 0;
+  width: min(720px, calc(100vw - 48px));
+  height: 84vh;
+  /* Centred by margins: a transform would make the dialog the box its fixed menus (⋯, colours) are placed in. */
+  margin-inline: auto;
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px var(--hair),
+    0 24px 64px color-mix(in srgb, var(--md-sys-color-shadow) 32%, transparent);
+  overflow: hidden;
+}
+
+.shell[data-layout='keep']:not(.info-shut) > .note-screen:not(.expanded, .board):has(.note-info:not(:empty)) {
+  width: min(1040px, calc(100vw - 48px));
+}
+
+/* Split: a pane beside the grid, the line between them dragged to resize. */
+.shell[data-layout='split']:has(> .note-screen:not([hidden], .expanded, .board)) {
+  grid-template-columns: var(--nav-w, 240px) minmax(280px, var(--list-w, 0.85fr)) 5px minmax(420px, 1fr);
+}
+
+.shell[data-layout='split']:has(> .note-screen:not([hidden], .expanded, .board)) > .pane-splitter {
+  grid-area: 2 / 3;
+  display: block !important;
+  border-left: 1px solid var(--hair);
+  background: var(--raised);
+  cursor: col-resize;
+}
+
+.shell[data-layout='split']:has(> .note-screen:not([hidden], .expanded, .board)) > .pane-splitter:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
+}
+
+.shell:is([data-layout='split'], [data-layout='tabs']) > .note-screen:not(.expanded, .board) {
+  position: static;
+  /* A grid item stacks by z-index even when static: it would cover the sidebar's flyout. */
+  z-index: auto;
+  min-width: 0;
+  min-height: 0;
+  animation: none;
+}
+
+.shell[data-layout='split'] > .note-screen:not(.expanded, .board) {
+  grid-area: 2 / 4;
+}
+
+/* Tabs: a strip of open notes under the bar; the note takes the grid's place. */
+.shell[data-layout='tabs'] > .note-screen:not(.expanded, .board) {
+  grid-area: 2 / 2;
+  border-left: 1px solid var(--hair);
+}
+
+.shell[data-layout='tabs']:has(> .note-screen:not([hidden], .expanded, .board)) > .main {
+  display: none;
+}
+
+.top-tabs {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: flex-end;
+  align-self: stretch;
+  min-width: 0;
+  padding: 0 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* More tabs than fit: the strip scrolls, and fades at the edge that has more. */
+.top-tabs.more-right {
+  mask-image: linear-gradient(to left, transparent, #000 32px);
+}
+
+.top-tabs.more-left {
+  mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+
+.top-tabs.more-left.more-right {
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
+/* Like a browser's: inactive tabs sit on the bar split by thin lines; the open one is the page's colour and runs down
+   into it, its bottom corners curving out. */
+.top-tab {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  width: clamp(130px, 14vw, 210px);
+  height: 40px;
+  margin-bottom: -1px;
+  padding: 0 8px 0 14px;
+  border-radius: 10px 10px 0 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-decoration: none;
+  --m3e-icon-size: 17px;
+}
+
+.top-tab::after {
+  content: '';
+  position: absolute;
+  top: 11px;
+  right: 0;
+  bottom: 11px;
+  border-right: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.top-tab:is(:hover, .on)::after,
+.top-tab:has(+ .top-tab:is(:hover, .on))::after,
+.top-tab:last-of-type::after {
+  display: none;
+}
+
+.top-tab.home {
+  width: auto;
+  padding-right: 16px;
+}
+
+.top-tab span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-tab:hover:not(.on) {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
+}
+
+.top-tab.on {
+  z-index: 1;
+  background: var(--sheet);
+  box-shadow:
+    -1px 0 0 var(--hair),
+    1px 0 0 var(--hair),
+    0 -1px 0 var(--hair);
+  color: var(--md-sys-color-on-surface);
+  font-weight: 650;
+}
+
+.top-tab.on::before {
+  content: '';
+  position: absolute;
+  right: -10px;
+  bottom: 0;
+  left: -10px;
+  height: 10px;
+  background:
+    radial-gradient(circle at 0 0, transparent 9.5px, var(--sheet) 10px) left bottom / 10px 10px no-repeat,
+    radial-gradient(circle at 100% 0, transparent 9.5px, var(--sheet) 10px) right bottom / 10px 10px no-repeat;
+  pointer-events: none;
+}
+
+.tab-close,
+.top-tab-new {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  --m3e-icon-size: 16px;
+}
+
+.tab-close {
+  opacity: 0;
+}
+
+.top-tab:hover .tab-close,
+.top-tab.on .tab-close {
+  opacity: 1;
+}
+
+.top-tab-new {
+  width: 40px;
+  height: 40px;
+  margin: 4px 0 0 2px;
+  border-radius: 12px;
+  --m3e-icon-size: 22px;
+}
+
+:is(.tab-close, .top-tab-new):hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 10%, transparent);
+}
+
+/* ---------- the details panel ---------- */
+.note-info {
+  grid-area: 1 / 2 / 3 / 3;
+  width: 280px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 6px 16px 24px;
+  transition:
+    width 340ms var(--ease-emphasized),
+    padding 340ms var(--ease-emphasized),
+    opacity 200ms ease;
+  border-left: 1px solid var(--hair);
+  background: var(--side);
+  font-size: 13.5px;
+  scrollbar-width: thin;
+}
+
+.note-info:empty {
+  display: none !important;
+}
+
+/* Shut, it slides away to nothing; its contents keep their width meanwhile, so they're cut off rather than squeezed. */
+.shell.desk.info-shut .note-info {
+  width: 0;
+  padding-inline: 0;
+  border-left-width: 0;
+  opacity: 0;
+}
+
+.note-info > * {
+  width: 248px;
+}
+
+.info-section {
+  padding: 14px 0 6px;
+}
+
+.info-section h3 {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.info-count {
+  letter-spacing: 0;
+}
+
+.info-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.info-label {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.info-row select {
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--hair);
+  border-radius: 7px;
+  background: var(--raised);
+  color: inherit;
+  font: inherit;
+}
+
+.info-swatches,
+.info-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.info-swatches {
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+
+/* All eleven on one row, however wide the panel. */
+.info-swatches .note-swatch {
+  flex: 0 1 18px;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  aspect-ratio: 1;
+  border-width: 1.5px;
+}
+
+.info-tag {
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  color: inherit;
+  font-size: 12.5px;
+  text-decoration: none;
+}
+
+.info-toggle,
+.info-heading,
+.info-version {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.info-toggle {
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.info-toggle:hover,
+.info-heading:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 7%, transparent);
+}
+
+.info-heading {
+  display: block;
+  width: 100%;
+  padding: 4px 8px 4px calc(8px + var(--depth, 0) * 14px);
+  overflow: hidden;
+  border-radius: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.info-backlink {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: inherit;
+  text-decoration: none;
+}
+
+.info-backlink:hover {
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-outline);
+}
+
+.info-backlink span {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12.5px;
+}
+
+.info-version {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--hair);
+}
+
+.info-version span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.info-version span:first-child {
+  flex: none;
+}
+
+.info-version:hover span:first-child {
+  color: var(--md-sys-color-primary);
+}
+
+/* ---------- picking a layout: Settings and the first sign-in ---------- */
+.layout-row {
+  flex-wrap: wrap;
+}
+
+.layout-pick {
+  display: grid;
+  flex-basis: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.layout-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 8px 10px;
+  border: 2px solid transparent;
+  border-radius: 14px;
+  background: var(--md-sys-color-surface-container);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.layout-option:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.layout-option.on {
+  border-color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-secondary-container);
+}
+
+.layout-option svg {
+  width: 100%;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.lt-side { fill: color-mix(in srgb, var(--md-sys-color-on-surface) 9%, transparent); }
+.lt-top { fill: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent); }
+.lt-sheet { fill: var(--md-sys-color-surface-container-high); }
+.lt-bar { fill: color-mix(in srgb, var(--md-sys-color-on-surface) 14%, transparent); }
+.lt-ink { fill: color-mix(in srgb, var(--md-sys-color-on-surface) 45%, transparent); }
+.lt-card { fill: color-mix(in srgb, var(--md-sys-color-primary) 22%, transparent); }
+.lt-tab { fill: color-mix(in srgb, var(--md-sys-color-primary) 40%, transparent); }
+.lt-note {
+  fill: var(--raised);
+  stroke: var(--md-sys-color-primary);
+  stroke-width: 1.5;
+}
+
+.layout-name {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.layout-about {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.layout-dialog {
+  width: min(780px, calc(100vw - 32px));
+}
+
+@media (max-width: 743px) {
+  .layout-pick {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ---------- motion in the desktop layouts ----------
+   After the phone app: a note glides out of its card and back (critically damped, no bounce), the old view fading
+   quickly and the new one in; panels slide rather than appear. Reduced motion turns it all off (see above, and
+   morph() in notes.js). */
+.shell.desk {
+  transition: --nav-w 360ms var(--ease-emphasized);
+  interpolate-size: allow-keywords;
+}
+
+.shell.desk.resizing {
+  transition: none;
+}
+
+/* Folding to the rail: the column narrows, the words fade as it goes, and the folders button grows into its row. */
+.shell.desk > .nav {
+  overflow-x: hidden;
+  transition:
+    width 320ms var(--ease-emphasized),
+    box-shadow 320ms var(--ease-emphasized);
+}
+
+.shell.desk > .nav :is(.nav-item > span, .count, .tab-badge) {
+  transition: opacity 180ms ease;
+}
+
+.shell.desk.nav-shut:not(.rail-open) > .nav :is(.nav-item > span, .count, .tab-badge) {
+  opacity: 0;
+}
+
+.shell.desk > .nav :is(.nav-heading, #nav-folders, #nav-tags, #nav-tags-head) {
+  transition:
+    opacity 180ms ease,
+    display 180ms allow-discrete;
+}
+
+@starting-style {
+  .shell.desk > .nav :is(.nav-heading, #nav-folders, #nav-tags, #nav-tags-head) {
+    opacity: 0;
+  }
+}
+
+.shell.desk.nav-shut:not(.rail-open) > .nav :is(.nav-heading, #nav-folders, #nav-tags, #nav-tags-head) {
+  opacity: 0;
+}
+
+.shell.desk > .nav .rail-only {
+  transition:
+    height 360ms var(--ease-emphasized),
+    min-height 360ms var(--ease-emphasized),
+    opacity 200ms ease,
+    visibility 360ms,
+    transform 200ms var(--ease-spring),
+    background-color 160ms ease;
+}
+
+/* The card hover toolbar settles in. */
+.card-acts {
+  transform: translateY(-3px);
+  transition:
+    opacity 140ms ease,
+    transform 220ms var(--ease-emphasized);
+}
+
+.note-card:hover .card-acts,
+.card-acts:focus-within {
+  transform: none;
+}
+
+/* A new tab grows into its place in the strip. */
+.top-tab.enter {
+  animation: tab-in 320ms var(--ease-emphasized);
+}
+
+@keyframes tab-in {
+  from {
+    width: 0;
+    min-width: 0;
+    padding-inline: 0;
+    opacity: 0;
+  }
+}
+
+/* The card-to-note morph (a View Transition; morph() in notes.js). Where it's supported, it replaces the page's own
+   pop-in. The morphing box glides; the card's face fades out fast and the note's fades in, both pinned to the top so
+   the text doesn't stretch. */
+@supports (view-transition-name: none) {
+  .shell.desk > .note-screen {
+    animation: none;
+  }
+}
+
+::view-transition-group(sink-note) {
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+::view-transition-old(sink-note),
+::view-transition-new(sink-note) {
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+}
+
+::view-transition-old(sink-note) {
+  animation: 150ms ease both fade-out;
+}
+
+::view-transition-new(sink-note) {
+  animation: 260ms ease 60ms both fade-in;
+}
+
+/* No card to grow from (a new note, a link, search): it scales up from just under its size, and back down closing. */
+::view-transition-new(sink-note):only-child {
+  animation: 320ms cubic-bezier(0.2, 0, 0, 1) both note-grow;
+}
+
+::view-transition-old(sink-note):only-child {
+  animation: 200ms cubic-bezier(0.3, 0, 0.8, 0.15) both note-shrink;
+}
+
+@keyframes note-grow {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(12px);
+  }
+}
+
+@keyframes note-shrink {
+  to {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+}
+
+/* The page behind changes at once (cross-fading the grid as it makes room for Split's pane shows every card twice);
+   only Keep's scrim fades, under the note. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+
+.note-scrim {
+  view-transition-name: sink-scrim;
+}
+
+::view-transition-group(sink-scrim) {
+  z-index: 0;
+}
+
+::view-transition-new(sink-scrim) {
+  animation: 220ms ease both fade-in;
+}
+
+::view-transition-old(sink-scrim) {
+  animation: 180ms ease both fade-out;
+}

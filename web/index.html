@@ -39,6 +39,23 @@
 
       <!-- App: sidebar | main. On phones the sidebar becomes the tab bar, and a note opens full screen. -->
       <div id="app" class="shell" hidden>
+        <!-- Wide screens with the Keep, Split or Tabs layout (layout.js): the same bar across the top in each; Tabs puts its
+             open notes in it, in place of back/forward and the folder path, so there's still only one bar. Classic and phones
+             don't show it. -->
+        <header id="topbar" class="topbar" hidden>
+          <m3e-icon-button shape="square" id="top-nav" aria-label="Show or hide the sidebar" title="Sidebar"><m3e-icon name="menu"></m3e-icon></m3e-icon-button>
+          <a class="top-brand" href="#/notes" title="Notes"><img src="/favicon.svg" alt="" width="28" height="28" /><span class="wordmark">Sink</span></a>
+          <m3e-icon-button shape="square" id="top-back" aria-label="Back" title="Back"><m3e-icon name="chevron_left"></m3e-icon></m3e-icon-button>
+          <m3e-icon-button shape="square" id="top-forward" aria-label="Forward" title="Forward"><m3e-icon name="chevron_right"></m3e-icon></m3e-icon-button>
+          <nav id="top-crumbs" class="top-crumbs" aria-label="Folder"></nav>
+          <nav id="top-tabs" class="top-tabs" aria-label="Open notes" hidden></nav>
+          <button type="button" id="top-tab-new" class="top-tab-new" data-new-tab aria-label="New" title="New"><m3e-icon name="add"></m3e-icon></button>
+          <div id="top-search" class="top-search" data-key="/"></div>
+          <div id="top-new" class="top-new"></div>
+          <m3e-icon-button shape="square" id="top-theme" aria-label="Light or dark" title="Light or dark"><m3e-icon name="dark_mode"></m3e-icon></m3e-icon-button>
+          <a id="top-account" class="top-account" href="#/settings" aria-label="Settings" title="Settings"><m3e-icon name="person"></m3e-icon></a>
+        </header>
+
         <aside id="nav" class="nav" aria-label="Sections">
           <a class="brand" href="#/notes">
             <img id="logo" src="/favicon.svg" alt="" width="34" height="34" />
@@ -48,6 +65,8 @@
             <m3e-icon slot="icon" name="add"></m3e-icon>New
           </m3e-button>
           <nav id="nav-views" class="nav-list"></nav>
+          <!-- A collapsed sidebar is an icon rail: its folders button opens the whole sidebar over the page. -->
+          <button type="button" id="rail-folders" class="nav-item rail-only" aria-label="Folders" title="Folders"><m3e-icon name="folder"></m3e-icon><span>Folders</span></button>
           <div class="nav-heading">
             <span>Folders</span>
             <m3e-icon-button id="nav-folder-new" aria-label="New folder" title="New folder"><m3e-icon name="create_new_folder"></m3e-icon></m3e-icon-button>
@@ -170,16 +189,30 @@
         </div>
         <div id="new-menu" class="new-menu" role="menu" aria-label="New" hidden></div>
 
-        <!-- One note, fullscreen. -->
+        <div id="note-scrim" class="note-scrim"></div>
+        <div id="card-menu" class="new-menu card-menu" role="menu" aria-label="Note" hidden></div>
+
+        <!-- One note: fullscreen (Classic, phones), a dialog (Keep), a pane beside the grid (Split) or a tab (Tabs). -->
         <section id="note-screen" class="note-screen" hidden aria-label="Note">
           <header class="note-bar">
             <m3e-icon-button id="note-back" aria-label="Back (Esc)" title="Back (Esc)"><m3e-icon name="arrow_back"></m3e-icon></m3e-icon-button>
             <span id="note-crumb" class="note-crumb"></span>
+            <span id="note-format" class="note-format">
+              <m3e-icon-button data-format="bold" aria-label="Bold" title="Bold (Ctrl+B)"><m3e-icon name="format_bold"></m3e-icon></m3e-icon-button>
+              <m3e-icon-button data-format="bullet" aria-label="List" title="List"><m3e-icon name="format_list_bulleted"></m3e-icon></m3e-icon-button>
+              <m3e-icon-button data-format="task" aria-label="Todo" title="Todo"><m3e-icon name="check_box"></m3e-icon></m3e-icon-button>
+              <m3e-icon-button data-format="image" aria-label="Image" title="Image"><m3e-icon name="image"></m3e-icon></m3e-icon-button>
+              <input id="note-image-file" type="file" accept="image/*" multiple hidden />
+            </span>
             <span class="spacer"></span>
             <span id="note-status" class="note-status" aria-live="polite"></span>
             <m3e-icon-button id="note-pin" aria-label="Pin" title="Pin"><m3e-icon name="push_pin"></m3e-icon></m3e-icon-button>
             <m3e-icon-button id="note-palette" aria-label="Colour" title="Colour"><m3e-icon name="palette"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-archive-quick" class="desk-only" aria-label="Archive" title="Archive"><m3e-icon name="archive"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-history-quick" class="desk-only" aria-label="Version history" title="Version history"><m3e-icon name="history"></m3e-icon></m3e-icon-button>
             <m3e-icon-button id="note-share" aria-label="Share" title="Share"><m3e-icon name="share"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-expand" class="desk-only" aria-label="Full screen" title="Full screen"><m3e-icon name="open_in_full"></m3e-icon></m3e-icon-button>
+            <m3e-icon-button id="note-info-toggle" class="desk-only" aria-label="Note details" title="Note details"><m3e-icon name="dock_to_left"></m3e-icon></m3e-icon-button>
             <m3e-icon-button id="note-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded="false"><m3e-icon name="more_vert"></m3e-icon></m3e-icon-button>
           </header>
           <div id="note-menu" class="new-menu" role="menu" aria-label="Note" hidden>
@@ -193,6 +226,7 @@
           </div>
           <div id="note-colors" class="note-colors" hidden></div>
           <div class="note-scroll"><button type="button" id="note-filename" class="note-filename" title="Rename" hidden></button><div id="note-editor" class="note-editor"></div><section id="note-links" class="note-links" hidden aria-label="Linked mentions"></section></div>
+          <aside id="note-info" class="note-info" aria-label="Note details"></aside>
         </section>
 
       </div>

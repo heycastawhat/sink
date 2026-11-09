@@ -17,6 +17,7 @@ import '@m3e/web/checkbox';
 import '@m3e/web/snackbar';
 import { api, Unauthorized } from './api.js';
 import * as notes from './notes.js';
+import { initLayout, layoutPickerHtml, startLayout, wirePicker } from './layout.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
 import { askConfirm, showQr } from './dialogs.js';
@@ -62,6 +63,8 @@ const storage = {
 const VIEWS = [
   { id: 'notes', label: 'Notes', icon: 'sticky_note_2', hash: '#/notes' },
   { id: 'todos', label: 'Todos', icon: 'checklist', hash: '#/todos' },
+  // Keep's Archive is a folder; the newer layouts list it with the views, as Keep does.
+  { id: 'archive', label: 'Archive', icon: 'archive', hash: '#/notes/Archive', desk: true },
 ];
 
 const ACCENTS = [
@@ -213,6 +216,7 @@ async function showApp() {
   if (after) history.replaceState(null, '', after);
   applyRoute();
   syncReminders().catch(() => {});
+  startLayout();
 }
 
 $('login-submit').addEventListener('click', () => {
@@ -249,6 +253,7 @@ function applyTheme() {
   // CSS can't see the manual scheme override, and a few surfaces need different steps in dark mode.
   theme.toggleAttribute('data-dark', scheme === 'dark' || (scheme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches));
   document.querySelector('meta[name="theme-color"]').content = accent;
+  $('top-theme').querySelector('m3e-icon').setAttribute('name', theme.hasAttribute('data-dark') ? 'light_mode' : 'dark_mode');
 }
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
@@ -310,8 +315,10 @@ window.addEventListener('hashchange', applyRoute);
 
 /** Sidebar, tab bar, page title and which sections show, for the current route. */
 function renderChrome() {
+  const archive = state.view === 'notes' && /^archive$/i.test(state.folder);
+  const on = (v) => (v.id === 'archive' ? archive : v.id === 'notes' ? state.view === 'notes' && !archive : state.view === v.id);
   $('nav-views').innerHTML = VIEWS.map(
-    (v) => `<a class="nav-item${state.view === v.id ? ' active' : ''}" href="${v.hash}">${ic(v.icon)}<span>${v.label}</span></a>`,
+    (v) => `<a class="nav-item${on(v) ? ' active' : ''}${v.desk ? ' desk-only' : ''}" href="${v.hash}" title="${v.label}">${ic(v.icon)}<span>${v.label}</span></a>`,
   ).join('');
   for (const a of document.querySelectorAll('.nav-foot [data-route]')) a.classList.toggle('active', a.dataset.route === state.view);
   // The phone tab bar has no Trash tab; it's reached from Settings.
@@ -322,6 +329,7 @@ function renderChrome() {
   $('view-title').textContent = titles[state.view];
 
   $('app').dataset.view = state.view;
+  $('app').toggleAttribute('data-in-folder', !!state.folder);
   $('search-row').hidden = state.view !== 'notes';
   $('notes').hidden = state.view !== 'notes';
   $('folder-actions').hidden = state.view !== 'notes';
@@ -347,14 +355,18 @@ $('search').addEventListener('input', () => {
   }, 220);
 });
 // A tag in the sidebar: search for it from the top of Notes.
+/** A tag in the sidebar or the details panel: search for it from the top of Notes. */
+function searchTag(tag) {
+  const q = `#${tag}`;
+  $('search').value = state.q = q;
+  location.hash = '#/notes';
+  notes.setQuery(q);
+}
 $('nav-tags').addEventListener('click', (e) => {
   const a = e.target.closest('[data-tag]');
   if (!a) return;
   e.preventDefault();
-  const q = `#${a.dataset.tag}`;
-  $('search').value = state.q = q;
-  location.hash = '#/notes';
-  notes.setQuery(q);
+  searchTag(a.dataset.tag);
 });
 document.querySelector('m3e-search-bar').addEventListener('clear', () => {
   state.q = '';
@@ -370,7 +382,9 @@ document.addEventListener('keydown', (e) => {
     notes.openSwitcher();
     return;
   }
-  if ($('app').hidden || notes.noteIsOpen() || e.target.closest('input, textarea, [contenteditable]')) return;
+  // Split keeps the grid beside the open note, so its shortcuts work there unless you're in the note.
+  const noteHasFocus = notes.noteIsOpen() && ($('app').dataset.layout !== 'split' || e.target.closest('#note-screen'));
+  if ($('app').hidden || noteHasFocus || e.target.closest('input, textarea, [contenteditable]')) return;
   if (e.key === 'n' && !e.metaKey && !e.ctrlKey && !e.altKey && state.view !== 'settings') {
     e.preventDefault();
     if (state.view === 'todos') $('todo-text').focus();
@@ -397,6 +411,10 @@ async function renderSettings() {
         .map(([v, icon, label]) => `<m3e-button toggle variant="tonal" data-scheme="${v}"${v === scheme ? ' selected' : ''}>${ic(icon, 'icon')}${label}</m3e-button>`)
         .join('')}
     </m3e-button-group>
+  </div>
+  <div class="setting-row layout-row">
+    <div class="grow"><div class="setting-title">Layout</div><div class="muted small">On big screens; phones keep their own. Follows you to every browser you sign in on.</div></div>
+    ${layoutPickerHtml()}
   </div>
   <div class="setting-row">
     <div class="grow"><div class="setting-title">Accent</div><div class="muted small">Buttons and highlights.</div></div>
@@ -946,19 +964,25 @@ $('new-menu').innerHTML = itemHtml('new-item');
 function closeNewMenus() {
   $('new-fab-menu').hidePopover?.();
   $('new-menu').hidden = true;
-  $('add-btn').setAttribute('aria-expanded', 'false');
+  for (const b of document.querySelectorAll('#add-btn, [data-new-tab]')) b.setAttribute('aria-expanded', 'false');
+}
+
+/** The New menu under `anchor`: the New button, or the Tabs layout's + tab. */
+function openNewMenu(anchor) {
+  const open = $('new-menu').hidden;
+  closeNewMenus();
+  if (!open) return;
+  const r = anchor.getBoundingClientRect();
+  // Under the button, kept on screen when the button is near the right edge.
+  Object.assign($('new-menu').style, { left: `${Math.min(r.left, innerWidth - 240)}px`, top: `${r.bottom + 6}px` });
+  $('new-menu').hidden = false;
+  anchor.setAttribute('aria-expanded', 'true');
+  $('new-menu').querySelector('button')?.focus();
 }
 
 $('add-btn').addEventListener('click', (e) => {
   e.stopPropagation();
-  const open = $('new-menu').hidden;
-  closeNewMenus();
-  if (!open) return;
-  const r = $('add-btn').getBoundingClientRect();
-  Object.assign($('new-menu').style, { left: `${r.left}px`, top: `${r.bottom + 6}px` });
-  $('new-menu').hidden = false;
-  $('add-btn').setAttribute('aria-expanded', 'true');
-  $('new-menu').querySelector('button')?.focus();
+  openNewMenu($('add-btn'));
 });
 for (const box of ['new-fab-menu', 'new-menu']) {
   $(box).addEventListener('click', (e) => {
@@ -969,7 +993,7 @@ for (const box of ['new-fab-menu', 'new-menu']) {
   });
 }
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('#fab-menu, #new-menu, #add-btn')) closeNewMenus();
+  if (!e.target.closest('#fab-menu, #new-menu, #add-btn, [data-new-tab]')) closeNewMenus();
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('new-menu').hidden) {
@@ -984,6 +1008,16 @@ addEventListener('scroll', markScrolled, { passive: true });
 
 notes.initNotes({ toast, navigate: (hash) => (location.hash = hash) });
 notes.wireNotes();
+initLayout({
+  toast,
+  openNewMenu,
+  searchTag,
+  toggleTheme: () => {
+    storage.set('scheme', theme.hasAttribute('data-dark') ? 'light' : 'dark');
+    applyTheme();
+  },
+});
+wirePicker($('settings'));
 
 boot();
 if ('serviceWorker' in navigator && !import.meta.env.DEV) navigator.serviceWorker.register('/sw.js');

@@ -52,6 +52,9 @@ database loses nothing a rescan can't rebuild.
 
 ### Web (`web/src/`)
 
+- `layout.js` the wide-screen layout (Classic, Keep, Split, Tabs), an account setting (`/api/prefs`, `prefs.ts`) picked
+  in Settings or on first sign-in; sets `data-layout` and `.desk` on `#app`, the top bar, Tabs' tabs and details panel.
+  Below 1024px it's always Classic (the phone layout). Layout CSS is the last section of `style.css`.
 - `main.js` shell: routing (hash routes `#/notes/<folder>`, `#/n/<path>`, `#/todos`, `#/trash`, `#/settings`),
   settings page, New menu, keyboard shortcuts (Cmd/Ctrl+K switcher, `n`, `/`).
 - `notes.js` grid, cards (formatted excerpts), Recent row, folders/tree/tags sidebar, search (`#tag` filters

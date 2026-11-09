@@ -1189,6 +1189,8 @@ export function createEditor(opts) {
       else FORMATS[kind]?.(view);
       view.focus();
     },
+    /** Uploads files and puts their embeds at the cursor, as a paste or drop does. */
+    insertFiles: (files) => insertFiles(view, files),
     destroy: () => view.destroy(),
   };
 }

@@ -25,6 +25,9 @@ let navigate = (hash) => (location.hash = hash);
 // Opened by tapping a card (so Back can pop history) rather than from a link or a reload.
 let openedInApp = false;
 const openFromApp = (hash) => {
+  // Split shows the grid beside the open note: going from card to card replaces the note in history, so closing
+  // goes back to the grid rather than through every note looked at.
+  if (openedInApp && noteIsOpen() && $('app').classList.contains('desk')) return location.replace(hash);
   openedInApp = true;
   navigate(hash);
 };
@@ -79,6 +82,7 @@ async function listNotes() {
     toast(`Can't load notes: ${err.message}`);
   }
   renderGrid();
+  document.dispatchEvent(new CustomEvent('sink:notes'));
 }
 
 export function setFolder(folder) {
@@ -259,7 +263,7 @@ function cardHtml(n) {
   const firstLine = (n.excerpt ?? '').trimStart().split('\n')[0];
   const showTitle = board || n.snippet || n.title !== fileName(n.path) || !firstLine.startsWith(n.title);
   return `
-<article class="note-card${n.color ? ` c-${n.color}` : ''}" data-path="${esc(n.path)}" tabindex="0" draggable="true">
+<article class="note-card${n.color ? ` c-${n.color}` : ''}${n.path === screen.path ? ' open' : ''}" data-path="${esc(n.path)}" tabindex="0" draggable="true">
   ${n.image && !n.snippet ? `<img class="note-image" src="${esc(api.attachmentUrl(n.image))}" alt="" loading="lazy" draggable="false">` : ''}
   ${n.pinned ? `<span class="pin" title="Pinned">${ic('push_pin', '', ' filled')}</span>` : ''}
   ${showTitle ? `<h3 class="note-title">${board ? ic('draw') : ''}${esc(n.title)}</h3>` : ''}
@@ -719,7 +723,7 @@ function wireFolders() {
 function wireGrid() {
   const open = (e) => {
     const card = e.target.closest('.note-card');
-    if (card) openFromApp(noteHash(card.dataset.path));
+    if (card && !e.target.closest('.card-acts')) openFromApp(noteHash(card.dataset.path));
   };
   for (const id of ['notes-grid', 'notes-pinned']) {
     $(id).addEventListener('click', open);
@@ -728,6 +732,7 @@ function wireGrid() {
     });
   }
   wireFolders();
+  wireCardActions();
 
   // Keep's "Take a note…": collapsed until focused, saved when it loses focus or on Ctrl/Cmd+Enter.
   const box = $('take-note');
@@ -780,6 +785,171 @@ function wireGrid() {
     reset();
     openDraft({ text: t ? `# ${t}\n\n${b}` : b });
   });
+}
+
+// ---------- card actions (Keep, Split and Tabs layouts) ----------
+
+const noteOf = (path) => state.notes.find((n) => n.path === path);
+const desk = () => $('app').classList.contains('desk');
+
+/** Pin or colour a card's note. The open note goes through setMeta, so its editor keeps the new hash. */
+async function cardMeta(path, changes) {
+  if (screen.path === path) return setMeta(changes);
+  try {
+    await api.noteMeta(path, changes);
+    await loadNotes();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+async function archiveCard(path) {
+  if (screen.path === path) return $('note-archive').click();
+  const archived = /^archive\//i.test(path);
+  const moved = await moveNoteTo(path, archived ? '' : 'Archive');
+  if (!moved) return;
+  await loadNotes();
+  toast(archived ? 'Unarchived' : 'Archived', {
+    action: 'Undo',
+    onAction: async () => {
+      await moveNoteTo(moved, folderOf(path));
+      await loadNotes();
+    },
+  });
+}
+
+async function moveCard(path) {
+  if (screen.path === path) return $('note-move').click();
+  const dest = await pickFolder({
+    title: `Move “${fileName(path)}” to…`,
+    folders: state.folders.filter(shownFolder),
+    current: folderOf(path),
+    createFolder: (p) => api.createFolder(p),
+  });
+  if (dest === null || dest === folderOf(path)) return;
+  if (!(await moveNoteTo(path, dest))) return;
+  await loadNotes();
+  toast(`Moved to ${dest ? dest.split('/').pop() : 'Notes'}`);
+}
+
+async function trashCard(path) {
+  if (screen.path === path) return $('note-delete').click();
+  try {
+    const { trashed_to } = await api.trashNote(path);
+    clearUnsaved(path);
+    toast('Moved to trash', { action: 'Undo', onAction: () => restore(trashed_to) });
+    loadNotes();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+/** The right-click menu (and the hover toolbar's ⋯ and palette). `colours` alone shows just the swatches. */
+function openCardMenu(path, x, y, { colours = false } = {}) {
+  const n = noteOf(path);
+  if (!n) return;
+  const menu = $('card-menu');
+  const item = (act, icon, label, cls = '') => `<button class="new-item${cls}" role="menuitem" data-card-act="${act}">${ic(icon)}<span>${label}</span></button>`;
+  const swatches = `<div class="card-menu-colors">${['', ...COLORS]
+    .map((c) => `<button class="note-swatch${c ? ` c-${c}` : ' none'}${(n.color ?? '') === c ? ' on' : ''}" data-card-color="${c}" aria-label="${c || 'No colour'}" title="${c || 'No colour'}">${c ? '' : ic('format_color_reset')}</button>`)
+    .join('')}</div>`;
+  const archived = /^archive\//i.test(path);
+  menu.innerHTML = colours
+    ? swatches
+    : item('open', 'open_in_new', 'Open') +
+      item('window', 'tab', 'Open in new window') +
+      '<hr class="menu-divider" />' +
+      item('pin', 'push_pin', n.pinned ? 'Unpin' : 'Pin') +
+      `<div class="new-item card-menu-label">${ic('palette')}<span>Colour</span></div>` +
+      swatches +
+      item('move', 'drive_file_move', 'Move to folder…') +
+      item('archive', archived ? 'unarchive' : 'archive', archived ? 'Unarchive' : 'Archive') +
+      item('link', 'link', 'Copy link') +
+      '<hr class="menu-divider" />' +
+      item('trash', 'delete', 'Move to trash', ' danger');
+  menu.dataset.path = path;
+  menu.hidden = false;
+  // Kept on screen: flipped left or up when it would run off the edge.
+  const { width, height } = menu.getBoundingClientRect();
+  Object.assign(menu.style, {
+    left: `${Math.max(8, x + width > innerWidth - 8 ? x - width : x)}px`,
+    top: `${Math.max(8, y + height > innerHeight - 8 ? y - height : y)}px`,
+    right: 'auto',
+  });
+  menu.querySelector('button')?.focus();
+}
+
+const closeCardMenu = () => ($('card-menu').hidden = true);
+
+async function runCardAct(act, path, from) {
+  const n = noteOf(path);
+  if (!n) return;
+  const r = from?.getBoundingClientRect();
+  if (act === 'more') return openCardMenu(path, r.left, r.bottom + 4);
+  if (act === 'colour') return openCardMenu(path, r.left, r.bottom + 4, { colours: true });
+  closeCardMenu();
+  if (act === 'open') openFromApp(noteHash(path));
+  if (act === 'window') window.open(noteHash(path), '_blank', 'noopener');
+  if (act === 'pin') cardMeta(path, { pinned: !n.pinned });
+  if (act === 'move') moveCard(path);
+  if (act === 'archive') archiveCard(path);
+  if (act === 'trash') trashCard(path);
+  if (act === 'link') {
+    await navigator.clipboard
+      .writeText(`${location.origin}/${noteHash(path)}`)
+      .then(() => toast('Link copied'))
+      .catch(() => toast("Couldn't copy the link"));
+  }
+}
+
+function wireCardActions() {
+  // One toolbar, moved into whichever card the pointer is over.
+  const acts = document.createElement('div');
+  acts.className = 'card-acts';
+  acts.innerHTML = [
+    ['pin', 'push_pin', 'Pin'],
+    ['colour', 'palette', 'Colour'],
+    ['archive', 'archive', 'Archive'],
+    ['more', 'more_horiz', 'More'],
+  ]
+    .map(([act, icon, label]) => `<button type="button" data-card-act="${act}" aria-label="${label}" title="${label}">${ic(icon)}</button>`)
+    .join('');
+  document.addEventListener('mouseover', (e) => {
+    const card = e.target.closest?.('#notes .note-card');
+    if (!card || !desk() || acts.parentNode === card) return;
+    const n = noteOf(card.dataset.path);
+    acts.querySelector('[data-card-act="pin"] m3e-icon').toggleAttribute('filled', !!n?.pinned);
+    acts.querySelector('[data-card-act="pin"]').title = n?.pinned ? 'Unpin' : 'Pin';
+    card.append(acts);
+  });
+  acts.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const b = e.target.closest('[data-card-act]');
+    if (b) runCardAct(b.dataset.cardAct, b.closest('.note-card').dataset.path, b);
+  });
+  document.addEventListener('contextmenu', (e) => {
+    const card = e.target.closest?.('#notes .note-card');
+    if (!card || !desk()) return;
+    e.preventDefault();
+    openCardMenu(card.dataset.path, e.clientX, e.clientY);
+  });
+  const menu = $('card-menu');
+  menu.addEventListener('click', (e) => {
+    const colour = e.target.closest('[data-card-color]');
+    if (colour) {
+      closeCardMenu();
+      return cardMeta(menu.dataset.path, { color: colour.dataset.cardColor || null });
+    }
+    const b = e.target.closest('[data-card-act]');
+    if (b) runCardAct(b.dataset.cardAct, menu.dataset.path, b);
+  });
+  menu.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    closeCardMenu();
+  });
+  document.addEventListener('mousedown', (e) => !menu.hidden && !e.target.closest('#card-menu') && closeCardMenu());
+  addEventListener('blur', closeCardMenu);
 }
 
 // ---------- fullscreen note ----------
@@ -889,6 +1059,7 @@ function mountEditor(text) {
     doc: text,
     onChange: () => {
       showFileName();
+      document.dispatchEvent(new CustomEvent('sink:edit'));
       setStatus('Editing…');
       clearTimeout(screen.timer);
       screen.timer = setTimeout(save, SAVE_DELAY);
@@ -937,7 +1108,7 @@ function readUnsaved(path) {
 
 function applyLook() {
   const el = $('note-screen');
-  el.className = `note-screen${screen.color ? ` c-${screen.color}` : ''}${isBoardPath(screen.path) ? ' board' : ''}`;
+  el.className = `note-screen${screen.color ? ` c-${screen.color}` : ''}${isBoardPath(screen.path) ? ' board' : ''}${el.classList.contains('expanded') ? ' expanded' : ''}`;
   $('note-pin').innerHTML = ic('push_pin', '', screen.pinned ? ' filled' : '');
   $('note-pin').setAttribute('aria-label', screen.pinned ? 'Unpin' : 'Pin');
   const archived = /^archive\//i.test(screen.path ?? '');
@@ -947,6 +1118,42 @@ function applyLook() {
   $('note-crumb').textContent = screen.folder || 'Notes';
   showFileName();
   for (const b of $('note-colors').querySelectorAll('[data-color]')) b.classList.toggle('on', (b.dataset.color || null) === screen.color);
+  announce();
+}
+
+/** Tells the layout (tabs, details panel) and the grid which note is open now, or that none is. */
+function announce() {
+  for (const c of document.querySelectorAll('.note-card')) c.classList.toggle('open', c.dataset.path === screen.path);
+  document.dispatchEvent(new CustomEvent('sink:note'));
+}
+
+/** The open note, for the layout's tabs and details panel. `open` is false once it's closed; a draft has no path. */
+export const openNoteInfo = () => ({
+  open: !!screen.editor && !$('note-screen').hidden,
+  path: screen.path,
+  folder: screen.folder,
+  color: screen.color,
+  pinned: screen.pinned,
+  board: isBoardPath(screen.path),
+  text: screen.editor?.getText() ?? '',
+});
+export const allNotes = () => state.notes;
+export const allFolders = () => state.folders.filter(shownFolder);
+export const currentFolder = () => state.folder;
+export const setOpenMeta = (changes) => setMeta(changes);
+export const goToLine = (line) => screen.editor?.goToLine(line);
+export const formatNote = (kind) => screen.editor?.format?.(kind);
+export const insertImages = (files) => screen.editor?.insertFiles?.(files);
+export async function moveOpenNote(folder) {
+  await flush();
+  if (!screen.path || folder === screen.folder) return;
+  const moved = await moveNoteTo(screen.path, folder);
+  if (!moved) return applyLook();
+  opened.rename(screen.path, moved);
+  Object.assign(screen, { path: moved, folder: folderOf(moved) });
+  history.replaceState(history.state, '', noteHash(moved));
+  applyLook();
+  loadNotes();
 }
 
 /** A note that doesn't start with a heading has no title on the page: show its name above it, as Obsidian does. */
@@ -966,7 +1173,10 @@ export async function openNote(path, { line } = {}) {
   const seq = ++openSeq;
   await closeEditor();
   if (seq !== openSeq) return;
-  showScreen();
+  // The desktop layouts grow the note out of its card once it's loaded (so it arrives with its words, not empty);
+  // Classic and phones show the page straight away, saying it's opening.
+  const grow = noteHidden() && desk();
+  if (!grow) showScreen();
   setStatus('Opening…');
   try {
     const note = await api.note(path);
@@ -994,9 +1204,17 @@ export async function openNote(path, { line } = {}) {
       }
     } else if (stash) clearUnsaved(note.path);
     if (seq !== openSeq) return;
-    if (isBoardPath(note.path)) await mountBoard(text);
-    else mountEditor(text);
-    applyLook();
+    const mount = async () => {
+      if (isBoardPath(note.path)) await mountBoard(text);
+      else mountEditor(text);
+      applyLook();
+    };
+    if (grow) {
+      await morph(note.path, async () => {
+        showScreen();
+        await mount();
+      });
+    } else await mount();
     renderBacklinks(note.path);
     if (text !== note.content) save();
     else setStatus(`Edited ${relative(note.mtime)}`);
@@ -1176,13 +1394,49 @@ export async function newFromTemplate() {
 export async function openDraft({ text = draftText, folder = state.folder } = {}) {
   draftText = '';
   await closeEditor();
-  showScreen();
   Object.assign(screen, { path: null, folder, hash: null, saved: '', pinned: false, color: null, fresh: true });
-  mountEditor(text);
-  applyLook();
+  const show = () => {
+    showScreen();
+    mountEditor(text);
+    applyLook();
+  };
+  if (noteHidden() && desk()) await morph(null, show);
+  else show();
   setStatus('');
   screen.editor.focus(true);
   if (text) save();
+}
+
+const noteHidden = () => $('note-screen').hidden;
+
+/**
+ * The desktop layouts' version of the phone's card morph: the note grows out of the card it came from and shrinks
+ * back into it, as one View Transition between the two. A note with no card on screen (a link, search, a new note)
+ * scales in and out on its own. `update` shows or hides the note.
+ */
+async function morph(path, update) {
+  if (!document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) return update();
+  const note = $('note-screen');
+  const opening = note.hidden;
+  const card = () => {
+    if (!path) return null;
+    const c = [...document.querySelectorAll('#notes .note-card')].find((el) => el.dataset.path === path);
+    const r = c?.getBoundingClientRect();
+    return r?.height && r.bottom > 0 && r.top < innerHeight ? c : null;
+  };
+  const from = opening ? card() : note;
+  let to = null;
+  if (from) from.style.viewTransitionName = 'sink-note';
+  const t = document.startViewTransition(async () => {
+    if (from) from.style.viewTransitionName = '';
+    await update();
+    to = opening ? note : card();
+    if (to) to.style.viewTransitionName = 'sink-note';
+  });
+  t.finished.finally(() => {
+    if (to) to.style.viewTransitionName = '';
+  });
+  await t.updateCallbackDone.catch(() => {});
 }
 
 function showScreen() {
@@ -1398,9 +1652,18 @@ async function closeEditor() {
   screen.editor = null;
   screen.path = null;
   $('note-links').hidden = true;
+  $('note-screen').classList.remove('expanded');
+  $('note-expand').querySelector('m3e-icon').setAttribute('name', 'open_in_full');
+  announce();
 }
 
 export async function closeNote() {
+  if (desk() && !noteHidden()) {
+    // Shrinks back into its card while it still has its words; the editor goes once it's out of sight.
+    const path = screen.path;
+    await flush();
+    await morph(path, hideScreen);
+  }
   await closeEditor();
   hideScreen();
   loadNotes();
@@ -1438,12 +1701,31 @@ const bodyOf = (text) => text.slice(frontmatterOf(text).length);
 
 function wireScreen() {
   const back = () => {
+    // Tabs: a note is one of several open pages, so history could be any of them; the grid is where back goes.
+    if ($('app').dataset.layout === 'tabs') openedInApp = false;
     if (openedInApp) {
       openedInApp = false;
       history.back();
     } else navigate(screen.folder ? `#/notes/${encodeURIComponent(screen.folder)}` : '#/notes');
   };
   $('note-back').addEventListener('click', back);
+  $('note-scrim').addEventListener('click', back);
+  $('note-archive-quick').addEventListener('click', () => $('note-archive').click());
+  $('note-history-quick').addEventListener('click', () => $('note-history').click());
+  $('note-expand').addEventListener('click', () => {
+    const on = $('note-screen').classList.toggle('expanded');
+    $('note-expand').querySelector('m3e-icon').setAttribute('name', on ? 'close_fullscreen' : 'open_in_full');
+    $('note-expand').title = on ? 'Exit full screen' : 'Full screen';
+  });
+  $('note-format').addEventListener('click', (e) => {
+    const kind = e.target.closest('[data-format]')?.dataset.format;
+    if (kind === 'image') $('note-image-file').click();
+    else if (kind) formatNote(kind);
+  });
+  $('note-image-file').addEventListener('change', (e) => {
+    insertImages([...e.target.files]);
+    e.target.value = '';
+  });
   // The empty page below the text is part of the note: clicking it puts the cursor at the end, like Keep.
   document.querySelector('#note-screen .note-scroll').addEventListener('mousedown', (e) => {
     if (!screen.editor || isBoardPath(screen.path) || e.target.closest('.cm-content')) return;
