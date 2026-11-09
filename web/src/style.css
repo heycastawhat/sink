@@ -2310,10 +2310,12 @@ body.dragging-note [data-drop-folder] {
 }
 
 .recent-title {
+  display: -webkit-box;
   overflow: hidden;
   font-weight: 600;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .recent-preview {
