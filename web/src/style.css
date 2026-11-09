@@ -2538,7 +2538,7 @@ body.dragging-note [data-drop-folder] {
   overflow-wrap: anywhere;
 }
 
-.note-screen.board #note-share {
+.note-screen.board :is(#note-share, #note-format, #note-info-toggle) {
   display: none;
 }
 
@@ -3477,8 +3477,15 @@ button.nav-item {
   }
 }
 
-/* Full screen (the expand button) and boards fill the window, as in Classic. */
-.shell.desk > .note-screen:is(.expanded, .board) {
+/* A board is all canvas: none of the note's reading width. */
+.shell.desk > .note-screen.board .note-editor {
+  max-width: none;
+  padding: 0;
+}
+
+/* Full screen (the expand button) fills the window, as in Classic; so do boards, except in Tabs where they're a tab. */
+.shell.desk > .note-screen.expanded,
+.shell.desk:not([data-layout='tabs']) > .note-screen.board {
   z-index: 50;
 }
 
@@ -3535,7 +3542,8 @@ body.note-open .shell[data-layout='keep']:has(> .note-screen:not(.expanded, .boa
   background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
 }
 
-.shell:is([data-layout='split'], [data-layout='tabs']) > .note-screen:not(.expanded, .board) {
+.shell[data-layout='split'] > .note-screen:not(.expanded, .board),
+.shell[data-layout='tabs'] > .note-screen:not(.expanded) {
   position: static;
   /* A grid item stacks by z-index even when static: it would cover the sidebar's flyout. */
   z-index: auto;
@@ -3549,12 +3557,12 @@ body.note-open .shell[data-layout='keep']:has(> .note-screen:not(.expanded, .boa
 }
 
 /* Tabs: a strip of open notes under the bar; the note takes the grid's place. */
-.shell[data-layout='tabs'] > .note-screen:not(.expanded, .board) {
+.shell[data-layout='tabs'] > .note-screen:not(.expanded) {
   grid-area: 2 / 2;
   border-left: 1px solid var(--hair);
 }
 
-.shell[data-layout='tabs']:has(> .note-screen:not([hidden], .expanded, .board)) > .main {
+.shell[data-layout='tabs']:has(> .note-screen:not([hidden], .expanded)) > .main {
   display: none;
 }
 
