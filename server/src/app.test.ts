@@ -1569,6 +1569,21 @@ describe("accounts", () => {
     expect(again.for("someone-else").vault.list().notes.map((n) => n.title)).toEqual(["Theirs"]);
   });
 
+  test("prefs follow the account, are checked, and need a full token", async () => {
+    const owner = await login();
+    const other = setup.auth.issueToken("test", "someone-else");
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    expect(await (await get(owner, "/api/prefs")).json()).toEqual({});
+    const set = await send(owner, "PATCH", "/api/prefs", { layout: "tabs" });
+    expect(await set.json()).toEqual({ layout: "tabs" });
+    await send(owner, "PATCH", "/api/prefs", { layoutChosen: true });
+    expect(await (await get(owner, "/api/prefs")).json()).toEqual({ layout: "tabs", layoutChosen: true });
+    expect(await (await get(other, "/api/prefs")).json()).toEqual({});
+    expect((await send(owner, "PATCH", "/api/prefs", { layout: "fancy" })).status).toBe(400);
+    expect((await send(owner, "PATCH", "/api/prefs", { colour: "red" })).status).toBe(400);
+    expect((await get(mcp, "/api/prefs")).status).toBe(403);
+  });
+
   test("tokens are listed and revoked per account", async () => {
     const owner = await login();
     const other = setup.auth.issueToken("Phone", "someone-else");

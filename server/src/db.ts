@@ -394,6 +394,10 @@ export const migrations: string[] = [
   CREATE TABLE push_sent (key TEXT PRIMARY KEY, remind_at INTEGER NOT NULL);
   CREATE TABLE vapid (id INTEGER PRIMARY KEY CHECK (id = 1), public_key TEXT NOT NULL, private_jwk TEXT NOT NULL);
   `,
+  // Per-account settings that follow you between browsers (prefs.ts), e.g. the web app's layout.
+  `
+  CREATE TABLE prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `,
 ];
 
 export function openDb(path: string): Database {

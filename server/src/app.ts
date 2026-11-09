@@ -8,6 +8,7 @@ import { clipRoutes } from "./routes/clip";
 import { noteRoutes } from "./routes/notes";
 import { publicShareRoutes, shareRoutes } from "./routes/share";
 import { eventRoutes } from "./routes/events";
+import { prefRoutes } from "./prefs";
 import { adminRoutes } from "./routes/admin";
 import { calendarRoutes } from "./routes/calendar";
 import { publicPageRoutes, publishRoutes, robotsFor } from "./routes/publish";
@@ -85,6 +86,7 @@ export function createApp(deps: {
     api.route("/", shareRoutes(space.db, space.vault));
     api.route("/", eventRoutes(space.vault));
     api.route("/", pushRoutes(space.db, vapid.publicKey));
+    api.route("/", prefRoutes(space.db));
     api.notFound((c) => c.json({ error: "not found" }, 404));
     api.onError((err, c) => {
       console.error(err);

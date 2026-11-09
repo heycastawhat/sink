@@ -46,6 +46,8 @@ export const api = {
   pushKey: () => request('/push/key'),
   pushSubscribe: (sub) => request('/push/subscribe', json('POST', sub)),
   pushUnsubscribe: (endpoint) => request('/push/unsubscribe', json('POST', { endpoint })),
+  prefs: () => request('/prefs'),
+  setPrefs: (changes) => request('/prefs', json('PATCH', changes)),
   disallowPerson: (entry) => request(`/admin/users/allowed?entry=${encodeURIComponent(entry)}`, { method: 'DELETE' }),
 
   notes: () => request('/notes'),
