@@ -359,12 +359,10 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                             else -> Icons.Outlined.EditNote
                         },
                     )
-                    // Laid out from the bottom up, where a thumb reaches: folders, then Recent, pinned notes, and the
-                    // newest notes, with older ones further up (scroll up for them). Each section's label comes after
-                    // its items here, which puts it above them on screen.
+                    // Keep each full-width section header ahead of its cards. A reverse staggered grid tries to pack
+                    // each lane independently around those headers, which can leave a conspicuous empty lane.
                     else -> LazyVerticalStaggeredGrid(
                         columns = CardColumns,
-                        reverseLayout = true,
                         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = toolbarClearance(extra = 68.dp)),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalItemSpacing = 10.dp,
@@ -372,15 +370,15 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                     ) {
                         // Folders sit as chips in a row; with none yet, home still offers "New folder".
                         if (!searching && (subfolders.isNotEmpty() || !inside)) {
+                            item(key = "folders-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                             item(key = "folders", span = StaggeredGridItemSpan.FullLine) {
                                 FolderChips(subfolders, { countIn(state.notes, it) }, onOpen = { haptics.tick(); vm.setFolder(it) }, onNew = { haptics.tick(); naming = true })
                             }
-                            item(key = "folders-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
                         if (showRecent) {
                             if (hideFoldered) {
-                                item(key = "recent", span = StaggeredGridItemSpan.FullLine) { RecentFiledRow(recent, onOpen) }
                                 item(key = "recent-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Recent in folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
+                                item(key = "recent", span = StaggeredGridItemSpan.FullLine) { RecentFiledRow(recent, onOpen) }
                             } else item(key = "recent", span = StaggeredGridItemSpan.FullLine) {
                                 RecentStrip(recent, recentShut, onToggle = { recentShut = !recentShut }, onOpen = onOpen)
                             }
@@ -402,15 +400,15 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                             }
                         }
                         if (pinned.isNotEmpty()) {
-                            items(pinned, key = { it.path }) { card(it, Modifier.animateItem()) }
                             item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
+                            items(pinned, key = { it.path }) { card(it, Modifier.animateItem()) }
                         }
-                        items(others, key = { it.path }) { card(it, Modifier.animateItem()) }
                         if (pinned.isNotEmpty() && others.isNotEmpty()) {
                             item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         } else if (unfiledHome && others.isNotEmpty() && (subfolders.isNotEmpty() || showRecent)) {
                             item(key = "unfiled-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Unfiled", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
+                        items(others, key = { it.path }) { card(it, Modifier.animateItem()) }
                     }
                 }
                 // Cards slide under the title rather than butting into it.
