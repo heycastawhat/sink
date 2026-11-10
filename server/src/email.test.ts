@@ -85,6 +85,10 @@ describe("email security", () => {
     expect(authenticated(parseAuthResults("mx; dmarc=pass (p=none) header.from=example.com"), "example.com")).toBe(true);
     expect(authenticated(parseAuthResults("garbage"), "example.com")).toBe(false);
     expect(aligned("notexample.com", "example.com")).toBe(false);
+    // A `;` in a quoted local part is the sender's text, not a result of its own.
+    const forged = parseAuthResults('mx; dkim=none; spf=pass smtp.mailfrom="x;dkim=pass header.d=example.com"@attacker.com');
+    expect(authenticated(forged, "example.com")).toBe(false);
+    expect(forged.find((r) => r.method === "spf")?.domain).toBe("attacker.com");
   });
 
   test("rejects unknown senders, failed or misaligned auth, and only trusts the top header", async () => {
@@ -123,6 +127,11 @@ describe("email routing", () => {
     expect(md).toContain("source: email\n---\n\n# Wifi details\n\nNetwork: Cabin\nPassword: hunter2\n\n![[router.png]]\n");
     expect(existsSync(join(dir, "attachments/router.png"))).toBe(true);
     expect(existsSync(join(dir, "attachments/huge.bin"))).toBe(false);
+  });
+
+  test("the +tag is the one on the address the mail was delivered to, not another recipient's", async () => {
+    const cc = mail({ to: "Alice <alice+work@gmail.com>, sink+todo@mail.test", extra: ["Delivered-To: sink+todo@mail.test"] });
+    expect((await handleMessage(cc, deps)).kind).toBe("todo");
   });
 
   test("+todo appends to Todo.md, creating it first", async () => {

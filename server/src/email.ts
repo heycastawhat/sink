@@ -64,7 +64,12 @@ export type AuthResult = { method: string; result: string; domain: string | null
  * Comments in parentheses and quoting are tolerated; unknown methods are kept but never trusted.
  */
 export function parseAuthResults(header: string): AuthResult[] {
-  const unfolded = header.replace(/\r?\n[ \t]+/g, " ").replace(/\([^()]*\)/g, " ");
+  // Quoted strings emptied too: a quoted local part (`smtp.mailfrom="x;dkim=pass header.d=you.com"@evil.com`) is
+  // the sender's own text, and its `;` would otherwise start a result of its own.
+  const unfolded = header
+    .replace(/\r?\n[ \t]+/g, " ")
+    .replace(/\([^()]*\)/g, " ")
+    .replace(/"(?:[^"\\]|\\.)*"/g, "q");
   const [, ...parts] = unfolded.split(";");
   const out: AuthResult[] = [];
   for (const part of parts) {
@@ -107,7 +112,8 @@ const addressesIn = (value: string) => [...value.matchAll(/[^\s<>,;"']+@[^\s<>,;
 
 /** The `+tag` on whichever of our addresses the message was sent to. */
 export function plusTag(mail: ParsedMail): string | null {
-  const values = ["to", "cc", "delivered-to", "x-original-to"].flatMap((h) => headerValues(mail, h));
+  // Where the server delivered it first: To and Cc also name other people, whose own +tags aren't ours.
+  const values = ["delivered-to", "x-original-to", "to", "cc"].flatMap((h) => headerValues(mail, h));
   for (const addr of values.flatMap(addressesIn)) {
     const local = addr.slice(0, addr.lastIndexOf("@"));
     const plus = local.indexOf("+");
