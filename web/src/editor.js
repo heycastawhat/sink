@@ -372,6 +372,8 @@ function tablesDeco(state) {
       if (node.name === 'Blockquote') return false;
       if (node.name !== 'Table') return;
       const from = state.doc.lineAt(node.from).from;
+      // So does one that starts after a list's bullet (`- | a | b |`): the widget would swallow the bullet as a cell.
+      if (state.sliceDoc(from, node.from).trim()) return false;
       const to = state.doc.lineAt(node.to).to;
       if (!sel.some((r) => r.to >= from && r.from <= to)) {
         ranges.push(Decoration.replace({ widget: new TableWidget(state.sliceDoc(from, to)), block: true }).range(from, to));
@@ -841,7 +843,8 @@ function livePreview(opts) {
       if (base >= to) continue;
       const text = state.sliceDoc(base, to);
       // Off the cursor's line they read as words in small chips rather than emoji; on it, as typed.
-      for (const m of text.matchAll(/(?:[📅⏳🛫✅➕❌]\uFE0F?\s*\d{4}-\d{2}-\d{2}|\(@\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\)|[⏫🔼🔽🔺⏬]\uFE0F?|🔁\uFE0F?\s*every[^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(\n]*)/gu)) {
+      // [ \t], not \s: a field never runs onto the next line.
+      for (const m of text.matchAll(/(?:[📅⏳🛫✅➕❌]\uFE0F?[ \t]*\d{4}-\d{2}-\d{2}|\(@\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\)|[⏫🔼🔽🔺⏬]\uFE0F?|🔁\uFE0F?[ \t]*every[^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(\n]*)/gu)) {
         const start = base + m.index;
         if (inCode(state, start)) continue;
         const field = m[0].trimEnd();
@@ -854,7 +857,8 @@ function livePreview(opts) {
       for (const m of text.matchAll(/(!?)\[\[([^\]\n|]+)(?:\|([^\]\n]+))?\]\]/g)) {
         const start = base + m.index;
         const end = start + m[0].length;
-        const target = m[2].trim();
+        // In a table the alias's pipe is escaped (`[[Note\|Alias]]`); the backslash isn't part of the name.
+        const target = m[2].replace(/\\$/, '').trim();
         if (inCode(state, start)) continue;
         const onActive = active.has(lineOf(start));
         if (m[1] && IMAGE_EXT.test(target) && !onActive) {
@@ -893,6 +897,9 @@ function livePreview(opts) {
     for (const r of ranges) {
       const isReplace = r.deco.spec.widget !== undefined || (r.to > r.from && !r.deco.spec.class && !r.deco.spec.attributes);
       if (isReplace && r.from < replacedTo) continue;
+      // A plugin may not replace a line break (CodeMirror throws, and the note won't open): an image whose alt text
+      // wraps, a link title over two lines. Those stay as typed.
+      if (isReplace && r.to > state.doc.lineAt(r.from).to) continue;
       builder.add(r.from, r.to, r.deco);
       if (isReplace) replacedTo = r.to;
     }
@@ -980,7 +987,15 @@ export function createEditor(opts) {
     if (!m || !opts.linkTargets) return null;
     return {
       from: m.from + 2,
-      options: opts.linkTargets().map((o) => ({ label: o.label, detail: o.detail, apply: `${o.label}]]` })),
+      // The closing ]] is often there already (typing [[ closes the brackets): use it rather than add another.
+      options: opts.linkTargets().map((o) => ({
+        label: o.label,
+        detail: o.detail,
+        apply: (view, _c, from, to) => {
+          const end = view.state.sliceDoc(to, to + 2) === ']]' ? to + 2 : to;
+          view.dispatch({ changes: { from, to: end, insert: `${o.label}]]` }, selection: { anchor: from + o.label.length + 2 } });
+        },
+      })),
       validFor: /^[^\]\n]*$/,
     };
   };
