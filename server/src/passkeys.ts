@@ -10,7 +10,7 @@ import {
 } from "@simplewebauthn/server";
 import { newId, now } from "./db";
 import { requestOrigin } from "./auth";
-import type { Oidc } from "./oidc";
+import { matchesEntry, type Oidc } from "./oidc";
 import type { Users } from "./users";
 import { clientIp, rateLimit } from "./ratelimit";
 
@@ -190,7 +190,9 @@ export function passkeyRoutes(deps: {
     }).catch(() => null);
     if (!result?.verified) return c.json({ error: "couldn't check that passkey" }, 400);
     passkeys.used(key.id, result.authenticationInfo.newCounter);
-    if (!oidc.allowed({ sub: key.subject, groups: [] }, users.allowed())) return c.json({ error: "This account isn't allowed to use Sink." }, 403);
+    // Only a list entry lets a passkey in: "any account at the provider" can't mean these, which have none there.
+    const listed = [...oidc.allowlist.users, ...users.allowed()].some((e) => matchesEntry(e, { sub: key.subject }));
+    if (!listed) return c.json({ error: "This account isn't allowed to use Sink." }, 403);
     users.touch(key.subject);
     const { client, device, challenge: appChallenge, next } = body.data;
     return c.json({ redirect: finish(c, { client, device: device ?? (client === "android" ? "Android" : "Web"), challenge: appChallenge, next }, key.subject) });

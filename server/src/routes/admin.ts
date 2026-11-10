@@ -45,7 +45,9 @@ export function adminRoutes(users: Users, auth: Auth, oidc: Oidc, passkeys: Pass
     // Someone also in an allowed group can sign back in; groups aren't known until they do.
     const still = [...oidc.allowlist.users, ...users.allowed()];
     for (const a of users.accounts()) {
-      const id = { sub: a.subject, email: a.email ?? undefined, username: a.username ?? undefined };
+      // A passkey account's username is just the name on its invite, and passkey sign-in goes by its sub alone.
+      const passkey = a.subject.startsWith("passkey:");
+      const id = passkey ? { sub: a.subject } : { sub: a.subject, email: a.email ?? undefined, username: a.username ?? undefined };
       if (a.owner || !matchesEntry(entry, id) || still.some((e) => matchesEntry(e, id))) continue;
       auth.revokeAll(a.subject);
     }

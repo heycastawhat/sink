@@ -138,7 +138,12 @@ export function createApp(deps: {
   // A plugin's client script, styles and assets. Signed in like the API: they're the owner's code, not public.
   app.get("/plugins/:id/*", requireAuth(auth, config.publicUrls), async (c) => {
     if (!isOwner(c.get("subject"))) return c.json({ error: "not found" }, 404);
-    const rel = decodeURIComponent(c.req.path.split("/").slice(3).join("/"));
+    let rel: string;
+    try {
+      rel = decodeURIComponent(c.req.path.split("/").slice(3).join("/"));
+    } catch {
+      return c.json({ error: "not found" }, 404);
+    }
     const file = plugins?.file(c.req.param("id"), rel);
     const type = file && pluginFileType(file);
     if (!file || !type) return c.json({ error: "not found" }, 404);
@@ -183,7 +188,8 @@ export function createApp(deps: {
       await next();
       if (c.req.path.startsWith("/api/") || c.res.headers.has("cache-control")) return;
       const type = c.res.headers.get("content-type") ?? "";
-      if (c.req.path.startsWith("/assets/")) c.header("cache-control", "public, max-age=31536000, immutable");
+      // Only a file that's there: a missing one (an older deploy's, or a newer one mid-deploy) may turn up later.
+      if (c.req.path.startsWith("/assets/")) c.header("cache-control", c.res.ok ? "public, max-age=31536000, immutable" : "no-cache");
       else if (type.includes("text/html") || c.req.path.endsWith(".webmanifest") || c.req.path === "/sw.js") c.header("cache-control", "no-cache");
     });
     // A shared note's page; it loads the note from /api/public/share/<id>. Not for search engines, and it doesn't
