@@ -76,12 +76,12 @@ async function authenticator() {
   };
 }
 
-function setup() {
+function setup(o: { allowedUsers?: string[]; allowAnyone?: boolean } = {}) {
   const db = openDb(":memory:");
   const vault = new Vault(db, mkdtempSync(join(tmpdir(), "sink-vault-")));
   const users = new Users(db, { db, vault }, { dir: mkdtempSync(join(tmpdir(), "sink-users-")) });
   const auth = new Auth(db);
-  const oidc = new Oidc({ issuer: "https://auth.test/", clientId: "x", clientSecret: "", allowedUsers: ["owner@example.com"], allowedGroups: [], allowAnyone: false });
+  const oidc = new Oidc({ issuer: "https://auth.test/", clientId: "x", clientSecret: "", allowedUsers: o.allowedUsers ?? ["owner@example.com"], allowedGroups: [], allowAnyone: o.allowAnyone ?? false });
   const app = createApp({ db, vault, users, auth, oidc, config: { secureCookies: false, maxUploadBytes: 1024 * 1024, webDir: undefined, publicUrls: [PUBLIC] } });
   const owner = auth.issueToken("Web", "owner-sub");
   const req = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
@@ -91,10 +91,48 @@ function setup() {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   const asOwner = (method: string, path: string, body?: unknown) => req(method, path, body, { authorization: `Bearer ${owner}` });
-  return { app, auth, users, req, asOwner };
+  return { app, auth, users, req, asOwner, db };
 }
 
 const cookieOf = (res: Response) => res.headers.get("set-cookie")!.split(";")[0]!;
+
+/** An invited person with a passkey: their authenticator, session cookie and allowlist entry. */
+async function invitePasskey(s: ReturnType<typeof setup>, name: string) {
+  const invite = (await (await s.asOwner("POST", "/api/admin/invites", { name })).json()) as any;
+  const token = new URL(invite.url).searchParams.get("invite")!;
+  const key = await authenticator();
+  const reg = (await (await s.req("POST", "/api/auth/passkey/register/options", { invite: token })).json()) as any;
+  const made = await s.req("POST", "/api/auth/passkey/register", { flow: reg.flow, invite: token, response: await key.create(reg.options) });
+  const people = (await (await s.asOwner("GET", "/api/admin/users")).json()) as any;
+  return { key, session: cookieOf(made), entry: people.allowed.find((e: string) => e.startsWith("sub:passkey:")) as string };
+}
+
+const form = (data: Record<string, string>, headers: Record<string, string> = {}) => ({
+  method: "POST",
+  headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+  body: new URLSearchParams(data).toString(),
+});
+const verifier = "v".repeat(43);
+const pkce = new Bun.CryptoHasher("sha256").update(verifier).digest("base64url");
+const REDIRECT = "https://client.example/cb";
+
+/** Registers an MCP client and runs the consent screen with `cookie`; the authorization code, or null if refused. */
+async function oauthCode(s: ReturnType<typeof setup>, cookie: string) {
+  const reg = await s.app.request(`${PUBLIC}/oauth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ redirect_uris: [REDIRECT], client_name: "App" }),
+  });
+  const client = ((await reg.json()) as any).client_id as string;
+  const q = new URLSearchParams({ client_id: client, redirect_uri: REDIRECT, response_type: "code", code_challenge: pkce, code_challenge_method: "S256" });
+  const page = await s.app.request(`${PUBLIC}/oauth/authorize?${q}`, { headers: { cookie } });
+  const request = (await page.text()).match(/name="request" value="([^"]+)"/)?.[1];
+  if (!request) return { client, code: null };
+  const res = await s.app.request(`${PUBLIC}/oauth/authorize`, form({ request, decision: "allow" }, { cookie }));
+  return { client, code: new URL(res.headers.get("location")!).searchParams.get("code") };
+}
+const swapCode = (s: ReturnType<typeof setup>, client: string, code: string) =>
+  s.app.request(`${PUBLIC}/oauth/token`, form({ grant_type: "authorization_code", code, client_id: client, code_verifier: verifier }));
 
 describe("passkeys", () => {
   test("an invite makes an account with a passkey, which signs in again later; removing them signs them out", async () => {
@@ -176,5 +214,62 @@ describe("passkeys", () => {
     expect((await s.req("POST", "/api/auth/passkey/register/options", { invite: token })).status).toBe(404);
     const other = s.auth.issueToken("Web", "someone-else");
     expect((await s.req("POST", "/api/admin/invites", { name: "X" }, { authorization: `Bearer ${other}` })).status).toBe(403);
+  });
+
+  test("removing a passkey person keeps them out even when any provider account may sign in", async () => {
+    const s = setup({ allowedUsers: [], allowAnyone: true });
+    await s.asOwner("GET", "/api/notes");
+    const { key, session, entry } = await invitePasskey(s, "Kim");
+    await s.asOwner("DELETE", `/api/admin/users/allowed?entry=${encodeURIComponent(entry)}`);
+    expect((await s.app.request(`${PUBLIC}/api/notes`, { headers: { cookie: session } })).status).toBe(401);
+    const opts = (await (await s.req("POST", "/api/auth/passkey/login/options", {})).json()) as any;
+    expect((await s.req("POST", "/api/auth/passkey/login", { flow: opts.flow, response: await key.get(opts.options) })).status).toBe(403);
+  });
+
+  test("removing a passkey person signs them out even if their invite name matches a user: entry", async () => {
+    const s = setup({ allowedUsers: ["owner@example.com", "user:sam"] });
+    await s.asOwner("GET", "/api/notes");
+    const { session, entry } = await invitePasskey(s, "sam");
+    await s.asOwner("DELETE", `/api/admin/users/allowed?entry=${encodeURIComponent(entry)}`);
+    expect((await s.app.request(`${PUBLIC}/api/notes`, { headers: { cookie: session } })).status).toBe(401);
+  });
+
+  test("codes made before someone was removed don't sign them back in", async () => {
+    const s = setup();
+    await s.asOwner("GET", "/api/notes");
+    const { session, entry } = await invitePasskey(s, "Kim");
+    const qr = (await (await s.app.request(`${PUBLIC}/api/auth/qr`, { method: "POST", headers: { cookie: session, origin: PUBLIC } })).json()) as any;
+    const { client, code } = await oauthCode(s, session);
+    expect(code).toBeTruthy();
+    await s.asOwner("DELETE", `/api/admin/users/allowed?entry=${encodeURIComponent(entry)}`);
+    const login = new URL(qr.url).searchParams.get("login");
+    expect((await s.req("POST", "/api/auth/qr/exchange", { code: login, device: "Phone" })).status).toBe(400);
+    expect((await swapCode(s, client, code!)).status).toBe(400);
+  });
+
+  test("an assistant's token can't stand in for a browser session to grant itself access", async () => {
+    const s = setup();
+    await s.asOwner("GET", "/api/notes");
+    const mcp = s.auth.issueToken("Claude (MCP)", "owner-sub", "mcp", 60 * 60_000);
+    expect((await oauthCode(s, `sink_session=${mcp}`)).code).toBeNull();
+  });
+
+  test("an expired access token still revokes its grant", async () => {
+    const s = setup();
+    const owner = s.auth.issueToken("Web", "owner-sub");
+    await s.asOwner("GET", "/api/notes");
+    const { client, code } = await oauthCode(s, `sink_session=${owner}`);
+    const tok = (await (await swapCode(s, client, code!)).json()) as any;
+    s.db.query("UPDATE tokens SET expires_at = 1 WHERE scope = 'mcp'").run();
+    await s.app.request(`${PUBLIC}/oauth/revoke`, form({ token: tok.access_token }));
+    const again = await s.app.request(`${PUBLIC}/oauth/token`, form({ grant_type: "refresh_token", refresh_token: tok.refresh_token, client_id: client }));
+    expect(again.status).toBe(400);
+  });
+
+  test("malformed escapes are a refusal, not a server error", async () => {
+    const s = setup();
+    const res = await s.app.request(`${PUBLIC}/oauth/token`, form({ grant_type: "refresh_token", refresh_token: "x" }, { authorization: `Basic ${btoa("abc%zz:secret")}` }));
+    expect(res.status).toBe(401);
+    expect((await s.asOwner("GET", "/plugins/x/%zz")).status).toBe(404);
   });
 });

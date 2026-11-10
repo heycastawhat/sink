@@ -336,7 +336,10 @@ describe("web app", () => {
     });
     expect((await app.request("/sw.js")).headers.get("cache-control")).toBe("no-cache");
     expect((await app.request("/assets/main-abc.js")).headers.get("cache-control")).toContain("immutable");
-    expect((await app.request("/assets/main-old.js")).status).toBe(404);
+    // Missing now isn't missing for good: a deploy can be half done.
+    const old = await app.request("/assets/main-old.js");
+    expect(old.status).toBe(404);
+    expect(old.headers.get("cache-control")).toBe("no-cache");
     const page = await app.request("/");
     expect(page.headers.get("cache-control")).toBe("no-cache");
     // Fonts are bundled, so pages never load anything from Google.

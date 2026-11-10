@@ -88,9 +88,28 @@ export class Auth {
     else this.db.query("DELETE FROM tokens WHERE id = ? AND subject = ?").run(tokenId, subject);
   }
 
+  // When each account was last signed out everywhere, so one-time codes made before then (a QR code, an app's
+  // hand-back, an OAuth code) can't sign a removed person back in. Those codes live in memory too.
+  private signedOut = new Map<string, number>();
+
   /** Signs an account out everywhere. */
   revokeAll(subject: string) {
     this.db.query("DELETE FROM tokens WHERE subject = ?").run(subject);
+    this.signedOut.set(subject, now());
+  }
+
+  /** Whether a code made at `created` for this account predates its last sign-out everywhere. */
+  signedOutSince(subject: string, created: number): boolean {
+    return (this.signedOut.get(subject) ?? -Infinity) >= created;
+  }
+
+  /** A token's id even if it has expired (to revoke what it belongs to); never a calendar feed's. */
+  idOf(token: string): string | null {
+    return (
+      this.db
+        .query<{ id: string }, [string]>("SELECT id FROM tokens WHERE token_hash = ? AND scope != 'calendar'")
+        .get(sha256(token))?.id ?? null
+    );
   }
 
   listTokens(subject: string) {
@@ -300,7 +319,9 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     if (!body.success) return c.json({ error: "invalid body" }, 400);
     const entry = handbacks.get(body.data.code);
     handbacks.delete(body.data.code);
-    if (!entry || s256(body.data.verifier) !== entry.challenge) return c.json({ error: "invalid or expired code" }, 400);
+    if (!entry || s256(body.data.verifier) !== entry.challenge || auth.signedOutSince(entry.subject, entry.created)) {
+      return c.json({ error: "invalid or expired code" }, 400);
+    }
     return c.json({ ok: true, token: auth.issueToken(entry.device, entry.subject) });
   });
 
@@ -319,7 +340,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     if (!body.success) return c.json({ error: "invalid body" }, 400);
     const entry = qrs.get(body.data.code);
     qrs.delete(body.data.code);
-    if (!entry) return c.json({ error: "That code expired or was already used. Make a new one." }, 400);
+    if (!entry || auth.signedOutSince(entry.subject, entry.created)) return c.json({ error: "That code expired or was already used. Make a new one." }, 400);
     if (!body.data.cookie) return c.json({ ok: true, token: auth.issueToken(body.data.device, entry.subject) });
     setSession(c, allowedOrigin(c), body.data.device, entry.subject);
     return c.json({ ok: true });

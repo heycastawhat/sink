@@ -68,11 +68,14 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
   const tokenError = (c: Context, error: string, description: string, status: 400 | 401 = 400) =>
     c.json({ error, error_description: description }, status, { "cache-control": "no-store" });
 
-  /** The signed-in browser's account, from the normal web session cookie. */
+  /**
+   * The signed-in browser's account, from the normal web session cookie. Only a full session: an assistant's token
+   * put in the cookie would otherwise mint itself a new grant that outlives it.
+   */
   const sessionSubject = (c: Context) => {
     const token = getCookie(c, SESSION_COOKIE);
-    const tokenId = token ? auth.verify(token) : null;
-    return tokenId ? auth.subjectOf(tokenId) : null;
+    const t = token ? auth.check(token) : null;
+    return t?.scope === "full" ? t.subject : null;
   };
 
   app.get("/.well-known/oauth-authorization-server", (c) => {
@@ -237,7 +240,16 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
   function clientCredentials(c: Context, form: Record<string, unknown>) {
     const basic = c.req.header("authorization")?.match(/^Basic (.+)$/i)?.[1];
     if (basic) {
-      const [id, secret] = Buffer.from(basic, "base64").toString().split(":").map(decodeURIComponent);
+      const [id, secret] = Buffer.from(basic, "base64")
+        .toString()
+        .split(":")
+        .map((s) => {
+          try {
+            return decodeURIComponent(s);
+          } catch {
+            return "";
+          }
+        });
       return { id: id ?? "", secret: secret ?? null };
     }
     return { id: String(form.client_id ?? ""), secret: typeof form.client_secret === "string" ? form.client_secret : null };
@@ -273,6 +285,7 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
       const entry = codes.get(code);
       codes.delete(code);
       if (!entry || entry.clientId !== client.id) return tokenError(c, "invalid_grant", "code expired or not for this client");
+      if (auth.signedOutSince(entry.subject, entry.created)) return tokenError(c, "invalid_grant", "access was revoked");
       if (form.redirect_uri !== undefined && form.redirect_uri !== entry.redirectUri) return tokenError(c, "invalid_grant", "redirect_uri mismatch");
       if (typeof form.code_verifier !== "string" || s256(form.code_verifier) !== entry.challenge) {
         return tokenError(c, "invalid_grant", "PKCE verification failed");
@@ -300,7 +313,8 @@ export function oauthRoutes(db: Database, auth: Auth, publicUrls: string[]) {
     const form = await c.req.parseBody();
     const token = String(form.token ?? "");
     const refresh = db.query<{ token_id: string }, [string]>("SELECT token_id FROM oauth_refresh WHERE token_hash = ?").get(sha256(token));
-    const tokenId = refresh?.token_id ?? auth.verify(token);
+    // An expired access token still names its grant: a client disconnecting after the hour means it too.
+    const tokenId = refresh?.token_id ?? auth.idOf(token);
     if (tokenId) auth.revoke(tokenId);
     return c.body(null, 200);
   });
