@@ -26,6 +26,8 @@ function mount(doc, readOnly) {
     doc,
     readOnly,
     onChange: () => {
+      // Someone else's text put in by refresh or a conflict is already saved: no save, and the notice stays.
+      if (!dirty()) return;
       clearTimeout(state.timer);
       state.timer = setTimeout(save, SAVE_DELAY);
       status('Editing…');
@@ -93,8 +95,10 @@ async function doSave() {
 /** Picks up other people's edits while this page sits untouched. */
 async function refresh() {
   if (dirty() || state.saving || document.hidden) return;
+  const before = state.hash;
   const note = await fetch(base).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  if (note?.hash && note.hash !== state.hash && !dirty() && !state.saving) {
+  // A save that landed while this was out is newer than what came back.
+  if (note?.hash && note.hash !== state.hash && state.hash === before && !dirty() && !state.saving) {
     Object.assign(state, { hash: note.hash, saved: note.content });
     editor.setText(note.content);
   }
