@@ -13,7 +13,7 @@ const BANNER =
 
 /** An empty board file. */
 export function emptyBoard() {
-  return serialize(DEFAULT_FRONTMATTER, { elements: [], appState: {}, files: {} }, new Map());
+  return serialize(DEFAULT_FRONTMATTER, { elements: [], appState: {}, files: {} }, new Map(), { back: '', extra: '' });
 }
 
 /** Reads the scene out of a board file. Handles the plugin's compressed and plain JSON blocks. */
@@ -35,24 +35,50 @@ export function parseBoard(text) {
   const files = new Map();
   const section = /^#+ Embedded [Ff]iles\s*$([\s\S]*?)(?=^#+ |^%%)/m.exec(text);
   for (const m of (section?.[1] ?? '').matchAll(/^([\w-]+):\s*\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/gm)) files.set(m[1], m[2]);
-  return { frontmatter, scene, files };
+  return { frontmatter, scene, files, keep: keptParts(text, frontmatter, section?.[1] ?? '') };
 }
 
-function serialize(frontmatter, scene, files) {
+/**
+ * What the file holds that Sink doesn't draw, so a save in Sink doesn't throw it away: the note on the back of the
+ * board (anything between the banner and `# Excalidraw Data`, which Obsidian lets you write), sections the plugin
+ * adds there that Sink doesn't know (`## Element Links`), and embedded files that aren't vault images (a web image's
+ * URL, a LaTeX formula).
+ */
+function keptParts(text, frontmatter, embeddedSection) {
+  const start = text.startsWith(frontmatter) ? frontmatter.length : 0;
+  const dataAt = text.search(/^# Excalidraw Data\s*$/m);
+  if (dataAt < 0) return { back: '', extra: '' };
+  const back = text.slice(start, dataAt).replace(/^==⚠[^\n]*$/m, '').trim();
+  // Up to the `%%` that hides the drawing (the back of the board may have `%%` comments of its own).
+  const end = text.slice(dataAt).search(/^%%\s*$/m);
+  const data = text.slice(dataAt, end < 0 ? undefined : dataAt + end);
+  const sections = [...data.matchAll(/^## (.+?)\s*$([\s\S]*?)(?=^## |(?![\s\S]))/gm)]
+    .filter((m) => !/^(Text Elements|Embedded [Ff]iles|Drawing)$/.test(m[1]))
+    .map((m) => `## ${m[1]}\n${m[2].trim()}\n`);
+  const otherFiles = embeddedSection
+    .split('\n')
+    .filter((l) => /^[\w-]+:\s*\S/.test(l) && !/^[\w-]+:\s*\[\[/.test(l))
+    .join('\n');
+  return { back, extra: sections.join('\n'), otherFiles };
+}
+
+function serialize(frontmatter, scene, files, keep) {
   const texts = scene.elements
     .filter((e) => e.type === 'text' && !e.isDeleted)
     .map((e) => `${(e.originalText ?? e.text).replace(/\n/g, ' ')} ^${e.id}`)
     .join('\n\n');
-  const embedded = [...files].map(([id, name]) => `${id}: [[${name}]]`).join('\n');
+  const embedded = [...[...files].map(([id, name]) => `${id}: [[${name}]]`), ...(keep.otherFiles ? [keep.otherFiles] : [])].join('\n');
   return [
     frontmatter.trimEnd(),
     BANNER,
     '',
+    ...(keep.back ? [keep.back, ''] : []),
     '',
     '# Excalidraw Data',
     '',
     '## Text Elements',
     texts ? `${texts}\n` : '',
+    ...(keep.extra ? [keep.extra] : []),
     ...(embedded ? ['## Embedded Files', `${embedded}\n`] : []),
     '%%',
     '## Drawing',
@@ -79,7 +105,7 @@ const dataUrlOf = (blob) =>
  *  upload(file) -> {path}         to store new images in attachments/; without it the image tool is hidden
  */
 export function createBoard({ parent, text, onChange, attachmentUrl, upload, onError, dark }) {
-  let { frontmatter, scene, files } = parseBoard(text);
+  let { frontmatter, scene, files, keep } = parseBoard(text);
   let api = null;
   let cached = text;
   let stale = false;
@@ -157,13 +183,13 @@ export function createBoard({ parent, text, onChange, attachmentUrl, upload, onE
         const json = JSON.parse(serializeAsJSON(api.getSceneElements(), api.getAppState(), {}, 'local'));
         // Images live in attachments/, not inline as data URLs.
         json.files = {};
-        cached = serialize(frontmatter, json, files);
+        cached = serialize(frontmatter, json, files, keep);
         stale = false;
       }
       return cached;
     },
     setText(next) {
-      ({ frontmatter, scene, files } = parseBoard(next));
+      ({ frontmatter, scene, files, keep } = parseBoard(next));
       cached = next;
       stale = false;
       lastVersion = sceneVersion(scene.elements);
