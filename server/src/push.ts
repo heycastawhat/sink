@@ -153,9 +153,10 @@ export async function sendReminders(dbs: Database[], send: Send, at = Date.now()
     const gone = new Set<string>();
     for (const t of due) {
       const tag = `${t.path}\n${t.text}\n${t.remind_at}`;
-      const keys = [tag, `${t.path}\n#${t.line}\n${t.remind_at}`];
+      // The line's key can't look like a text one: a todo whose text is "#0" made the same key twice.
+      const keys = [tag, `${t.path}\n\u0000${t.line}\n${t.remind_at}`];
       if (keys.some((k) => db.query("SELECT 1 FROM push_sent WHERE key = ?").get(k))) continue;
-      for (const k of keys) db.query("INSERT INTO push_sent (key, remind_at) VALUES (?, ?)").run(k, t.remind_at);
+      for (const k of keys) db.query("INSERT OR IGNORE INTO push_sent (key, remind_at) VALUES (?, ?)").run(k, t.remind_at);
       const payload = JSON.stringify({ title: t.text || "Todo", body: t.note_title, path: t.path, line: t.line, tag });
       let delivered = false;
       let tried = false;

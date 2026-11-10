@@ -146,6 +146,14 @@ describe("reminders", () => {
     expect(s.db.query("SELECT * FROM push_subscriptions").all()).toEqual([]);
   });
 
+  test("a todo whose text looks like a line number is still reminded, and so is the one on that line", async () => {
+    subscribe(T("2026-11-01T00:00:00Z"));
+    await s.vault.write("A.md", "- [ ] later 📅 2026-11-10\n- [ ] #0 📅 2026-11-10\n- [ ] #2 📅 2026-11-10\n", null);
+    const { sent, send } = fakeSender();
+    await sendReminders([s.db], send, T("2026-11-10T09:00:30Z"));
+    expect(sent.map((x) => x.payload.title).sort()).toEqual(["#0", "#2", "later"]);
+  });
+
   test("a failing push service doesn't stop the rest", async () => {
     subscribe(T("2026-11-01T00:00:00Z"));
     await s.vault.write("A.md", "- [ ] One (@2026-11-06 18:00)\n- [ ] Two (@2026-11-06 18:00)\n", null);
