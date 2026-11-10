@@ -63,9 +63,13 @@ function keptParts(text, frontmatter, embeddedSection) {
 }
 
 function serialize(frontmatter, scene, files, keep) {
+  // Line breaks stay as they are, as the plugin writes them: it reads each text as everything up to its ` ^id` and
+  // prefers that over the JSON on load, so flattening them here would join the lines in Obsidian.
   const texts = scene.elements
-    .filter((e) => e.type === 'text' && !e.isDeleted)
-    .map((e) => `${(e.originalText ?? e.text).replace(/\n/g, ' ')} ^${e.id}`)
+    // Only 8-character ids, the only kind the plugin finds (` ^` and 8 characters): a longer one, as Excalidraw gives
+    // new elements here, would read as the start of the next text. Those it takes from the JSON instead.
+    .filter((e) => e.type === 'text' && !e.isDeleted && e.id.length === 8)
+    .map((e) => `${e.originalText ?? e.text} ^${e.id}`)
     .join('\n\n');
   const embedded = [...[...files].map(([id, name]) => `${id}: [[${name}]]`), ...(keep.otherFiles ? [keep.otherFiles] : [])].join('\n');
   return [
