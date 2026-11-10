@@ -22,7 +22,7 @@ const COLORS = {
 
 /**
  * The files in a zip, by name, each read on demand. Handles stored and deflated entries (all Takeout uses) with the
- * browser's own DecompressionStream; no zip64, which only matters past 4 GB.
+ * browser's own DecompressionStream; no zip64, which only matters past 4 GB or 65,535 files.
  */
 export async function readZip(file) {
   const buf = new Uint8Array(await file.arrayBuffer());
@@ -38,7 +38,8 @@ export async function readZip(file) {
   if (eocd < 0) throw new Error("That isn't a zip file");
   const count = view.getUint16(eocd + 10, true);
   let at = view.getUint32(eocd + 16, true);
-  if (at === 0xffffffff) throw new Error('That zip is too big to read here; unzip it and pick the files inside instead');
+  // 0xffff entries or a 4 GB offset mean zip64 holds the real numbers; reading on would import only part of it.
+  if (at === 0xffffffff || count === 0xffff) throw new Error('That zip is too big to read here; unzip it and pick the files inside instead');
   const names = new TextDecoder();
   const entries = new Map();
   for (let n = 0; n < count; n++) {
