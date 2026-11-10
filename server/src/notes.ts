@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { now } from "./db";
@@ -52,10 +53,17 @@ export type TrashedNote = {
   folder?: string;
 };
 
+/**
+ * Set while a request made with an assistant's (`mcp`) token runs. Its writes may not put a note on the public page or
+ * open one to search engines, by whatever route they come: a save, a todo edit, a plugin's tool appending to the daily
+ * note. Checked here, against the file as it is, because each of those can change frontmatter.
+ */
+export const assistantWrites = new AsyncLocalStorage<true>();
+
 /** 404 / 409 / 400 / 503 for the routes, so file system detail never reaches clients. */
 export class VaultError extends Error {
   constructor(
-    public status: 400 | 404 | 409 | 413 | 503,
+    public status: 400 | 403 | 404 | 409 | 413 | 503,
     message: string,
     public current?: Note | FileMeta,
   ) {
@@ -822,6 +830,11 @@ export class Vault {
           if (hash !== baseHash) throw new VaultError(409, "note changed since it was read", { ...m, content: current });
           return m;
         }
+      }
+      if (assistantWrites.getStore()) {
+        const next = parseNote(path, content);
+        const was = current === null ? null : parseNote(path, current);
+        if ((next.publish && !was?.publish) || (next.searchable && !was?.searchable)) throw new VaultError(403, "not allowed with this token");
       }
       if (current !== null && !isBoard(path)) this.snapshot(path, current, opts.keepVersion);
       await mkdir(dirname(abs), { recursive: true });
