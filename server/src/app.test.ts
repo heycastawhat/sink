@@ -1561,6 +1561,20 @@ describe("todos", () => {
 });
 
 describe("helpers", () => {
+  test("todos: block ids stay last, ⏳ dates survive a time change, tags end a repeat, months are months", () => {
+    expect(setDone("- [ ] Bins 📅 2026-11-02 ^bins", true, "2026-11-02")).toBe("- [x] Bins 📅 2026-11-02 ✅ 2026-11-02 ^bins");
+    expect(setDone("- [x] Bins 📅 2026-11-02 ✅ 2026-11-02 ^bins", false, "2026-11-02")).toBe("- [ ] Bins 📅 2026-11-02 ^bins");
+    expect(editTodo("- [ ] x ⏳ 2026-11-05", { time: "10:00" })).toBe("- [ ] x ⏳ 2026-11-05 (@2026-11-05 10:00)");
+    expect(nextOccurrence("- [ ] bins 🔁 every week #chores 📅 2026-11-03", "2026-11-03")).toBe("- [ ] bins 🔁 every week #chores 📅 2026-11-10");
+    expect(parseTodos("- [ ] bins 🔁 every week #chores 📅 2026-11-03", "UTC")[0]!.text).toBe("bins #chores");
+    expect(parseQuick("buy 3 novels", "2026-11-10")).toEqual({ text: "buy 3 novels" });
+    expect(parseQuick("eat 2 apricots", "2026-11-10")).toEqual({ text: "eat 2 apricots" });
+    expect(parseQuick("dentist 13 nov", "2026-11-10").due).toBe("2026-11-13");
+    expect(parseQuick("dentist march 4", "2026-11-10").due).toBe("2027-03-04");
+    // "```js" inside an open fence is code, not its end.
+    expect(parseTodos("```\n```js\n- [ ] inside\n```\n- [ ] outside\n", "UTC").map((t) => t.text)).toEqual(["outside"]);
+  });
+
   test("a title is the first heading outside code, closing hashes and all", () => {
     expect(parseNote("x.md", "# Learning C#\n").title).toBe("Learning C#");
     expect(parseNote("x.md", "# Closed ##\n").title).toBe("Closed");

@@ -17,7 +17,7 @@ import { VaultError, type Vault } from "./notes";
 export const TODO_FILE = "Todo.md";
 const TASK = /^(\s*(?:[-*+]|\d+[.)])\s+\[)(.)(\]\s+)(.*)$/;
 const DATE = String.raw`\d{4}-\d{2}-\d{2}`;
-const FIELD = new RegExp(String.raw`\s*(?:[📅⏳🛫✅➕❌]️?\s*${DATE}|[⏫🔼🔽🔺⏬]️?|🔁️?[^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(]*|\(@${DATE}(?:[ T]\d{1,2}:\d{2})?\))`, "gu");
+const FIELD = new RegExp(String.raw`\s*(?:[📅⏳🛫✅➕❌]️?\s*${DATE}|[⏫🔼🔽🔺⏬]️?|🔁️?[^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(#]*|\(@${DATE}(?:[ T]\d{1,2}:\d{2})?\))`, "gu");
 
 export type Todo = {
   line: number;
@@ -51,7 +51,8 @@ export function parseTodos(content: string, timeZone: string): Todo[] {
     const f = /^\s*(```+|~~~+)/.exec(line);
     if (f) {
       if (!fence) fence = f[1]!;
-      else if (line.trim().startsWith(fence)) fence = null;
+      // Only a bare run of the same mark, at least as long, closes it: "```js" inside a fence is content.
+      else if (f[1]![0] === fence[0] && f[1]!.length >= fence.length && !line.trim().slice(f[1]!.length).trim()) fence = null;
       continue;
     }
     if (fence) continue;
@@ -69,7 +70,7 @@ export function parseTodos(content: string, timeZone: string): Todo[] {
     out.push({
       line: i,
       raw: line,
-      text: rest.replace(FIELD, "").replace(/\s+/g, " ").trim(),
+      text: rest.replace(FIELD, " ").replace(/\s+/g, " ").trim(),
       status,
       // A scheduled date or a reminder with no due date still dates the todo.
       due: due ?? scheduled ?? remind?.[1] ?? null,
@@ -87,9 +88,11 @@ export function parseTodos(content: string, timeZone: string): Todo[] {
 export function setStatus(raw: string, status: "open" | "done" | "cancelled", today: string): string {
   const m = TASK.exec(raw);
   if (!m) throw new Error("not a task line");
-  const rest = m[4]!.replace(new RegExp(`\\s*[✅❌]\\uFE0F?\\s*${DATE}`, "gu"), "");
+  // A block id stays last, after the stamp, or Obsidian no longer reads it as one and links to it break.
+  const id = /\s+\^[\w-]+$/.exec(m[4]!)?.[0] ?? "";
+  const rest = m[4]!.slice(0, m[4]!.length - id.length).replace(new RegExp(`\\s*[✅❌]\\uFE0F?\\s*${DATE}`, "gu"), "");
   const [mark, stamp] = status === "done" ? ["x", ` ✅ ${today}`] : status === "cancelled" ? ["-", ` ❌ ${today}`] : [" ", ""];
-  return `${m[1]}${mark}${m[3]}${rest}${stamp}`;
+  return `${m[1]}${mark}${m[3]}${rest}${stamp}${id}`;
 }
 
 /** Ticks or unticks one task line. */
@@ -124,7 +127,7 @@ export function editTodo(raw: string, change: { text?: string; due?: string | nu
   }
   if (change.due !== undefined || change.time !== undefined) {
     const reminder = REMINDER.exec(rest);
-    const due = change.due === undefined ? (DUE.exec(rest)?.[1] ?? reminder?.[1] ?? null) : change.due;
+    const due = change.due === undefined ? (DUE.exec(rest)?.[1] ?? SCHEDULED.exec(rest)?.[1] ?? reminder?.[1] ?? null) : change.due;
     const time = change.time === undefined ? (reminder?.[2] ?? null) : change.time;
     // A todo dated only by its scheduled date (⏳) is moved by that, so it stays scheduled rather than becoming due.
     const mark = !DUE.test(rest) && SCHEDULED.test(rest) ? "⏳" : "📅";
@@ -138,7 +141,8 @@ export function editTodo(raw: string, change: { text?: string; due?: string | nu
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const DAY_NAMES = String.raw`(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(?:day|nesday|sday|rsday|urday)?`;
-const MONTH_NAMES = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*`;
+// Whole month names only: "buy 3 novels" isn't the 3rd of November.
+const MONTH_NAMES = String.raw`(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b`;
 const TAIL_TIME = new RegExp(String.raw`\s+(?:at\s+)?(noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2})$`, "i");
 const TAIL_DATE = new RegExp(
   String.raw`\s+(?:on\s+|by\s+|due\s+)?(today|tonight|tomorrow|tmrw|next week|in \d+ (?:days?|weeks?|months?)|(?:next\s+)?${DAY_NAMES}|\d{4}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)?\s+${MONTH_NAMES}|${MONTH_NAMES}\s+\d{1,2}(?:st|nd|rd|th)?)$`,
@@ -279,7 +283,7 @@ export function nextDate(rule: string, from: string): string | null {
 }
 
 /** The Tasks rule on a task line ("every week"), if it has one. */
-export const repeatRule = (raw: string) => /🔁\uFE0F?\s*([^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(^]*)/u.exec(raw)?.[1]?.trim() || null;
+export const repeatRule = (raw: string) => /🔁\uFE0F?\s*([^📅⏳🛫✅➕❌⏫🔼🔽🔺⏬(^#]*)/u.exec(raw)?.[1]?.trim() || null;
 
 /**
  * The next copy of a recurring task (`🔁 every week`), open again with its dates moved on, or null if it doesn't
