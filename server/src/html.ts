@@ -68,8 +68,10 @@ const BREAKS = /^(p|div|section|article|main|figure|figcaption|h[1-6]|ul|ol|li|p
 /** A parsed DOM subtree as markdown, with links and images made absolute against `base`. Only http(s) and mailto links survive. */
 export function htmlToMarkdown(root: Dom, base: string): string {
   const absolute = (raw: string | null, schemes = /^(https?|mailto):$/) => {
+    // No address isn't this page's address: `<a name="top">` is an anchor, `<img>` without src shows nothing.
+    if (!raw?.trim()) return null;
     try {
-      const u = new URL(raw?.trim() ?? "", base);
+      const u = new URL(raw.trim(), base);
       return schemes.test(u.protocol) ? u.href.replace(/\(/g, "%28").replace(/\)/g, "%29") : null;
     } catch {
       return null;
@@ -130,10 +132,16 @@ export function htmlToMarkdown(root: Dom, base: string): string {
         return `\n\n${kids(n).trim().replace(/^/gm, "> ")}\n\n`;
       case "ul":
       case "ol": {
-        const items = Array.from(n.childNodes).filter((c) => c.nodeName.toLowerCase() === "li");
-        const lines = items.map((li, i) => {
+        // A list put straight inside a list (no <li> around it, as many pages do) belongs to the item before it.
+        const items: string[] = [];
+        for (const c of Array.from(n.childNodes)) {
+          const name = c.nodeName.toLowerCase();
+          if (name === "li") items.push(kids(c));
+          else if ((name === "ul" || name === "ol") && items.length) items[items.length - 1] += `\n${walk(c).trim()}`;
+        }
+        const lines = items.map((item, i) => {
           const bullet = tag === "ol" ? `${i + 1}. ` : "- ";
-          return bullet + kids(li).trim().replace(/\n{2,}(?=(?:- |\d+\. ))/g, "\n").replace(/\n/g, "\n" + " ".repeat(bullet.length));
+          return bullet + item.trim().replace(/\n{2,}(?=(?:- |\d+\. ))/g, "\n").replace(/\n/g, "\n" + " ".repeat(bullet.length));
         });
         return `\n\n${lines.join("\n")}\n\n`;
       }
