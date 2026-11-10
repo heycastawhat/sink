@@ -168,8 +168,10 @@ function day(word: string, today: string): string | null {
   if (w === "today" || w === "tonight") return today;
   if (w === "tomorrow" || w === "tmrw") return addDays(today, 1);
   if (w === "next week") return nextDate("every monday", today);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(w)) return w;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(w)) return realDate(w) ? w : null;
   const inN = /^in (\d+) (day|week|month)s?$/.exec(w);
+  // Further off than this isn't a date anyone means (and past year 9999 isn't one we can write): leave it as typed.
+  if (inN && Number(inN[1]) > 10_000) return null;
   if (inN) return inN[2] === "month" ? addMonths(today, Number(inN[1])) : addDays(today, Number(inN[1]) * (inN[2] === "week" ? 7 : 1));
   const named = /^(next )?([a-z]+)$/.exec(w);
   if (named) {
@@ -242,6 +244,14 @@ const dayNumber = (d: string) => Date.parse(`${d}T00:00:00Z`) / DAY_MS;
 const fromDayNumber = (n: number) => new Date(n * DAY_MS).toISOString().slice(0, 10);
 const addDays = (d: string, n: number) => fromDayNumber(dayNumber(d) + n);
 
+/** Whether a YYYY-MM-DD is a day the calendar has: 2026-02-31 matches the pattern but would roll over to March. */
+function realDate(d: string): boolean {
+  const [y, m, day] = d.split("-").map(Number) as [number, number, number];
+  const t = new Date(Date.UTC(y, m - 1, day));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === day;
+}
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(realDate);
+
 /** Month arithmetic the way Tasks (moment) does it: the 31st plus a month is the last day of a short month. */
 function addMonths(d: string, n: number): string {
   const [y, m, day] = d.split("-").map(Number) as [number, number, number];
@@ -260,7 +270,8 @@ export function nextDate(rule: string, from: string): string | null {
   const unit = /^(?:(\d+)\s+)?(day|week|month|year)s?$/.exec(r);
   if (unit) {
     const n = Number(unit[1] ?? 1);
-    if (n < 1) return null;
+    // A rule no calendar reaches ("every 99999999 days") isn't one: no next date, rather than an invalid one.
+    if (n < 1 || n > 10_000) return null;
     if (unit[2] === "day") return addDays(from, n);
     if (unit[2] === "week") return addDays(from, 7 * n);
     return addMonths(from, unit[2] === "month" ? n : 12 * n);
@@ -326,13 +337,13 @@ const editBody = z.object({
   line: z.number().int().min(0),
   raw: z.string().max(10_000),
   text: z.string().trim().min(1).max(2000).optional(),
-  due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  due: isoDate.nullable().optional(),
   time: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
   status: z.enum(["open", "done", "cancelled"]).optional(),
 });
 const addBody = z.object({
   text: z.string().trim().min(1).max(2000),
-  due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  due: isoDate.optional(),
   time: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
   path: z.string().max(1024).optional(),
   // Read a date, time or repeat off the end of the text ("call mum tomorrow 6pm") when none is given.
@@ -413,6 +424,7 @@ export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
     const body = toggleBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid body" }, 400);
     const { path, line, raw, done, next } = body.data;
+    if (!TASK.test(raw)) return c.json({ error: "not a todo" }, 400);
     let added: string | null = null;
     try {
       const out = await rewrite(path, line, raw, (lines, at, cr) => {
