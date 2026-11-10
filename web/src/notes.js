@@ -2,7 +2,7 @@
 // Notes are files in the vault on the NAS; saves carry the hash we last saw, so edits made elsewhere
 // (Obsidian, the phone) are never silently overwritten.
 
-import { esc, folderOf, inlineHtml, tableCells } from './util.js';
+import { decodeLink, esc, folderOf, inlineHtml, tableCells } from './util.js';
 import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
@@ -1067,7 +1067,7 @@ function mountEditor(text) {
     },
     onOpenLink: openLink,
     resolveEmbed: (name) => api.attachmentUrl(name),
-    resolveImage: (src) => (/^(https?:|data:|\/)/i.test(src) ? src : api.attachmentUrl(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
+    resolveImage: (src) => (/^(https?:|data:|\/)/i.test(src) ? src : api.attachmentUrl(decodeLink(src).replace(/^(\.\.\/)+/, ''))),
     loadEmbed: async (target) => {
       // A note opened straight from the address bar can be up before the list it's looked up in.
       if (!state.loaded) await listing?.catch(() => {});

@@ -4,7 +4,7 @@
 import { createEditor, IMAGE_EXT } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
-import { esc, inlineHtml } from './util.js';
+import { decodeLink, esc, inlineHtml } from './util.js';
 
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 document.documentElement.dataset.theme = dark() ? 'dark' : 'light';
@@ -45,7 +45,7 @@ async function showNote(handle, notes, path) {
     const attachment = (name) => `${base}/attachment?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`;
     return {
       resolveEmbed: attachment,
-      resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeURIComponent(src).replace(/^(\.\.\/)+/, '').split('/').pop())),
+      resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeLink(src).replace(/^(\.\.\/)+/, '').split('/').pop())),
     };
   };
   // Links to notes that aren't published become their plain text, so they don't look like links that go nowhere, and
