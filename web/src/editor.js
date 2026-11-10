@@ -22,6 +22,7 @@ import './editor.css';
 import { buzz } from './haptics.js';
 import { inlineHtml, tableCells } from './util.js';
 import { registry } from './plugin-api.js';
+import { cellSpans, nextCell, prevCell, tableEditing, tableEnter } from './table-edit.js';
 
 const highlight = HighlightStyle.define([
   { tag: t.heading1, class: 'cm-h1' },
@@ -336,7 +337,7 @@ class TableWidget extends WidgetType {
     wrap.innerHTML = `<table><thead><tr>${pad(tableCells(head)).map((c, i) => cell('th', c, i)).join('')}</tr></thead><tbody>${rows
       .map((r) => `<tr>${pad(tableCells(r)).map((c, i) => cell('td', c, i)).join('')}</tr>`)
       .join('')}</tbody></table>`;
-    // Clicking a cell opens the table's markdown with the caret on that row (CodeMirror can't place it in a widget).
+    // Clicking a cell opens the table's markdown with the caret in that cell (CodeMirror can't place it in a widget).
     wrap.addEventListener('mousedown', (e) => {
       e.preventDefault();
       // The table is replaced by its source at once, so outer handlers would see a click on nothing.
@@ -352,7 +353,10 @@ class TableWidget extends WidgetType {
       while (node && node.name !== 'Table') node = node.parent;
       const start = view.state.doc.lineAt(node ? node.from : at);
       const line = view.state.doc.line(Math.min(start.number + row, view.state.doc.lines));
-      view.dispatch({ selection: { anchor: line.from + Math.min(2, line.length) } });
+      const td = e.target.closest('td, th');
+      const span = cellSpans(line.text)[td ? td.cellIndex : 0];
+      const text = span ? line.text.slice(...span) : '';
+      view.dispatch({ selection: { anchor: line.from + (span ? span[0] + text.length - text.trimStart().length : 0) } });
       view.focus();
     });
     return wrap;
@@ -361,6 +365,8 @@ class TableWidget extends WidgetType {
     return true;
   }
 }
+
+const tableLine = Decoration.line({ class: 'cm-table-source' });
 
 function tablesDeco(state) {
   const ranges = [];
@@ -377,6 +383,9 @@ function tablesDeco(state) {
       const to = state.doc.lineAt(node.to).to;
       if (!sel.some((r) => r.to >= from && r.from <= to)) {
         ranges.push(Decoration.replace({ widget: new TableWidget(state.sliceDoc(from, to)), block: true }).range(from, to));
+      } else {
+        // Being edited: monospace, so the columns table-edit.js pads line up.
+        for (let n = state.doc.lineAt(from).number; n <= state.doc.lineAt(to).number; n++) ranges.push(tableLine.range(state.doc.line(n).from));
       }
       return false;
     },
@@ -1085,12 +1094,14 @@ export function createEditor(opts) {
         titleFirst,
         pluginBlocks,
         tables,
+        tableEditing,
         noteEmbeds({ ...opts, embedCache }),
         autocompletion({ override: [completeLinks, completeCommands], icons: false, addToOptions: [{ render: commandIcon, position: 20 }] }),
         placeholderExt(opts.placeholder ?? (opts.readOnly ? '' : newNoteHint())),
         ...(opts.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
-        // Tab takes the highlighted suggestion ([[link]] or /command); with no menu open it indents as usual.
-        keymap.of([{ key: 'Tab', run: acceptCompletion }, { key: 'Enter', run: enterAfterTitle }]),
+        // Tab takes the highlighted suggestion ([[link]] or /command); in a table it goes to the next cell; otherwise it
+        // indents as usual.
+        keymap.of([{ key: 'Tab', run: acceptCompletion }, { key: 'Tab', run: nextCell, shift: prevCell }, { key: 'Enter', run: enterAfterTitle }, { key: 'Enter', run: tableEnter }]),
         keymap.of([...closeBracketsKeymap, ...markdownKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
         // writingsuggestions: no macOS/Chrome predicted words greyed in after the cursor (they look like note text).
         EditorView.contentAttributes.of({ spellcheck: 'true', autocapitalize: 'sentences', writingsuggestions: 'false', 'aria-label': 'Note text' }),

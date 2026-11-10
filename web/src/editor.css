@@ -551,6 +551,56 @@
   -moz-tab-size: 2.2em !important;
 }
 
+.cm-table-source {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.9em;
+}
+
+/* The toolbar over a table being edited (table-edit.js). */
+.cm-tooltip.cm-table-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  overflow-x: auto;
+  border: 0;
+  border-radius: 12px;
+  background: var(--md-sys-color-surface-container-high);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--md-sys-color-shadow) 20%, transparent);
+  color: var(--md-sys-color-on-surface-variant);
+  font-family: 'Roboto Flex Variable', system-ui, sans-serif;
+  white-space: nowrap;
+}
+
+.cm-table-tools button {
+  display: grid;
+  place-items: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9em;
+  cursor: pointer;
+  --m3e-icon-size: 20px;
+}
+
+.cm-table-tools button:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  color: var(--md-sys-color-on-surface);
+}
+
+.cm-table-tools-gap {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 16%, transparent);
+}
+
 /* Tables in live preview (editor.js TableWidget). */
 .cm-table {
   margin: 6px 0;

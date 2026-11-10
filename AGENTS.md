@@ -62,7 +62,8 @@ database loses nothing a rescan can't rebuild.
 - `notes.js` grid, cards (formatted excerpts), Recent row, folders/tree/tags sidebar, search (`#tag` filters
   locally), note screen (editor, autosave, conflicts, history, share, archive, backlinks), todos, trash, live changes.
 - `editor.js` CodeMirror live preview (headings, tasks, callouts, tables, wikilinks, images, plugin code blocks,
-  properties widget, slash commands incl. `/table`, `/template`, `![[Note]]`/`![[Note#Heading]]` embeds as nested read-only
+  properties widget, slash commands incl. `/table`, `/template`, table editing in `table-edit.js` (Tab/Enter between
+  cells with padded columns, a row/column toolbar, Enter after `| a | b |` or a spreadsheet paste makes a table), `![[Note]]`/`![[Note#Heading]]` embeds as nested read-only
   editors via `opts.loadEmbed`: depth 2, never a note above itself; share links get the name only, public pages
   only published notes). Must keep `root: document` (the page lives in
   `<m3e-theme>`'s shadow root; without it the caret desyncs).
