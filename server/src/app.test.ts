@@ -1499,6 +1499,9 @@ describe("todos", () => {
     expect(open.find((t: any) => t.text === "Oat milk").due).toBe("2026-11-01");
     expect((await send(token, "POST", "/api/todos/edit", { path: "Home.md", line: 3, raw: "- [ ] Milk", due: null })).status).toBe(409);
     expect((await send(token, "POST", "/api/todos/edit", { path: "Home.md", line: 0, raw: "# Home", text: "x" })).status).toBe(400);
+    expect((await send(token, "POST", "/api/todos/toggle", { path: "Home.md", line: 0, raw: "# Home", done: true })).status).toBe(400);
+    // A day the month doesn't have is refused, not written as 📅 2026-02-31.
+    expect((await send(token, "POST", "/api/todos/edit", { path: "Home.md", line: 3, raw: edited.raw, due: "2026-02-31" })).status).toBe(400);
   });
 
   test("priority, start and scheduled dates; cancelling", () => {
@@ -1527,6 +1530,8 @@ describe("todos", () => {
     expect(q("rent 31 feb")).toMatchObject({ text: "rent 31 feb", due: undefined });
     expect(q("party 29 feb").due).toBe("2028-02-29");
     expect(q("report in 2 weeks").due).toBe("2026-11-13");
+    expect(q("x in 99999999 days")).toEqual({ text: "x in 99999999 days" });
+    expect(q("rent 2026-02-31")).toEqual({ text: "rent 2026-02-31" });
     expect(q("drinks tonight")).toMatchObject({ text: "drinks", due: "2026-10-30", time: "19:00" });
     expect(q("call bank at 16:00")).toMatchObject({ text: "call bank", due: "2026-10-30", time: "16:00" });
     expect(q("bins every tuesday")).toMatchObject({ text: "bins", every: "every tuesday", due: "2026-11-03" });
@@ -1543,6 +1548,8 @@ describe("todos", () => {
     expect(added).toMatchObject({ raw: `- [ ] pay rates 📅 ${today} (@${today} 17:00)`, due: today, time: "17:00" });
     // Without natural (assistants, email), the text is kept as written.
     expect(((await (await send(token, "POST", "/api/todos", { text: "plan today" })).json()) as any).raw).toBe("- [ ] plan today");
+    expect((await send(token, "POST", "/api/todos", { text: "rent", due: "2026-02-31" })).status).toBe(400);
+    expect((await send(token, "POST", "/api/todos", { text: "x in 99999999 days", natural: true })).status).toBe(201);
     await setup.vault.write("Old.md", "- [ ] late 📅 2020-01-01\n- [ ] not yet 🛫 2999-01-01 📅 2020-01-01\n", null);
     expect(await (await get(token, "/api/todos/count")).json()).toEqual({ overdue: 1, today: 1 });
     const cancelled = (await (await send(token, "POST", "/api/todos/edit", { path: "Old.md", line: 0, raw: "- [ ] late 📅 2020-01-01", status: "cancelled" })).json()) as any;
@@ -1567,6 +1574,8 @@ describe("helpers", () => {
     expect(editTodo("- [ ] x ⏳ 2026-11-05", { time: "10:00" })).toBe("- [ ] x ⏳ 2026-11-05 (@2026-11-05 10:00)");
     expect(nextOccurrence("- [ ] bins 🔁 every week #chores 📅 2026-11-03", "2026-11-03")).toBe("- [ ] bins 🔁 every week #chores 📅 2026-11-10");
     expect(parseTodos("- [ ] bins 🔁 every week #chores 📅 2026-11-03", "UTC")[0]!.text).toBe("bins #chores");
+    expect(nextDate("every 99999999 days", "2026-11-10")).toBeNull();
+    expect(nextOccurrence("- [ ] x 🔁 every 99999999 days 📅 2026-11-10", "2026-11-10")).toBeNull();
     expect(parseQuick("buy 3 novels", "2026-11-10")).toEqual({ text: "buy 3 novels" });
     expect(parseQuick("eat 2 apricots", "2026-11-10")).toEqual({ text: "eat 2 apricots" });
     expect(parseQuick("dentist 13 nov", "2026-11-10").due).toBe("2026-11-13");
