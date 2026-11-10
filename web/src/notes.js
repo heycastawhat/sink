@@ -1164,6 +1164,8 @@ function showFileName() {
 }
 
 let openSeq = 0;
+// A note is on its way: the desktop layouts keep the page hidden until it has loaded, and leaving meanwhile cancels it.
+let opening = false;
 export async function openNote(path, { line } = {}) {
   if (screen.path === path && !$('note-screen').hidden) {
     if (line != null) screen.editor.goToLine(line);
@@ -1171,6 +1173,7 @@ export async function openNote(path, { line } = {}) {
   }
   // A later open (a quick Back, a second click) wins; this one stops at its next await.
   const seq = ++openSeq;
+  opening = true;
   await closeEditor();
   if (seq !== openSeq) return;
   // The desktop layouts grow the note out of its card once it's loaded (so it arrives with its words, not empty);
@@ -1228,6 +1231,8 @@ export async function openNote(path, { line } = {}) {
     toast(err.status === 404 ? 'That note is gone' : `Can't open: ${err.message}`);
     hideScreen();
     navigate(state.folder ? `#/notes/${encodeURIComponent(state.folder)}` : '#/notes');
+  } finally {
+    if (seq === openSeq) opening = false;
   }
 }
 
@@ -1393,7 +1398,11 @@ export async function newFromTemplate() {
 
 export async function openDraft({ text = draftText, folder = state.folder } = {}) {
   draftText = '';
+  // A note still loading doesn't land on top of the draft.
+  const seq = ++openSeq;
+  opening = false;
   await closeEditor();
+  if (seq !== openSeq) return;
   Object.assign(screen, { path: null, folder, hash: null, saved: '', pinned: false, color: null, fresh: true });
   const show = () => {
     showScreen();
@@ -1658,6 +1667,9 @@ async function closeEditor() {
 }
 
 export async function closeNote() {
+  // A note still loading stays shut.
+  openSeq++;
+  opening = false;
   if (desk() && !noteHidden()) {
     // Shrinks back into its card while it still has its words; the editor goes once it's out of sight.
     const path = screen.path;
@@ -1669,7 +1681,7 @@ export async function closeNote() {
   loadNotes();
 }
 
-export const noteIsOpen = () => !$('note-screen').hidden;
+export const noteIsOpen = () => opening || !$('note-screen').hidden;
 
 async function setMeta(changes) {
   await flush();
