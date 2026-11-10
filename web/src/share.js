@@ -5,6 +5,7 @@
 import { createEditor } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
+import { decodeLink } from './util.js';
 
 const id = location.pathname.split('/').pop();
 const base = `/api/public/share/${encodeURIComponent(id)}`;
@@ -34,7 +35,7 @@ function mount(doc, readOnly) {
       if (/^https?:/i.test(target)) window.open(target, '_blank', 'noopener,noreferrer');
     },
     resolveEmbed: attachment,
-    resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeURIComponent(src).replace(/^(\.\.\/)+/, '').split('/').pop())),
+    resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeLink(src).replace(/^(\.\.\/)+/, '').split('/').pop())),
     linkTargets: () => [],
   });
 }

@@ -42,3 +42,12 @@ export function tableCells(line) {
   const cells = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/);
   return cells.map((c) => c.trim().replace(/\\\|/g, '|'));
 }
+
+/** A link's %-escapes decoded, or the link as written when they don't decode (`50%off.png`). */
+export function decodeLink(href) {
+  try {
+    return decodeURIComponent(href);
+  } catch {
+    return href;
+  }
+}

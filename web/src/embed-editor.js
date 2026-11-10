@@ -27,6 +27,7 @@ import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { createEditor } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
+import { decodeLink } from './util.js';
 
 const bridge = window.SinkBridge ?? {
   ready() {},
@@ -85,7 +86,7 @@ window.sink = {
       },
       onOpenLink: (target) => bridge.openLink(target),
       resolveEmbed: attachment,
-      resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeURIComponent(src).replace(/^(\.\.\/)+/, ''))),
+      resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeLink(src).replace(/^(\.\.\/)+/, ''))),
       // An older app can't fetch them: embeds show just the note's name.
       loadEmbed: bridge.embed ? loadEmbed : undefined,
       path,
