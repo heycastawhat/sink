@@ -360,6 +360,8 @@ $('search').addEventListener('input', () => {
 function searchTag(tag) {
   const q = `#${tag}`;
   $('search').value = state.q = q;
+  // From Todos, Trash or Settings: already Notes as far as the route goes, or arriving there would clear the search.
+  state.view = 'notes';
   location.hash = '#/notes';
   notes.setQuery(q);
 }
