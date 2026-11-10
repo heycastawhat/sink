@@ -96,10 +96,14 @@ export function fileNameFor(title: string): string {
     .replace(/[\\/:*?"<>|#^[\]\u0000-\u001f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/^\.+/, "")
-    .slice(0, 100)
-    .trim();
-  return name || "Untitled";
+    .replace(/^\.+/, "");
+  // Whole characters (never half an emoji), and few enough bytes that `Name 12.md` still fits a 255-byte file name.
+  let short = "";
+  for (const ch of name) {
+    if (short.length + ch.length > 100 || Buffer.byteLength(short + ch) > 200) break;
+    short += ch;
+  }
+  return short.trim() || "Untitled";
 }
 
 /** Turns free text into a safe FTS5 query: every word becomes a quoted prefix term. */
@@ -109,11 +113,15 @@ export function toFtsQuery(q: string): string | null {
   return words.map((w) => `"${w}"*`).join(" ");
 }
 
+/** Length as SQLite's substr() counts it: characters, where JS counts an emoji as two. */
+const chars = (s: string) => [...s].length;
+
 export const sha256 = (data: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(data).digest("hex");
 
 /** Splits `---` frontmatter off the top. Returns the raw YAML lines and the body after it. */
 export function splitFrontmatter(content: string): { yaml: string | null; body: string } {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
+  // A byte order mark (Windows editors add one) sits before the first `---` and isn't part of the note.
+  const m = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
   return m ? { yaml: m[1]!, body: content.slice(m[0].length) } : { yaml: null, body: content };
 }
 
@@ -175,17 +183,19 @@ export const COLORS = ["red", "orange", "yellow", "green", "teal", "blue", "purp
 
 /** Sets (or with null, removes) one `key: value` line in the frontmatter, creating the block if needed. */
 export function setFrontmatterKey(content: string, key: string, value: string | null): string {
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  content = content.slice(bom.length);
   const m = /^---\r?\n([\s\S]*?)\r?\n?---[ \t]*(\r?\n|$)/.exec(content);
   const line = value === null ? null : `${key}: ${value}`;
-  if (!m) return line ? `---\n${line}\n---\n${content}` : content;
+  if (!m) return bom + (line ? `---\n${line}\n---\n${content}` : content);
   const lines = m[1] ? m[1].split(/\r?\n/) : [];
   const at = lines.findIndex((l) => l.startsWith(`${key}:`));
   if (at >= 0) line ? (lines[at] = line) : lines.splice(at, 1);
   else if (line) lines.push(line);
   const rest = content.slice(m[0].length);
   // Nothing left but our own key: drop the block rather than leave an empty one.
-  if (!lines.some((l) => l.trim())) return rest;
-  return `---\n${lines.join("\n")}\n---\n${rest}`;
+  if (!lines.some((l) => l.trim())) return bom + rest;
+  return `${bom}---\n${lines.join("\n")}\n---\n${rest}`;
 }
 
 export const isBoard = (path: string) => path.toLowerCase().endsWith(".excalidraw.md");
@@ -200,7 +210,9 @@ export function parseNote(
   // The Excalidraw plugin's "==⚠ Switch to EXCALIDRAW VIEW … ==" banner isn't content either.
   const body = full.replace(/%%[\s\S]*?(?:%%|$)/g, " ").replace(/^==⚠[^\n]*$/gm, "");
   const fm = yaml ? readFrontmatter(yaml) : { tags: [], aliases: [] };
-  const heading = isBoard(path) ? undefined : /^#[ \t]+(.+?)[ \t#]*$/m.exec(body)?.[1]?.trim();
+  // Not a `# comment` in a code block; and only a closing `#` run after a space is dropped ("# C#" is "C#").
+  const prose = body.replace(/^[ \t]*(`{3,}|~{3,})[\s\S]*?(?:\n[ \t]*\1[^\n]*|(?![\s\S]))/gm, "");
+  const heading = isBoard(path) ? undefined : /^#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/m.exec(prose)?.[1]?.trim();
   const title = heading || fm.title || basename(path).replace(/(\.excalidraw)?\.md$/i, "");
   const seen = new Map<string, string>();
   for (const t of [...fm.tags, ...inlineTags(body)]) if (!seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t);
@@ -249,7 +261,7 @@ export type Mention = { start: number; end: number; text: string; before: string
  */
 export function findMentions(content: string, terms: string[]): Mention[] {
   const skip: [number, number][] = [];
-  const fm = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
+  const fm = /^\uFEFF?---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
   if (fm) skip.push([0, fm[0].length]);
   for (const re of [
     /^[ \t]*(`{3,}|~{3,})[\s\S]*?(?:\n[ \t]*\1[^\n]*|(?![\s\S]))/gm,
@@ -281,14 +293,16 @@ export function findMentions(content: string, terms: string[]): Mention[] {
 /** Rewrites links to a note that moved (see Vault.relink). `oldFull`/`oldName` are lower case, without ".md". */
 export function rewriteLinks(
   content: string,
-  m: { oldFull: string; oldName: string; newFull: string; newName: string; byName: boolean },
+  m: { oldFull: string; oldName: string; newFull: string; newName: string; byName: boolean; others?: string[] },
 ): string {
+  // A partial path (`[[Notes/todo]]` for `Work/Notes/todo`) is ours only if no other note answers to it too.
+  const ours = (n: string) => n === m.oldFull || (m.oldFull.endsWith("/" + n) && !m.others?.some((o) => o === n || o.endsWith("/" + n)));
   const norm = (t: string) => t.trim().replace(/^(\.{1,2}\/|\/)+/, "").replace(/\.md$/i, "").toLowerCase();
   // A table cell escapes the alias's pipe (`[[target\|alias]]`): the backslash belongs with the alias, not the target.
   const wiki = content.replace(/(!?\[\[)([^\]|#\\]+)((?:#[^\]|\\]*)?(?:\\?\|[^\]]*)?\]\])/g, (all, open: string, t: string, rest: string) => {
     const n = norm(t);
     const ext = /\.md\s*$/i.test(t) ? ".md" : "";
-    if (t.includes("/")) return n === m.oldFull || m.oldFull.endsWith("/" + n) ? `${open}${m.newFull}${ext}${rest}` : all;
+    if (t.includes("/")) return ours(n) ? `${open}${m.newFull}${ext}${rest}` : all;
     return m.byName && n === m.oldName ? `${open}${m.newName}${ext}${rest}` : all;
   });
   return wiki.replace(/\]\((?:<([^>\n]+?\.md)(#[^>\n]*)?>|([^)>\s]+\.md)(#[^)>]*)?)\)/gi, (all, angled?: string, angledAnchor?: string, bare?: string, bareAnchor?: string) => {
@@ -866,8 +880,8 @@ export class Vault {
 
   private async writeNote(path: string, content: string, baseHash: string | null, opts: { keepVersion?: boolean }): Promise<NoteMeta> {
     if (Buffer.byteLength(content) > MAX_NOTE_BYTES) throw new VaultError(413, "note too large");
-    const abs = await this.abs(path);
     try {
+      const abs = await this.abs(path);
       const current = await readFile(abs, "utf8").catch((err: NodeJS.ErrnoException) => {
         if (err.code === "ENOENT") return null;
         throw err;
@@ -915,11 +929,15 @@ export class Vault {
     const isNote = from.toLowerCase().endsWith(".md");
     from = cleanPath(from, isNote ? "note" : "folder");
     to = cleanPath(to, isNote ? "note" : "folder");
+    // A file or folder renamed to `x.md` would become a note nobody wrote as one (and an assistant, which can't
+    // publish, could upload `publish: true` as an attachment and rename it into a public note).
+    if (!isNote && to.toLowerCase().endsWith(".md")) throw new VaultError(400, "only notes can end in .md");
     if (to === from) return;
     if (!isNote && to.startsWith(from + "/")) throw new VaultError(400, "can't move a folder into itself");
     try {
       const [src, dest] = [await this.abs(from), await this.abs(to)];
       const st = await stat(src);
+      if (isNote && !st.isFile()) throw new VaultError(404, "note not found");
       // On a case-insensitive share (SMB, macOS) "shopping.md" -> "Shopping.md" finds the note itself at dest.
       const there = await stat(dest).catch((e: NodeJS.ErrnoException) => {
         if (e.code === "ENOENT") return null;
@@ -936,9 +954,21 @@ export class Vault {
       ? [from]
       : this.db
           .query<{ path: string }, [number, string]>("SELECT path FROM notes WHERE substr(path, 1, ?) = ?")
-          .all(from.length + 1, from + "/")
+          .all(chars(from) + 1, from + "/")
           .map((r) => r.path);
     this.db.transaction(() => this.repath(from, to, !isNote, ["notes", "versions", "shares"]))();
+    // A note with no heading is titled by its file name, and nothing else would notice: the file itself didn't change.
+    if (isNote) {
+      const row = this.db.query<{ title: string }, [string]>("SELECT title FROM notes WHERE path = ?").get(to);
+      const was = basename(from).replace(/(\.excalidraw)?\.md$/i, "");
+      if (row && row.title === was) {
+        try {
+          const abs = await this.abs(to);
+          const st = await stat(abs);
+          this.index(to, await readFile(abs, "utf8"), st.size, Math.floor(st.mtimeMs));
+        } catch {}
+      }
+    }
     if (!isNote) {
       this.folders = new Set([...this.folders].map((f) => (f === from ? to : f.startsWith(from + "/") ? to + f.slice(from.length) : f)));
     }
@@ -963,14 +993,14 @@ export class Vault {
       else
         this.db
           .query(`UPDATE OR REPLACE ${table} SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?`)
-          .run(to, from.length + 1, from.length + 1, from + "/");
+          .run(to, chars(from) + 1, chars(from) + 1, from + "/");
     }
   }
 
   /** History and share links of something deleted for good. */
   private forget(path: string) {
     for (const table of ["versions", "shares"])
-      this.db.query(`DELETE FROM ${table} WHERE path = ? OR substr(path, 1, ?) = ?`).run(path, path.length + 1, path + "/");
+      this.db.query(`DELETE FROM ${table} WHERE path = ? OR substr(path, 1, ?) = ?`).run(path, chars(path) + 1, path + "/");
   }
 
   /**
@@ -986,10 +1016,11 @@ export class Vault {
     const newName = newFull.split("/").pop()!;
     const renamed = newName.toLowerCase() !== oldName;
     // In JS: SQLite's lower() leaves non-ASCII letters alone, so `B/Été.md` wouldn't count as another `Été`.
-    const nameIsOurs = !this.db
+    const others = this.db
       .query<{ path: string }, [string]>("SELECT path FROM notes WHERE path != ?")
       .all(to)
-      .some((r) => basename(r.path).toLowerCase() === `${oldName}.md`);
+      .map((r) => r.path.replace(/\.md$/i, "").toLowerCase());
+    const nameIsOurs = !others.some((o) => o.split("/").pop() === oldName);
     const refs = parts.map((_, i) => parts.slice(i).join("/"));
     const srcs = this.db
       .query<{ src: string }, string[]>(`SELECT DISTINCT src FROM links WHERE target IN (${refs.map(() => "?").join(", ")})`)
@@ -997,7 +1028,7 @@ export class Vault {
       .map((r) => r.src);
     for (const src of srcs) {
       const note = await this.read(src);
-      const next = rewriteLinks(note.content, { oldFull, oldName, newFull, newName, byName: renamed && nameIsOurs });
+      const next = rewriteLinks(note.content, { oldFull, oldName, newFull, newName, byName: renamed && nameIsOurs, others });
       if (next !== note.content) await this.write(src, next, note.hash);
     }
   }
@@ -1027,7 +1058,7 @@ export class Vault {
       ? [path]
       : this.db
           .query<{ path: string }, [number, string]>("SELECT path FROM notes WHERE substr(path, 1, ?) = ?")
-          .all(path.length + 1, path + "/")
+          .all(chars(path) + 1, path + "/")
           .map((r) => r.path);
     this.db.query("INSERT OR REPLACE INTO trash (path, original, at) VALUES (?, ?, ?)").run(dest.slice(TRASH.length + 1), path, now());
     // Into the trash with it, so a new note at the old path doesn't inherit its share link or history.
@@ -1036,7 +1067,7 @@ export class Vault {
     for (const p of gone) this.emit({ type: "note.deleted", path: p, source: "sink" });
     if (isNote) this.unindex(path);
     else {
-      this.db.query("DELETE FROM notes WHERE substr(path, 1, ?) = ?").run(path.length + 1, path + "/");
+      this.db.query("DELETE FROM notes WHERE substr(path, 1, ?) = ?").run(chars(path) + 1, path + "/");
       for (const f of this.folders) if (f === path || f.startsWith(path + "/")) this.folders.delete(f);
     }
     return { trashed_to: dest };
@@ -1207,7 +1238,7 @@ export class Vault {
         // A note trashed later from the same folder lands inside this one's trash folder, and isn't due yet.
         const keep = this.db
           .query<{ path: string }, [number, string, number]>("SELECT path FROM trash WHERE substr(path, 1, ?) = ? AND at >= ?")
-          .all(path.length + 1, path + "/", cutoff)
+          .all(chars(path) + 1, path + "/", cutoff)
           .map((r) => r.path);
         const abs = await this.abs(`${TRASH}/${path}`);
         if (await exists(abs)) purged++;
