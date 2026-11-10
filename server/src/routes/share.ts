@@ -26,12 +26,22 @@ const view = (s: Share) => ({ id: s.id, created_at: s.created_at, editable: !!s.
 /** Signed in: whether a note is shared, share it, stop sharing it. Only full-scope tokens (not assistants) change it. */
 export function shareRoutes(db: Database, vault: Vault) {
   const app = new Hono<AuthEnv>();
+  // A path no note could have: there's no share for it.
+  const notePath = (raw: string) => {
+    try {
+      return cleanPath(raw, "note");
+    } catch {
+      return null;
+    }
+  };
   const byPath = (path: string) => db.query<Share, [string]>("SELECT * FROM shares WHERE path = ?").get(path);
 
   app.get("/notes/share", (c) => {
     const q = pathQuery.safeParse(c.req.query());
     if (!q.success) return c.json({ error: "invalid query" }, 400);
-    const share = byPath(cleanPath(q.data.path, "note"));
+    const path = notePath(q.data.path);
+    if (!path) return c.json({ error: "invalid path" }, 400);
+    const share = byPath(path);
     return c.json(share ? view(share) : { id: null });
   });
 
@@ -39,7 +49,8 @@ export function shareRoutes(db: Database, vault: Vault) {
     if (c.get("scope") !== "full") return c.json({ error: "not allowed with this token" }, 403);
     const body = shareBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid body" }, 400);
-    const path = cleanPath(body.data.path, "note");
+    const path = notePath(body.data.path);
+    if (!path) return c.json({ error: "invalid path" }, 400);
     if (isBoard(path)) return c.json({ error: "boards can't be shared yet" }, 400);
     try {
       await vault.read(path);
@@ -60,7 +71,9 @@ export function shareRoutes(db: Database, vault: Vault) {
     if (c.get("scope") !== "full") return c.json({ error: "not allowed with this token" }, 403);
     const q = pathQuery.safeParse(c.req.query());
     if (!q.success) return c.json({ error: "invalid query" }, 400);
-    db.query("DELETE FROM shares WHERE path = ?").run(cleanPath(q.data.path, "note"));
+    const path = notePath(q.data.path);
+    if (!path) return c.json({ error: "invalid path" }, 400);
+    db.query("DELETE FROM shares WHERE path = ?").run(path);
     return c.json({ ok: true });
   });
 

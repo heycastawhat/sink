@@ -640,6 +640,88 @@ describe("notes", () => {
   const file = (rel: string) => join(setup.vaultDir, rel);
   const q = (path: string) => `/api/notes/file?path=${encodeURIComponent(path)}`;
 
+  test("an assistant can't turn an uploaded file into a public note by renaming it", async () => {
+    const owner = await login();
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    await send(owner, "PUT", "/api/publish", { handle: "sam" });
+    const form = new FormData();
+    form.append("file", new File(["---\npublish: true\n---\n# Leak\n\nprivate\n"], "leak.txt"));
+    const up = await setup.app.request("/api/notes/attachments", { method: "POST", headers: { authorization: `Bearer ${mcp}` }, body: form });
+    expect(up.status).toBe(201);
+    const { path } = (await up.json()) as { path: string };
+    expect((await send(mcp, "POST", "/api/notes/move", { from: path, to: "Leak.md" })).status).toBe(400);
+    expect((await send(owner, "POST", "/api/notes/move", { from: path, to: "Leak.md" })).status).toBe(400);
+    expect(existsSync(file("Leak.md"))).toBe(false);
+    expect((await setup.app.request("/api/public/pages/sam/note?path=Leak.md")).status).toBe(404);
+  });
+
+  test("folders with emoji names move, trash and purge with everything in them", async () => {
+    const token = await login();
+    const F = "📚 Books";
+    await send(token, "POST", "/api/notes", { folder: F, title: "Dune", content: "# Dune\n\npublic text\n" });
+    const share = (await (await send(token, "POST", "/api/notes/share", { path: `${F}/Dune.md` })).json()) as { id: string };
+    expect((await send(token, "POST", "/api/notes/move", { from: F, to: "Books" })).status).toBe(200);
+    const paths = async () => (((await (await get(token, "/api/notes")).json()) as any).notes as { path: string }[]).map((n) => n.path).sort();
+    expect(await paths()).toEqual(["Books/Dune.md"]);
+    expect((await setup.app.request(`/api/public/share/${share.id}`)).status).toBe(200);
+
+    // Trashed: gone from the list, and a new note at the old path doesn't inherit the share link.
+    await send(token, "POST", "/api/notes/move", { from: "Books", to: F });
+    expect((await send(token, "DELETE", q(F))).status).toBe(200);
+    expect(await paths()).toEqual([]);
+    await send(token, "POST", "/api/notes", { folder: F, title: "Dune", content: "# Dune\n\nNEW PRIVATE\n" });
+    expect((await setup.app.request(`/api/public/share/${share.id}`)).status).toBe(404);
+
+    // A note trashed today into a folder trashed long ago outlives the folder's purge.
+    setup.db.query("UPDATE trash SET at = ?").run(Date.now() - 40 * 86_400_000);
+    await send(token, "DELETE", q(`${F}/Dune.md`));
+    await setup.vault.purgeTrash(30);
+    expect(readdirSync(file(`.trash/${F}`)).some((n) => n.startsWith("Dune"))).toBe(true);
+  });
+
+  test("a note without a heading takes its new name when renamed", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "", title: "Old name", content: "just text\n" });
+    await send(token, "POST", "/api/notes/move", { from: "Old name.md", to: "New name.md" });
+    expect(((await (await get(token, q("New name.md"))).json()) as any).title).toBe("New name");
+  });
+
+  test("a byte order mark doesn't hide the frontmatter", async () => {
+    const token = await login();
+    writeFileSync(file("Bom.md"), "﻿---\nsecret: hunter2\npinned: true\n---\n# Bom\n");
+    await setup.vault.scan();
+    const note = (await (await get(token, q("Bom.md"))).json()) as any;
+    expect(note.pinned).toBe(true);
+    const share = (await (await send(token, "POST", "/api/notes/share", { path: "Bom.md" })).json()) as { id: string };
+    expect(((await (await setup.app.request(`/api/public/share/${share.id}`)).json()) as any).content).toBe("# Bom\n");
+    // Changing a key keeps one frontmatter block, not a second one on top.
+    expect((await send(token, "PATCH", "/api/notes/meta?path=Bom.md", { color: "red" })).status).toBe(200);
+    const text = readFileSync(file("Bom.md"), "utf8");
+    expect(text.match(/^﻿?---$/gm)?.length).toBe(2);
+    expect(text).toContain("color: red");
+  });
+
+  test("renaming a note leaves path links to a different note with the same ending alone", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "Notes", title: "todo", content: "root one\n" });
+    await send(token, "POST", "/api/notes", { folder: "Work/Notes", title: "todo", content: "work one\n" });
+    await send(token, "POST", "/api/notes", { folder: "", title: "Index", content: "See [[Notes/todo]] and [[Work/Notes/todo]].\n" });
+    await send(token, "POST", "/api/notes/move", { from: "Work/Notes/todo.md", to: "Work/Notes/tasks.md" });
+    expect(readFileSync(file("Index.md"), "utf8")).toBe("See [[Notes/todo]] and [[Work/Notes/tasks]].\n");
+  });
+
+  test("bad paths and long non-Latin titles are refused or fitted, not errors", async () => {
+    const token = await login();
+    expect((await get(token, `/api/notes/share?path=${encodeURIComponent("../x.md")}`)).status).toBe(400);
+    expect((await send(token, "DELETE", `/api/notes/share?path=x.txt`)).status).toBe(400);
+    const made = await send(token, "POST", "/api/notes", { folder: "", title: "漢".repeat(90), content: "# x\n" });
+    expect(made.status).toBe(201);
+    const { path } = (await made.json()) as { path: string };
+    expect(Buffer.byteLength(path)).toBeLessThanOrEqual(210);
+    // A name cut short never ends in half an emoji.
+    expect(fileNameFor("a".repeat(99) + "😀")).toBe("a".repeat(99));
+  });
+
   test("backlinks: wikilinks by name or path, aliases, headings, markdown links", async () => {
     const token = await login();
     const make = (folder: string, title: string, content: string) => send(token, "POST", "/api/notes", { folder, title, content });
@@ -1476,6 +1558,12 @@ describe("todos", () => {
 });
 
 describe("helpers", () => {
+  test("a title is the first heading outside code, closing hashes and all", () => {
+    expect(parseNote("x.md", "# Learning C#\n").title).toBe("Learning C#");
+    expect(parseNote("x.md", "# Closed ##\n").title).toBe("Closed");
+    expect(parseNote("Server setup.md", "Steps:\n\n```bash\n# install deps\napt install foo\n```\n").title).toBe("Server setup");
+  });
+
   test("a card's image is the first image the note embeds", () => {
     expect(firstImage("text\n![[Doc.pdf]]\n![[Photo 1.JPG|300]] ![[b.png]]")).toBe("Photo 1.JPG");
     expect(firstImage("![x](https://example.com/a.png) ![y](../Attachments/My%20pic.webp \"t\")")).toBe("Attachments/My pic.webp");
