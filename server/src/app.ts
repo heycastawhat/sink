@@ -14,7 +14,7 @@ import { calendarRoutes } from "./routes/calendar";
 import { publicPageRoutes, publishRoutes, robotsFor } from "./routes/publish";
 import { todoRoutes } from "./todos";
 import { pushRoutes, vapidKeys } from "./push";
-import type { Vault } from "./notes";
+import { assistantWrites, type Vault } from "./notes";
 import { pluginFileType, type PluginHost } from "./plugins";
 import { handleMcp, type ApiFetch } from "./mcp";
 import { oauthRoutes } from "./oauth";
@@ -113,6 +113,7 @@ export function createApp(deps: {
 
   const api = new Hono<AuthEnv>();
   api.use("*", requireAuth(auth, config.publicUrls));
+  api.use("*", (c, next) => (c.get("scope") === "full" ? next() : assistantWrites.run(true, next)));
   if (users) api.route("/", publishRoutes(users));
   if (users && passkeys) api.route("/admin", adminRoutes(users, auth, oidc, passkeys, config.publicUrls));
   // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/. Plugins work on
@@ -177,7 +178,8 @@ export function createApp(deps: {
       Promise.resolve(app.request(path, { ...init, headers: { ...(init?.headers as Record<string, string>), authorization: header } }));
     const origin = config.publicUrls.includes(requestOrigin(c)) ? requestOrigin(c) : config.publicUrls[0]!;
     const tools = isOwner(found.subject) ? (plugins?.tools ?? []) : [];
-    return handleMcp(c.req.raw, api, config.timeZone ?? "UTC", tools, origin);
+    const handle = () => handleMcp(c.req.raw, api, config.timeZone ?? "UTC", tools, origin);
+    return found.scope === "full" ? handle() : assistantWrites.run(true, handle);
   });
 
   if (config.webDir) {

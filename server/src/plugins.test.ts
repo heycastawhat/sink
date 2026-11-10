@@ -226,4 +226,30 @@ describe("built-in plugins", () => {
     await new Promise((r) => setTimeout(r, 120));
     expect(calls.filter((c) => c.url.includes("hooks.test")).map((c) => JSON.parse(c.body).event)).toEqual(["note.updated"]);
   });
+
+  test("an assistant can't publish a note by any route that writes to it", async () => {
+    const s = await setup({ builtins: [daily] });
+    const mcp = s.auth.issueToken("assistant", "me", "mcp");
+    const publish = () => s.db.query<{ path: string; publish: number }, []>("SELECT path, publish FROM notes WHERE publish = 1").all();
+
+    // Unclosed frontmatter in today's note, closed by appending "---" through the daily note's tool.
+    const today = localIso(new Date(), "UTC").slice(0, 10);
+    await s.vault.write(`Daily/${today}.md`, "---\npublish: true", null);
+    const call = await s.app.request("/mcp", {
+      method: "POST",
+      headers: { authorization: `Bearer ${mcp}`, "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "daily_append", arguments: { text: "---" } } }),
+    });
+    expect(((await call.json()) as any).result.isError).toBe(true);
+
+    // A todo "inside" frontmatter whose replacement line drops the key that kept it private.
+    await s.vault.write("Secret.md", "---\npublish: true\npublish: false\n- [x] t\n---\n# Secret\n", null);
+    const toggle = await s.req("POST", "/api/todos/toggle", { path: "Secret.md", line: 3, raw: "- [x] t", done: false, next: "publish: false" }, mcp);
+    expect(toggle.status).not.toBe(200);
+    expect(publish()).toEqual([]);
+
+    // The owner still can.
+    expect((await s.req("POST", "/api/todos/toggle", { path: "Secret.md", line: 3, raw: "- [x] t", done: false, next: "publish: false" })).status).toBe(200);
+    expect(publish().map((n) => n.path)).toEqual(["Secret.md"]);
+  });
 });
