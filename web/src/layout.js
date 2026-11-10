@@ -509,7 +509,8 @@ export function initLayout(d) {
   // Middle-click closes a tab, as in a browser.
   $('top-tabs').addEventListener('auxclick', (e) => {
     const t = e.target.closest('[data-tab]');
-    if (e.button === 1 && t?.dataset.tab) {
+    // A draft's tab is '' (and Home has no data-tab at all), so this asks whether it's there, not whether it's set.
+    if (e.button === 1 && t) {
       e.preventDefault();
       closeTab(t.dataset.tab);
     }
