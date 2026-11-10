@@ -289,7 +289,8 @@ function applyRoute() {
   }
   const viewChanged = route.view !== state.view;
   state.view = route.view;
-  state.folder = route.folder;
+  // A note's address has no folder in it: the grid beside or behind it (Keep, Split, Tabs' Home) stays where it was.
+  if (!route.note) state.folder = route.folder;
   renderChrome();
   if (state.view === 'settings') renderSettings();
   if (state.view === 'todos') notes.loadTodos();
