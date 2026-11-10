@@ -77,6 +77,14 @@ async function listNotes() {
     state.notes = notes;
     state.folders = folders;
     state.loaded = true;
+    // Search results are copies from when the search ran: bring them up to date (a new colour, a pin, a note
+    // trashed or moved away), keeping each one's snippet. A tag search is simply run again.
+    const tag = /^#([\p{L}\p{N}_/-]+)$/u.exec(state.q ?? '');
+    if (state.results && tag) state.results = tagged(tag[1]);
+    else if (state.results) {
+      const byPath = new Map(notes.map((n) => [n.path, n]));
+      state.results = state.results.flatMap((r) => (byPath.has(r.path) ? [{ ...r, ...byPath.get(r.path), snippet: r.snippet }] : []));
+    }
   } catch (err) {
     if (err instanceof Unauthorized) throw err;
     toast(`Can't load notes: ${err.message}`);
@@ -707,6 +715,8 @@ function wireFolders() {
     t.classList.remove('drop-over');
     const path = e.dataTransfer.getData('text/x-sink-note');
     const folder = t.dataset.dropFolder;
+    // The open note moves the way its own folder menu moves it, so the editor and address follow.
+    if (path === screen.path) return moveOpenNote(folder);
     const moved = await moveNoteTo(path, folder);
     if (moved && moved !== path) {
       await loadNotes();
@@ -783,7 +793,9 @@ function wireGrid() {
     const t = title.value.trim();
     const b = body.value;
     reset();
-    openDraft({ text: t ? `# ${t}\n\n${b}` : b });
+    // Through the address like New, so Back and Escape close it.
+    draftText = t ? `# ${t}\n\n${b}` : b;
+    newNote();
   });
 }
 
@@ -1167,7 +1179,8 @@ let openSeq = 0;
 // A note is on its way: the desktop layouts keep the page hidden until it has loaded, and leaving meanwhile cancels it.
 let opening = false;
 export async function openNote(path, { line } = {}) {
-  if (screen.path === path && !$('note-screen').hidden) {
+  // Already open, unless another note is on its way in: then this one has to win, so it opens again.
+  if (screen.path === path && !$('note-screen').hidden && !opening) {
     if (line != null) screen.editor.goToLine(line);
     return;
   }
@@ -1654,6 +1667,8 @@ async function closeEditor() {
   if (!screen.editor) return;
   clearInterval(screen.poll);
   await flush();
+  // Another open or close finished it while the save was out.
+  if (!screen.editor) return;
   if (dirty() && screen.path) stashUnsaved();
   // A note started here and emptied again before leaving isn't one: don't leave an empty "Untitled" behind.
   else if (screen.fresh && screen.path && blank(screen.editor.getText())) await api.trashNote(screen.path).catch(() => {});
