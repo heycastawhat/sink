@@ -144,7 +144,7 @@ fun RecentFiledRow(items: List<Recent>, onOpen: (String) -> Unit) {
                     tint = MaterialTheme.colorScheme.primary,
                 )
                 Column {
-                    Text(n.title, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(n.title, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
                         "${n.folder.substringAfterLast('/')} · ${shortTime(r.at)}",
                         style = MaterialTheme.typography.labelMedium,
@@ -190,7 +190,7 @@ private fun RecentCard(r: Recent, onOpen: (String) -> Unit, modifier: Modifier =
             Text(
                 n.title,
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
