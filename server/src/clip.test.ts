@@ -190,6 +190,11 @@ describe("page text as markdown", () => {
     expect(parseTodos(md("<p>- [ ] not a todo</p>"), "UTC")).toEqual([]);
   });
 
+  test("anchors without an address stay text, and a list nested without its <li> is kept", () => {
+    expect(md(`<p>See <a name="top">the anchor</a> and <img alt="x"></p>`)).toBe("See the anchor and");
+    expect(md("<ul><li>a</li><ul><li>b</li></ul><li>c</li></ul>")).toBe("- a\n  - b\n- c");
+  });
+
   test("code with backticks in it keeps its fences", () => {
     expect(md("<p><code>a`b</code></p>")).toBe("``a`b``");
     expect(md("<pre>```\nx\n```</pre>")).toBe("````\n```\nx\n```\n````");
