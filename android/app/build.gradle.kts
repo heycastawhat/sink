@@ -130,5 +130,10 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.webkit)
-    implementation(libs.code.scanner)
+    // The sign-in QR scanner: CameraX for the preview and frames, ZXing to decode them. No Google Play services,
+    // so the app runs on phones without them.
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
 }

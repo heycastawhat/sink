@@ -32,9 +32,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.foundation.layout.width
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,6 +65,7 @@ import nz.joshp.sink.data.normalizeServerUrl
 fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error: String?) {
     var server by rememberSaveable(initialServer) { mutableStateOf(initialServer ?: "") }
     var scanning by remember { mutableStateOf(false) }
+    var scannerOpen by remember { mutableStateOf(false) }
     var scanError by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -79,21 +82,35 @@ fun LoginScreen(settings: Settings, initialServer: String?, busy: Boolean, error
         scope.launch { SignIn.start(context, settings, normalizeServerUrl(server)) }
     }
 
-    // Google's scanner runs in Play services, so the app needs no camera permission.
+    // The scanner is the app's own (QrScanner), so it needs the camera permission but not Google Play services.
+    val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) scannerOpen = true else scanError = "Allow the camera to scan a sign-in code"
+    }
+
     fun scan() {
         scanError = null
-        val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
-        GmsBarcodeScanning.getClient(context, options).startScan()
-            .addOnSuccessListener { code ->
-                val raw = code.rawValue ?: return@addOnSuccessListener
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (granted) scannerOpen = true else askCamera.launch(Manifest.permission.CAMERA)
+    }
+
+    if (scannerOpen) {
+        QrScanner(
+            onCode = { raw ->
+                scannerOpen = false
                 haptics.confirm()
                 scanning = true
                 scope.launch {
                     scanError = SignIn.fromQr(settings, raw)
                     scanning = false
                 }
-            }
-            .addOnFailureListener { scanError = it.message ?: "Couldn't open the scanner" }
+            },
+            onError = {
+                scannerOpen = false
+                scanError = it
+            },
+            onClose = { scannerOpen = false },
+        )
+        return
     }
 
     Box(
