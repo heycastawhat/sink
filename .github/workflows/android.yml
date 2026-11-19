@@ -74,7 +74,7 @@ jobs:
           SINK_VERSION_CODE: ${{ github.run_number }}
           SINK_VERSION_NAME: ${{ steps.version.outputs.name }}
         run: |
-          ./gradlew --no-daemon :app:assembleRelease
+          ./gradlew --no-daemon :app:testReleaseUnitTest :app:assembleRelease
           # Named by version: a branch name (claude/x) would put a slash in the file name.
           mv app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/sink-$SINK_VERSION_NAME.apk"
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3

@@ -13,7 +13,7 @@
 //     board: the text is an Excalidraw board (.excalidraw.md); it opens in Excalidraw instead of the text editor.
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
-//   sink.setText(text)  sink.insert(text)  sink.getText()  sink.focus()
+//   sink.setText(text)  sink.insert(text)  sink.getText()  sink.textOrNull()  sink.focus()
 //   sink.format(kind)   the bar above the keyboard: heading, h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike,
 //                       code, link, indent, outdent, undo, redo (see editor.js format)
 //   sink.embed(target, note)   a note for ![[target]]: { path, title, content } as GET /api/notes/file gives it, or null
@@ -114,6 +114,10 @@ window.sink = {
   getText() {
     clearTimeout(timer);
     return editor?.getText() ?? '';
+  },
+  /** Like getText, but null while the note is still loading (getText's '' would read as the note emptied). */
+  textOrNull() {
+    return editor ? window.sink.getText() : null;
   },
   focus() {
     editor?.focus(true);
