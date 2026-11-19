@@ -128,12 +128,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
+import kotlin.coroutines.resume
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.JsonPrimitive
@@ -780,8 +782,16 @@ fun NoteScreen(
         }
     }
 
+    /** The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind). */
+    suspend fun readEditor() {
+        val w = web ?: return
+        val raw = suspendCancellableCoroutine { k -> w.evaluateJavascript("window.sink.getText()") { k.resume(it) } }
+        runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
+    }
+
     suspend fun setMeta(pin: Boolean? = null, newColor: String? = null, clearColor: Boolean = false) {
         saveJob?.cancel()
+        readEditor()
         save()
         val p = ed.path ?: return snackbar.showSnackbar("Write something first").let { }
         runCatching {
@@ -789,6 +799,8 @@ fun NoteScreen(
             api.noteMeta(p, pin, newColor, clearColor)
             val n = api.note(p)
             store.saveNote(n)
+            // Anything typed or drawn while the change was on its way is kept, not replaced by the server's text.
+            readEditor()
             // Decided before `saved` moves on: compared after, an untouched editor looked edited, kept the old
             // frontmatter, and its next save put the old pin and colour back.
             val text = textAfterMeta(ed.current, ed.saved, n.content)
