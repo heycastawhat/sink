@@ -1,6 +1,7 @@
 package nz.joshp.sink.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -463,13 +464,23 @@ fun NoteScreen(
     }
 
     val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    // The floating toolbar covers the bottom of the page while the keyboard is down; the editor keeps the cursor above
-    // it (CSS px are dp in a WebView). With the keyboard up the format bar sits below the page instead, so nothing's covered.
+    // The page stops above the floating toolbar (see the editor below), so none of it is covered. The call still matters:
+    // the page changes height as the keyboard comes and goes, and it brings the cursor back into sight after.
     LaunchedEffect(pageReady, keyboardUp, board) {
         if (!pageReady || board) return@LaunchedEffect
-        val covered = if (keyboardUp) 0 else (TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 8.dp).value.toInt()
-        js("window.sink.inset && window.sink.inset($covered)")
+        js("window.sink.inset && window.sink.inset(0)")
     }
+    // Text scrolling on behind the toolbar read as cut off under it, so the page ends just above it while it shows (a
+    // board right at its top, as Excalidraw's tools sit along the bottom). It follows the toolbar sliding in and out.
+    val pageBottom by animateDpAsState(
+        when {
+            keyboardUp -> 0.dp
+            board -> TOOLBAR_BOTTOM + TOOLBAR_HEIGHT
+            else -> TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 8.dp
+        },
+        motion.defaultSpatialSpec(),
+        label = "page-bottom",
+    )
     fun hideKeyboard() {
         val w = web ?: return
         w.evaluateJavascript("document.activeElement && document.activeElement.blur()", null)
@@ -819,9 +830,7 @@ fun NoteScreen(
                     },
                     onEmbed = ::sendEmbed,
                 )).also { web = it; it.pullDown = pullDown } },
-                // Excalidraw's tools sit along the bottom, so a board stops above the floating toolbar instead of under it.
-                modifier = Modifier.fillMaxWidth().weight(1f)
-                    .padding(bottom = if (board && !keyboardUp) TOOLBAR_BOTTOM + TOOLBAR_HEIGHT else 0.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = pageBottom),
             )
             // While typing, the bar above the keyboard is for formatting; the note's toolbar comes back with the keyboard down.
             if (keyboardUp && !board) {
@@ -835,7 +844,12 @@ fun NoteScreen(
             Modifier.align(Alignment.TopCenter).statusBarsPadding().fillMaxWidth().height(14.dp)
                 .background(Brush.verticalGradient(listOf(paper, Color.Transparent))),
         )
-        // A floating toolbar under the thumb, like the tabs on the other screens; the note scrolls on behind it.
+        // And fades out above the toolbar the same way, rather than stopping at a hard edge.
+        if (!keyboardUp && !board) Box(
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = pageBottom).fillMaxWidth().height(14.dp)
+                .background(Brush.verticalGradient(listOf(Color.Transparent, paper))),
+        )
+        // A floating toolbar under the thumb, like the tabs on the other screens; the note ends just above it.
         AnimatedVisibility(
             visible = !keyboardUp,
             enter = slideInVertically(motion.defaultSpatialSpec()) { it } + fadeIn(motion.defaultEffectsSpec()),
