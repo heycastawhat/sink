@@ -782,10 +782,13 @@ fun NoteScreen(
         }
     }
 
-    /** The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind). */
+    /**
+     * The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind).
+     * Nothing while the page is still loading the note: there's no text of its own yet.
+     */
     suspend fun readEditor() {
         val w = web ?: return
-        val raw = suspendCancellableCoroutine { k -> w.evaluateJavascript("window.sink.getText()") { k.resume(it) } }
+        val raw = suspendCancellableCoroutine { k -> w.evaluateJavascript("window.sink.textOrNull()") { k.resume(it) } }
         runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
     }
 
