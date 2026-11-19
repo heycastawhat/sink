@@ -830,7 +830,8 @@ fun NoteScreen(
                     },
                     onEmbed = ::sendEmbed,
                 )).also { web = it; it.pullDown = pullDown } },
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = pageBottom),
+                // The spatial spring can overshoot 0.dp as the keyboard opens.
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = pageBottom.coerceAtLeast(0.dp)),
             )
             // While typing, the bar above the keyboard is for formatting; the note's toolbar comes back with the keyboard down.
             if (keyboardUp && !board) {
