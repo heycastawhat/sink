@@ -2291,6 +2291,13 @@ body.dragging-note [data-drop-folder] {
   font-weight: 500;
 }
 
+.draft-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
 /* ---------- home's Recent row ---------- */
 .recent-strip {
   margin: 4px 0 18px;

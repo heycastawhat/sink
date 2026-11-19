@@ -20,7 +20,9 @@ const SAVE_DELAY = 700;
 const POLL_MS = 30_000;
 const draftKey = (path) => `sink:unsaved:${path}`;
 let draftOwner = null;
-const newDraftKey = (id) => `sink:new-draft:${JSON.stringify([draftOwner, id])}`;
+const newDraftPrefix = 'sink:new-draft:';
+const newDraftKey = (id) => newDraftPrefix + JSON.stringify([draftOwner, id]);
+const validDraftId = (id) => /^\d+-[a-z0-9]+$/.test(id ?? '');
 
 export function setDraftOwner(subject) {
   draftOwner = subject;
@@ -338,6 +340,7 @@ function renderGrid() {
   renderFolderBar();
   renderFolderTree();
   renderTagList();
+  renderDrafts();
   renderRecentStrip();
 
   const pinned = state.results ? [] : list.filter((n) => n.pinned);
@@ -369,6 +372,31 @@ function renderGrid() {
           ? 'Your notes are in the folders above. New notes you take here stay on this page.'
           : 'Take a note above. It saves as a markdown file in your notes folder.';
   }
+}
+
+function renderDrafts() {
+  const section = $('notes-drafts');
+  const drafts = [];
+  if (draftOwner) {
+    try {
+      // The ID consists of letters, digits and a hyphen, so it needs no JSON escaping.
+      const prefix = newDraftKey('').slice(0, -2);
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (!key?.startsWith(prefix) || !key.endsWith('"]')) continue;
+        const id = key.slice(prefix.length, -2);
+        if (!validDraftId(id)) continue;
+        const draft = readNewDraft(id);
+        if (draft) drafts.push({ id, ...draft });
+      }
+    } catch {}
+  }
+  section.hidden = !drafts.length;
+  $('draft-links').innerHTML = drafts
+    .sort((a, b) => Number(b.id.split('-')[0]) - Number(a.id.split('-')[0]))
+    .map(({ id, folder, text }) =>
+      `<m3e-button variant="tonal" size="small" data-draft-route="${esc(draftHash(folder, id))}">Resume: ${esc(draftTitle(text).slice(0, 60) || 'Untitled')}</m3e-button>`,
+    ).join('');
 }
 
 // ---------- folders ----------
@@ -737,6 +765,10 @@ function wireFolders() {
 }
 
 function wireGrid() {
+  $('draft-links').addEventListener('click', (e) => {
+    const button = e.target.closest('[data-draft-route]');
+    if (button) openFromApp(button.dataset.draftRoute);
+  });
   const open = (e) => {
     const card = e.target.closest('.note-card');
     if (card && !e.target.closest('.card-acts')) openFromApp(noteHash(card.dataset.path));
@@ -1113,11 +1145,20 @@ function stashNewDraft() {
   try {
     const text = screen.editor.getText();
     if (blank(text)) clearNewDraft();
-    else sessionStorage.setItem(newDraftKey(screen.draftId), text);
+    else sessionStorage.setItem(newDraftKey(screen.draftId), JSON.stringify({ folder: screen.folder, text }));
     return true;
   } catch {
     return false;
   }
+}
+
+function readNewDraft(id) {
+  if (!draftOwner) return null;
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(newDraftKey(id)));
+    if (typeof draft?.folder === 'string' && typeof draft.text === 'string') return draft;
+  } catch {}
+  return null;
 }
 
 function clearNewDraft() {
@@ -1449,10 +1490,9 @@ export async function openDraft({ text = draftText, folder = state.folder, id } 
   opening = false;
   await closeEditor();
   if (seq !== openSeq || location.hash !== route) return;
-  if (/^\d+-[a-z0-9]+$/.test(id ?? '')) {
-    try {
-      if (draftOwner) text = sessionStorage.getItem(newDraftKey(id)) ?? text;
-    } catch {}
+  if (validDraftId(id)) {
+    const draft = readNewDraft(id);
+    if (draft) ({ folder, text } = draft);
   } else id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   // Clean shared text out of the address once it's in the draft.
   history.replaceState(history.state, '', draftHash(folder, id));
@@ -1539,6 +1579,8 @@ function save() {
 
 /** Nothing written yet: only whitespace, a bare heading mark, or a /command being typed. */
 const blank = (text) => !text.replace(/(^|\s)\/[\w-]*$/, '').replace(/^#+[ \t]*$/gm, '').trim();
+const draftTitle = (text) =>
+  /^#\s+(.+)$/m.exec(text)?.[1] ?? text.trim().split('\n')[0].replace(/^[-*+]\s+(\[.\]\s+)?|^#+\s+/g, '').slice(0, 60);
 
 async function doSave() {
   if (!screen.editor) return;
@@ -1549,10 +1591,9 @@ async function doSave() {
   setStatus('Saving…');
   try {
     if (!screen.path) {
-      const heading = /^#\s+(.+)$/m.exec(text)?.[1];
-      const title = heading ?? text.trim().split('\n')[0].replace(/^[-*+]\s+(\[.\]\s+)?|^#+\s+/g, '').slice(0, 60);
-      const created = await api.createNote({ folder: screen.folder, title, content: text });
+      const created = await api.createNote({ folder: screen.folder, title: draftTitle(text), content: text });
       clearNewDraft();
+      renderDrafts();
       Object.assign(screen, { path: created.path, hash: created.hash, saved: text });
       if (location.hash === draftHash(screen.folder, screen.draftId)) history.replaceState(history.state, '', noteHash(created.path));
       applyLook();
@@ -1727,6 +1768,7 @@ async function closeEditor() {
   if (dirty() && screen.path) stashUnsaved();
   else if (dirty() && !blank(screen.editor.getText())) {
     if (stashNewDraft()) {
+      renderDrafts();
       const hash = draftHash(screen.folder, screen.draftId);
       toast('Your note hasn’t synced yet. This tab is keeping the draft.', {
         action: 'Resume',
