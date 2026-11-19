@@ -37,6 +37,15 @@
         </div>
       </section>
 
+      <section id="offline" class="login" aria-labelledby="offline-heading" hidden>
+        <div class="login-card">
+          <img src="/favicon.svg" alt="" class="login-logo" width="88" height="88" />
+          <h1 id="offline-heading" class="wordmark">Sink is offline</h1>
+          <p class="muted">Can't reach the server. Reconnect to open your notes.</p>
+          <m3e-button id="offline-retry" variant="tonal" size="medium">Try again</m3e-button>
+        </div>
+      </section>
+
       <!-- App: sidebar | main. On phones the sidebar becomes the tab bar, and a note opens full screen. -->
       <div id="app" class="shell" hidden>
         <!-- Wide screens with the Keep, Split or Tabs layout (layout.js): the same bar across the top in each; Tabs puts its

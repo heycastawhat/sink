@@ -126,14 +126,29 @@ async function boot() {
     await api.me();
     showApp();
   } catch (err) {
+    if (!(err instanceof Unauthorized)) {
+      $('offline').hidden = false;
+      return;
+    }
     // Signing in comes back to the bare address, so a clip from the bookmarklet or a share waits until then.
-    if (err instanceof Unauthorized && /^#\/(clip|new)\?/.test(location.hash)) sessionStorage.setItem(AFTER_SIGN_IN, location.hash);
-    if (err instanceof Unauthorized) showLogin();
-    else toast(`Can't reach server: ${err.message}`);
+    if (/^#\/(clip|new)\?/.test(location.hash)) sessionStorage.setItem(AFTER_SIGN_IN, location.hash);
+    showLogin();
   }
 }
 
+const retry = $('offline-retry');
+retry.addEventListener('click', async () => {
+  if (retry.disabled) return;
+  retry.disabled = true;
+  try {
+    await boot();
+  } finally {
+    retry.disabled = false;
+  }
+});
+
 function showLogin() {
+  $('offline').hidden = true;
   $('app').hidden = true;
   $('login').hidden = false;
   fetch('/api/auth/info')
@@ -195,6 +210,7 @@ function showPhoneLogin(code) {
 }
 
 async function showApp() {
+  $('offline').hidden = true;
   $('login').hidden = true;
   $('app').hidden = false;
   notes.loadNotes().catch(() => {});
@@ -1025,8 +1041,8 @@ wirePicker($('settings'));
 boot();
 if ('serviceWorker' in navigator && !import.meta.env.DEV) navigator.serviceWorker.register('/sw.js');
 
-// An installed app can stay open for days on an old bundle. sw.js is the same file every deploy, so the browser never
-// sees a new worker; the hashed entry script in a fresh index.html is what changes, so compare that with ours.
+// An installed app can stay open for days on an old bundle even after its worker updates. Compare the hashed
+// entry script in a fresh index.html with the one that's running here.
 const runningEntry = document.querySelector('script[type=module][src]')?.getAttribute('src');
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
