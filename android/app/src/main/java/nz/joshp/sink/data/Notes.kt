@@ -188,6 +188,20 @@ suspend fun Api.clipUrl(url: String): NoteMeta {
     return call(request("/api/clip").post(jsonBody(body)).build()) { json.decodeFromString(it) }
 }
 
+private val NOTE_FRONTMATTER = Regex("""^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)""")
+
+/**
+ * What the editor should hold after a pin or colour change rewrote the note's frontmatter on the server (mirrors
+ * web/src/notes.js setMeta). Untouched since [savedBefore]: the server's text. Typed meanwhile: that body under the
+ * server's new frontmatter. Either way the next autosave can't write the old pin or colour back.
+ */
+fun textAfterMeta(editorText: String, savedBefore: String, serverContent: String): String {
+    if (editorText == savedBefore) return serverContent
+    val frontmatter = NOTE_FRONTMATTER.find(serverContent)?.value ?: ""
+    val body = editorText.removePrefix(NOTE_FRONTMATTER.find(editorText)?.value ?: "")
+    return frontmatter + body
+}
+
 /** Pin and colour; `clearColor` sends `color: null`. */
 suspend fun Api.noteMeta(path: String, pinned: Boolean? = null, color: String? = null, clearColor: Boolean = false): NoteMeta {
     val body = buildJsonObject {

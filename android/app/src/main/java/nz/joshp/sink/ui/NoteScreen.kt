@@ -148,6 +148,7 @@ import nz.joshp.sink.data.mentionsJson
 import nz.joshp.sink.data.pluginFile
 import nz.joshp.sink.data.saveNote
 import nz.joshp.sink.data.templatesIn
+import nz.joshp.sink.data.textAfterMeta
 import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.NOTE_COLORS
@@ -788,15 +789,19 @@ fun NoteScreen(
             api.noteMeta(p, pin, newColor, clearColor)
             val n = api.note(p)
             store.saveNote(n)
+            // Decided before `saved` moves on: compared after, an untouched editor looked edited, kept the old
+            // frontmatter, and its next save put the old pin and colour back.
+            val text = textAfterMeta(ed.current, ed.saved, n.content)
             ed.hash = n.hash
             ed.saved = n.content
-            if (!ed.dirty || ed.current == ed.saved) {
-                ed.current = n.content
-                setEditorText(n.content)
+            if (text != ed.current) {
+                ed.current = text
+                setEditorText(text)
             }
             applyMeta(n)
             vm.refresh()
         }.onFailure { snackbar.showSnackbar(it.message ?: "Couldn't change it") }
+        if (ed.dirty) scheduleSave()
     }
 
     val paper = noteTint(color, MaterialTheme.colorScheme.surfaceContainerLowest, 0.16f)
