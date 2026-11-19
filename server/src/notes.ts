@@ -939,18 +939,18 @@ export class Vault {
 
   /** Renames a note or a whole folder. Never overwrites. Links to it are not rewritten (yet). */
   async move(from: string, to: string): Promise<void> {
-    const isNote = from.toLowerCase().endsWith(".md");
-    from = cleanPath(from, isNote ? "note" : "folder");
-    to = cleanPath(to, isNote ? "note" : "folder");
-    // A file or folder renamed to `x.md` would become a note nobody wrote as one (and an assistant, which can't
-    // publish, could upload `publish: true` as an attachment and rename it into a public note).
-    if (!isNote && to.toLowerCase().endsWith(".md")) throw new VaultError(400, "only notes can end in .md");
+    from = cleanPath(from, "file");
+    to = cleanPath(to, "file");
     if (to === from) return;
-    if (!isNote && to.startsWith(from + "/")) throw new VaultError(400, "can't move a folder into itself");
+    let isNote = false;
     try {
       const [src, dest] = [await this.abs(from), await this.abs(to)];
       const st = await stat(src);
-      if (isNote && !st.isFile()) throw new VaultError(404, "note not found");
+      isNote = st.isFile() && from.toLowerCase().endsWith(".md");
+      if (isNote) cleanPath(to, "note");
+      // Attachments cannot become notes by moving them; that would skip validation on note creation.
+      if (!isNote && !st.isDirectory() && to.toLowerCase().endsWith(".md")) throw new VaultError(400, "only notes can end in .md");
+      if (st.isDirectory() && to.startsWith(from + "/")) throw new VaultError(400, "can't move a folder into itself");
       // On a case-insensitive share (SMB, macOS) "shopping.md" -> "Shopping.md" finds the note itself at dest.
       const there = await stat(dest).catch((e: NodeJS.ErrnoException) => {
         if (e.code === "ENOENT") return null;
@@ -1048,13 +1048,13 @@ export class Vault {
 
   /** Moves a note or folder into `.trash/`, keeping its path there (Obsidian's "move to .trash" behaviour). */
   async trash(path: string): Promise<{ trashed_to: string }> {
-    const isNote = path.toLowerCase().endsWith(".md");
-    path = cleanPath(path, isNote ? "note" : "folder");
+    path = cleanPath(path, "file");
+    let isNote = false;
     let dest = `${TRASH}/${path}`;
     try {
       const src = await this.abs(path);
       await this.abs(TRASH);
-      await stat(src);
+      isNote = (await stat(src)).isFile() && path.toLowerCase().endsWith(".md");
       for (let n = 1; await exists(join(this.dir, dest)); n++) {
         const ext = extname(path);
         dest = `${TRASH}/${isNote ? path.slice(0, -ext.length) : path} ${n}${isNote ? ext : ""}`;
@@ -1093,8 +1093,8 @@ export class Vault {
   }
 
   /** A path inside the trash from a client, with or without the `.trash/` prefix. */
-  private trashPath(raw: string): string {
-    return cleanPath(raw.trim().replace(/^\/*\.trash\//, ""), "note");
+  private trashPath(raw: string, kind: "note" | "file" = "note"): string {
+    return cleanPath(raw.trim().replace(/^\/*\.trash\//, ""), kind);
   }
 
   /** Every note in `.trash/`, newest deletion first. Notes Obsidian trashed are listed too (dated by ctime). */
@@ -1145,8 +1145,7 @@ export class Vault {
    * Puts a whole trashed folder back where it was (numbered if that name is taken now), indexing every note in it.
    * Returns the folder's path.
    */
-  async restoreFolder(trashPath: string): Promise<{ path: string; notes: number }> {
-    const rel = cleanPath(trashPath.trim().replace(/^\/*\.trash\//, ""), "folder");
+  private async restoreFolder(rel: string): Promise<{ path: string; notes: number }> {
     const from = trashOrigin(this.trashRows(), rel);
     const original = cleanPath(from?.original ?? rel, "folder");
     let dest = original;
@@ -1184,14 +1183,15 @@ export class Vault {
     return { path: dest, notes: restored.length };
   }
 
-  /** Puts a trashed note back where it was (numbered if that name is taken now) and indexes it again. */
-  async restore(trashPath: string): Promise<NoteMeta> {
-    const rel = this.trashPath(trashPath);
-    const from = trashOrigin(this.trashRows(), rel);
-    const original = cleanPath(from?.original ?? rel, "note");
+  /** Puts a trashed note or folder back where it was (numbered if that name is taken now). */
+  async restore(trashPath: string): Promise<NoteMeta | { path: string; notes: number }> {
+    const rel = this.trashPath(trashPath, "file");
     try {
       const src = await this.abs(`${TRASH}/${rel}`);
-      await stat(src);
+      if ((await stat(src)).isDirectory()) return this.restoreFolder(rel);
+      cleanPath(rel, "note");
+      const from = trashOrigin(this.trashRows(), rel);
+      const original = cleanPath(from?.original ?? rel, "note");
       const ext = original.toLowerCase().endsWith(".excalidraw.md") ? ".excalidraw.md" : ".md";
       const stem = original.slice(0, -ext.length);
       let dest = original;
