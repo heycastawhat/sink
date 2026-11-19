@@ -1,10 +1,10 @@
-// Vite injects BUILD and SHELL_ASSETS from the production page. Keep the HTML and its entry assets together;
+// Vite injects the production shell manifest. Keep the HTML and its entry assets together;
 // the first visit can load the scripts before the worker takes control. API responses never go in this cache.
 const PREFIX = 'sink-shell-';
 const CACHE = PREFIX + BUILD;
 
 self.addEventListener('install', (event) => {
-  const shell = ['/', ...SHELL_ASSETS].map((url) => url.startsWith('/assets/') ? url : new Request(url, { cache: 'reload' }));
+  const shell = [SHELL_URL, ...SHELL_ASSETS].map((url) => url.startsWith('/assets/') ? url : new Request(url, { cache: 'reload' }));
   event.waitUntil(
     caches.open(CACHE)
       .then((cache) => cache.addAll(shell))
@@ -26,9 +26,9 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET' || url.origin !== location.origin) return;
 
   if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/shared')) {
-    // Don't replace the offline HTML with a newer deploy until its worker has cached the matching assets.
+    // The online page may be newer; the offline copy belongs to this worker's build.
     event.respondWith(
-      fetch(request).catch(async () => (await caches.match('/', { cacheName: CACHE })) || Response.error()),
+      fetch(request).catch(async () => (await caches.match(SHELL_URL, { cacheName: CACHE })) || Response.error()),
     );
   } else if (url.pathname.startsWith('/assets/') || SHELL_ASSETS.includes(url.pathname)) {
     event.respondWith(

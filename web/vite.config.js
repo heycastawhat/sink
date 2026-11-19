@@ -18,10 +18,15 @@ export default defineConfig({
           const worker = readFileSync(resolve(import.meta.dirname, 'src/sw.js'), 'utf8');
           const hash = createHash('sha256').update(html).update(worker);
           for (const file of publicFiles) hash.update(readFileSync(resolve(import.meta.dirname, `public${file}`)));
+          // A deploy can switch between fetching the worker and its HTML. A missing versioned file makes install
+          // fail instead of pairing a different build's index.html with these assets.
+          const build = hash.digest('hex').slice(0, 16);
+          const shell = `assets/sink-shell-${build}.html`;
+          this.emitFile({ type: 'asset', fileName: shell, source: html });
           this.emitFile({
             type: 'asset',
             fileName: 'sw.js',
-            source: `const BUILD = ${JSON.stringify(hash.digest('hex').slice(0, 16))};\nconst SHELL_ASSETS = ${JSON.stringify([...assets, ...publicFiles])};\n${worker}`,
+            source: `const BUILD = ${JSON.stringify(build)};\nconst SHELL_URL = ${JSON.stringify(`/${shell}`)};\nconst SHELL_ASSETS = ${JSON.stringify([...assets, ...publicFiles])};\n${worker}`,
           });
         },
       },
