@@ -123,7 +123,8 @@ async function boot() {
   if (params.has('login')) return showPhoneLogin(params.get('login'));
   if (params.get('client') === 'android') return showLogin();
   try {
-    await api.me();
+    const { subject } = await api.me();
+    notes.setDraftOwner(subject);
     showApp();
   } catch (err) {
     if (!(err instanceof Unauthorized)) {
@@ -289,7 +290,7 @@ function parseHash() {
   }
   if (first === 'new') {
     const q = new URLSearchParams(query);
-    return { ...base, draft: true, folder: q.get('folder') ?? '', text: q.get('text') ?? '' };
+    return { ...base, draft: true, folder: q.get('folder') ?? '', text: q.get('text') ?? '', draftId: q.get('draft') };
   }
   if (first === 'clip') return { ...base, clip: new URLSearchParams(query).get('url') };
   if (['todos', 'trash', 'settings'].includes(first)) return { ...base, view: first };
@@ -318,11 +319,7 @@ function applyRoute() {
       notes.setQuery('');
     }
     if (route.note) notes.openNote(route.note, { line: route.line });
-    else if (route.draft && route.text) {
-      // Shared text: once it's in a draft, leave it out of the address so reload doesn't make a second note.
-      history.replaceState(null, '', state.folder ? `#/new?folder=${encodeURIComponent(state.folder)}` : '#/new');
-      notes.openDraft({ folder: state.folder, text: route.text });
-    } else if (route.draft) notes.openDraft({ folder: state.folder });
+    else if (route.draft) notes.openDraft({ folder: state.folder, text: route.text || undefined, id: route.draftId });
     else if (notes.noteIsOpen()) notes.closeNote();
   }
   if (state.view !== 'notes' && notes.noteIsOpen()) notes.closeNote();
@@ -957,6 +954,7 @@ $('settings').addEventListener('click', async (e) => {
     // The next person to sign in on this browser shouldn't get these reminders.
     await setReminders(false).catch(() => {});
     await api.logout().catch(() => {});
+    notes.setDraftOwner(null);
     showLogin();
   }
 });

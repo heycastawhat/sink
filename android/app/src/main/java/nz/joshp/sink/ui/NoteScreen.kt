@@ -367,10 +367,27 @@ fun NoteScreen(
             }
             is SaveResult.Conflict -> {
                 val theirs = result.theirs
-                if (result.copy == null && theirs != null) {
+                val copy = result.copy
+                ed.queued = null
+                if (copy != null && (theirs == null || ed.current != text)) {
+                    haptics.reject()
+                    ed.path = copy.path
+                    ed.hash = copy.hash
+                    ed.saved = text
+                    shownPath = copy.path
+                    pinned = copy.pinned
+                    color = copy.color
+                    status = if (ed.current == text) "Saved" else "Editing…"
+                    scope.launch {
+                        snackbar.showSnackbar(
+                            if (theirs == null) "That note was deleted elsewhere. Kept yours as “${copy.fileName}”."
+                            else "Changed somewhere else. You’re editing “${copy.fileName}”."
+                        )
+                    }
+                } else if (copy == null && theirs != null) {
                     ed.hash = theirs.hash
                     ed.saved = text
-                    status = "Saved"
+                    status = if (ed.current == text) "Saved" else "Editing…"
                 } else if (theirs != null) {
                     haptics.reject()
                     ed.hash = theirs.hash
@@ -379,17 +396,7 @@ fun NoteScreen(
                     applyMeta(theirs)
                     setEditorText(theirs.content)
                     status = "Saved"
-                    snackbar.showSnackbar("Changed somewhere else. Your version was saved as “${result.copy?.fileName}”.")
-                } else {
-                    // Deleted elsewhere: keep going in the copy.
-                    haptics.reject()
-                    result.copy?.let {
-                        ed.path = it.path
-                        ed.hash = it.hash
-                        ed.saved = text
-                    }
-                    status = "Saved"
-                    snackbar.showSnackbar("That note was deleted elsewhere. Kept yours as “${result.copy?.fileName}”.")
+                    snackbar.showSnackbar("Changed somewhere else. Your version was saved as “${copy?.fileName}”.")
                 }
                 vm.refresh()
             }

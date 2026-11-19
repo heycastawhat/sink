@@ -1376,6 +1376,27 @@ describe("notes", () => {
     expect(((await (await get(token, "/api/notes/trash")).json()) as any).items).toEqual([]);
   });
 
+  test("folders ending in .md can be renamed, trashed and restored without losing their notes", async () => {
+    const token = await login();
+    await send(token, "POST", "/api/notes/folders", { path: "Journal.md" });
+    const content = "# Monday\nKeep this text";
+    expect((await send(token, "POST", "/api/notes", { folder: "Journal.md", title: "Monday", content })).status).toBe(201);
+
+    const del = await send(token, "DELETE", q("Journal.md"));
+    expect(del.status).toBe(200);
+    const { trashed_to } = await del.json() as { trashed_to: string };
+    expect(await (await get(token, "/api/notes")).json()).toMatchObject({ notes: [], folders: [] });
+    const restored = await send(token, "POST", "/api/notes/trash/restore", { path: trashed_to });
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toEqual({ path: "Journal.md", notes: 1 });
+    expect(await (await get(token, q("Journal.md/Monday.md"))).json()).toMatchObject({ content });
+
+    expect((await send(token, "POST", "/api/notes/move", { from: "Journal.md", to: "Journal-renamed.md" })).status).toBe(200);
+    expect(await (await get(token, q("Journal-renamed.md/Monday.md"))).json()).toMatchObject({ content });
+    expect((await get(token, q("Journal.md/Monday.md"))).status).toBe(404);
+    expect(await (await get(token, "/api/notes/trash")).json()).toMatchObject({ items: [] });
+  });
+
   test("attachments: upload, embed by name, served without script", async () => {
     const token = await login();
     const upload = async (name: string, bytes: Uint8Array | string) => {

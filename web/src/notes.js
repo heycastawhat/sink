@@ -19,6 +19,14 @@ const SAVE_DELAY = 700;
 // The open note is checked this often too, in case the live change stream is down.
 const POLL_MS = 30_000;
 const draftKey = (path) => `sink:unsaved:${path}`;
+let draftOwner = null;
+const newDraftPrefix = 'sink:new-draft:';
+const newDraftKey = (id) => newDraftPrefix + JSON.stringify([draftOwner, id]);
+const validDraftId = (id) => /^\d+-[a-z0-9]+$/.test(id ?? '');
+
+export function setDraftOwner(subject) {
+  draftOwner = subject;
+}
 
 let toast = (msg) => console.log(msg);
 let navigate = (hash) => (location.hash = hash);
@@ -318,7 +326,11 @@ function masonry() {
 
 function renderGrid() {
   const root = $('notes');
-  if (!root || root.hidden) return;
+  if (!root) return;
+  // The sidebar stays visible in Trash and the other views.
+  renderFolderTree();
+  renderTagList();
+  if (root.hidden) return;
   // Search always covers everything. Browsing can leave filed notes to their own folders: home shows only loose
   // notes, and a folder only its own (subfolders have their tiles), like Drive.
   const inFolder = (n) =>
@@ -330,8 +342,7 @@ function renderGrid() {
   const list = (state.results ?? state.notes).filter(inFolder);
 
   renderFolderBar();
-  renderFolderTree();
-  renderTagList();
+  renderDrafts();
   renderRecentStrip();
 
   const pinned = state.results ? [] : list.filter((n) => n.pinned);
@@ -363,6 +374,31 @@ function renderGrid() {
           ? 'Your notes are in the folders above. New notes you take here stay on this page.'
           : 'Take a note above. It saves as a markdown file in your notes folder.';
   }
+}
+
+function renderDrafts() {
+  const section = $('notes-drafts');
+  const drafts = [];
+  if (draftOwner) {
+    try {
+      // The ID consists of letters, digits and a hyphen, so it needs no JSON escaping.
+      const prefix = newDraftKey('').slice(0, -2);
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (!key?.startsWith(prefix) || !key.endsWith('"]')) continue;
+        const id = key.slice(prefix.length, -2);
+        if (!validDraftId(id)) continue;
+        const draft = readNewDraft(id);
+        if (draft) drafts.push({ id, ...draft });
+      }
+    } catch {}
+  }
+  section.hidden = !drafts.length;
+  $('draft-links').innerHTML = drafts
+    .sort((a, b) => Number(b.id.split('-')[0]) - Number(a.id.split('-')[0]))
+    .map(({ id, folder, text }) =>
+      `<m3e-button variant="tonal" size="small" data-draft-route="${esc(draftHash(folder, id))}">Resume: ${esc(draftTitle(text).slice(0, 60) || 'Untitled')}</m3e-button>`,
+    ).join('');
 }
 
 // ---------- folders ----------
@@ -731,6 +767,10 @@ function wireFolders() {
 }
 
 function wireGrid() {
+  $('draft-links').addEventListener('click', (e) => {
+    const button = e.target.closest('[data-draft-route]');
+    if (button) openFromApp(button.dataset.draftRoute);
+  });
   const open = (e) => {
     const card = e.target.closest('.note-card');
     if (card && !e.target.closest('.card-acts')) openFromApp(noteHash(card.dataset.path));
@@ -968,6 +1008,7 @@ function wireCardActions() {
 
 const screen = {
   path: null, // null while a new note is still a draft
+  draftId: null,
   folder: '',
   hash: null,
   saved: '', // text as last saved / loaded
@@ -1076,6 +1117,7 @@ function mountEditor(text) {
       clearTimeout(screen.timer);
       screen.timer = setTimeout(save, SAVE_DELAY);
       if (screen.path) stashUnsaved();
+      else stashNewDraft();
     },
     onOpenLink: openLink,
     resolveEmbed: (name) => api.attachmentUrl(name),
@@ -1097,6 +1139,35 @@ function mountEditor(text) {
     // /template: a filled-in template at the cursor.
     pickTemplate: () => chooseTemplate(screen.path ? fileName(screen.path) : '', { inline: true }),
   });
+}
+
+// Keep a new note in this tab until there is a server path for it.
+function stashNewDraft() {
+  if (!draftOwner) return false;
+  try {
+    const text = screen.editor.getText();
+    if (blank(text)) clearNewDraft();
+    else sessionStorage.setItem(newDraftKey(screen.draftId), JSON.stringify({ folder: screen.folder, text }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readNewDraft(id) {
+  if (!draftOwner) return null;
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(newDraftKey(id)));
+    if (typeof draft?.folder === 'string' && typeof draft.text === 'string') return draft;
+  } catch {}
+  return null;
+}
+
+function clearNewDraft() {
+  if (!draftOwner) return;
+  try {
+    sessionStorage.removeItem(newDraftKey(screen.draftId));
+  } catch {}
 }
 
 /** Keeps unsaved text in the browser, so a crash or a dead NAS doesn't lose it. */
@@ -1362,6 +1433,10 @@ export function newNote() {
   openFromApp(state.folder ? `#/new?folder=${encodeURIComponent(state.folder)}` : '#/new');
 }
 
+function draftHash(folder, id) {
+  return `#/new?${folder ? `folder=${encodeURIComponent(folder)}&` : ''}draft=${id}`;
+}
+
 /** New → Clip a web page (or the bookmarklet, which passes the address): the server saves the page's article as a note. */
 export async function clipPage(address) {
   // An address from the page's URL could come from any site's link, so it's only clipped once you say so.
@@ -1409,14 +1484,21 @@ export async function newFromTemplate() {
   }
 }
 
-export async function openDraft({ text = draftText, folder = state.folder } = {}) {
+export async function openDraft({ text = draftText, folder = state.folder, id } = {}) {
   draftText = '';
   // A note still loading doesn't land on top of the draft.
   const seq = ++openSeq;
+  const route = location.hash;
   opening = false;
   await closeEditor();
-  if (seq !== openSeq) return;
-  Object.assign(screen, { path: null, folder, hash: null, saved: '', pinned: false, color: null, fresh: true });
+  if (seq !== openSeq || location.hash !== route) return;
+  if (validDraftId(id)) {
+    const draft = readNewDraft(id);
+    if (draft) ({ folder, text } = draft);
+  } else id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  // Clean shared text out of the address once it's in the draft.
+  history.replaceState(history.state, '', draftHash(folder, id));
+  Object.assign(screen, { path: null, draftId: id, folder, hash: null, saved: '', pinned: false, color: null, fresh: true });
   const show = () => {
     showScreen();
     mountEditor(text);
@@ -1426,7 +1508,10 @@ export async function openDraft({ text = draftText, folder = state.folder } = {}
   else show();
   setStatus('');
   screen.editor.focus(true);
-  if (text) save();
+  if (text) {
+    stashNewDraft();
+    save();
+  }
 }
 
 const noteHidden = () => $('note-screen').hidden;
@@ -1496,6 +1581,8 @@ function save() {
 
 /** Nothing written yet: only whitespace, a bare heading mark, or a /command being typed. */
 const blank = (text) => !text.replace(/(^|\s)\/[\w-]*$/, '').replace(/^#+[ \t]*$/gm, '').trim();
+const draftTitle = (text) =>
+  /^#\s+(.+)$/m.exec(text)?.[1] ?? text.trim().split('\n')[0].replace(/^[-*+]\s+(\[.\]\s+)?|^#+\s+/g, '').slice(0, 60);
 
 async function doSave() {
   if (!screen.editor) return;
@@ -1506,20 +1593,17 @@ async function doSave() {
   setStatus('Saving…');
   try {
     if (!screen.path) {
-      const heading = /^#\s+(.+)$/m.exec(text)?.[1];
-      const title = heading ?? text.trim().split('\n')[0].replace(/^[-*+]\s+(\[.\]\s+)?|^#+\s+/g, '').slice(0, 60);
-      const created = await api.createNote({ folder: screen.folder, title, content: text });
+      const created = await api.createNote({ folder: screen.folder, title: draftTitle(text), content: text });
+      clearNewDraft();
+      renderDrafts();
       Object.assign(screen, { path: created.path, hash: created.hash, saved: text });
-      history.replaceState(history.state, '', noteHash(created.path));
+      if (location.hash === draftHash(screen.folder, screen.draftId)) history.replaceState(history.state, '', noteHash(created.path));
       applyLook();
     } else {
       const saved = await api.saveNote(screen.path, text, screen.hash);
       Object.assign(screen, { hash: saved.hash, saved: text });
-      clearUnsaved(screen.path);
     }
-    screen.failures = 0;
-    setStatus(dirty() ? 'Editing…' : 'Saved');
-    if (dirty()) screen.timer = setTimeout(save, SAVE_DELAY);
+    afterSave();
   } catch (err) {
     if (err instanceof Unauthorized) throw err;
     if (err instanceof ApiError && err.status === 409 && err.body?.current) return resolveConflict(text, err.body.current);
@@ -1529,6 +1613,19 @@ async function doSave() {
     setStatus(navigator.onLine ? "Can't save, retrying" : 'Offline, will save', 'error');
     if (screen.path) stashUnsaved();
     screen.timer = setTimeout(save, Math.min(30_000, 2000 * 2 ** Math.min(screen.failures, 4)));
+  }
+}
+
+function afterSave() {
+  screen.failures = 0;
+  clearTimeout(screen.timer);
+  if (dirty()) {
+    stashUnsaved();
+    setStatus('Editing…');
+    screen.timer = setTimeout(save, SAVE_DELAY);
+  } else {
+    clearUnsaved(screen.path);
+    setStatus('Saved');
   }
 }
 
@@ -1544,26 +1641,27 @@ function conflictTitle(path) {
 async function resolveConflict(mine, current) {
   if (current && current.content === mine) {
     Object.assign(screen, { hash: current.hash, saved: mine });
-    return setStatus('Saved');
+    return afterSave();
   }
   buzz('warn');
   try {
     // What's in the editor now, including anything typed while the save was out.
     mine = screen.editor.getText();
-    const copy = await api.createNote({ folder: screen.folder, title: conflictTitle(screen.path), content: mine });
-    clearUnsaved(screen.path);
-    if (current) {
+    const path = screen.path;
+    const copy = await api.createNote({ folder: screen.folder, title: conflictTitle(path), content: mine });
+    clearUnsaved(path);
+    if (current && screen.editor.getText() === mine) {
       Object.assign(screen, { hash: current.hash, saved: current.content, pinned: current.pinned, color: current.color });
       screen.editor.setText(current.content);
-      applyLook();
     } else {
-      // Deleted elsewhere: carry on in the copy.
-      history.replaceState(history.state, '', noteHash(copy.path));
-      Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine });
+      // The original was deleted, or more text arrived while creating the copy. Keep editing the copy.
+      if (location.hash.split('?')[0] === noteHash(path)) history.replaceState(history.state, '', noteHash(copy.path));
+      Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine, pinned: copy.pinned, color: copy.color });
     }
+    applyLook();
     toast(`Changed somewhere else. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
     buzz('confirm');
-    setStatus('Saved');
+    afterSave();
     loadNotes();
   } catch (err) {
     setStatus("Can't save", 'error');
@@ -1670,8 +1768,20 @@ async function closeEditor() {
   // Another open or close finished it while the save was out.
   if (!screen.editor) return;
   if (dirty() && screen.path) stashUnsaved();
+  else if (dirty() && !blank(screen.editor.getText())) {
+    if (stashNewDraft()) {
+      renderDrafts();
+      const hash = draftHash(screen.folder, screen.draftId);
+      toast('Your note hasn’t synced yet. This tab is keeping the draft.', {
+        action: 'Resume',
+        onAction: () => openFromApp(hash),
+        duration: 0,
+      });
+    } else toast('Couldn’t save the draft in this browser.');
+  }
   // A note started here and emptied again before leaving isn't one: don't leave an empty "Untitled" behind.
   else if (screen.fresh && screen.path && blank(screen.editor.getText())) await api.trashNote(screen.path).catch(() => {});
+  clearTimeout(screen.timer);
   screen.editor.destroy();
   screen.editor = null;
   screen.path = null;
@@ -1948,6 +2058,7 @@ function wireScreen() {
 
   $('note-delete').addEventListener('click', async () => {
     if (!screen.path) {
+      clearNewDraft();
       screen.editor.setText('');
       Object.assign(screen, { saved: '' });
       return back();
@@ -1980,8 +2091,8 @@ const trashState = { items: [], days: 0, loaded: false };
 
 async function restore(trashPath) {
   try {
-    const note = await api.restoreNote(trashPath);
-    toast(`Restored “${note.title}”`);
+    const restored = await api.restoreNote(trashPath);
+    toast(`Restored “${restored.title ?? restored.path.split('/').pop()}”`);
     await loadNotes();
     if (!$('trash').hidden) loadTrash();
   } catch (err) {
