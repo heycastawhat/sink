@@ -326,7 +326,11 @@ function masonry() {
 
 function renderGrid() {
   const root = $('notes');
-  if (!root || root.hidden) return;
+  if (!root) return;
+  // The sidebar stays visible in Trash and the other views.
+  renderFolderTree();
+  renderTagList();
+  if (root.hidden) return;
   // Search always covers everything. Browsing can leave filed notes to their own folders: home shows only loose
   // notes, and a folder only its own (subfolders have their tiles), like Drive.
   const inFolder = (n) =>
@@ -338,8 +342,6 @@ function renderGrid() {
   const list = (state.results ?? state.notes).filter(inFolder);
 
   renderFolderBar();
-  renderFolderTree();
-  renderTagList();
   renderDrafts();
   renderRecentStrip();
 
@@ -2089,8 +2091,8 @@ const trashState = { items: [], days: 0, loaded: false };
 
 async function restore(trashPath) {
   try {
-    const note = await api.restoreNote(trashPath);
-    toast(`Restored “${note.title}”`);
+    const restored = await api.restoreNote(trashPath);
+    toast(`Restored “${restored.title ?? restored.path.split('/').pop()}”`);
     await loadNotes();
     if (!$('trash').hidden) loadTrash();
   } catch (err) {
