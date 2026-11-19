@@ -472,7 +472,8 @@ fun NoteScreen(
     }
     // Text scrolling on behind the toolbar read as cut off under it, so the page ends just above it while it shows (a
     // board right at its top, as Excalidraw's tools sit along the bottom). It follows the toolbar sliding in and out.
-    val pageBottom by animateDpAsState(
+    // The spring can overshoot zero; neither the editor nor its fade can accept negative padding.
+    val pageBottom = animateDpAsState(
         when {
             keyboardUp -> 0.dp
             board -> TOOLBAR_BOTTOM + TOOLBAR_HEIGHT
@@ -480,7 +481,7 @@ fun NoteScreen(
         },
         motion.defaultSpatialSpec(),
         label = "page-bottom",
-    )
+    ).value.coerceAtLeast(0.dp)
     fun hideKeyboard() {
         val w = web ?: return
         w.evaluateJavascript("document.activeElement && document.activeElement.blur()", null)
@@ -830,8 +831,7 @@ fun NoteScreen(
                     },
                     onEmbed = ::sendEmbed,
                 )).also { web = it; it.pullDown = pullDown } },
-                // The spatial spring can overshoot 0.dp as the keyboard opens.
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = pageBottom.coerceAtLeast(0.dp)),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = pageBottom),
             )
             // While typing, the bar above the keyboard is for formatting; the note's toolbar comes back with the keyboard down.
             if (keyboardUp && !board) {
