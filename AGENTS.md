@@ -38,8 +38,9 @@ database loses nothing a rescan can't rebuild.
 - `db.ts` migrations (append only; `user_version`). `routes/notes.ts` notes/attachments/trash/versions/backlinks/export
   routes. `routes/share.ts` share links. `routes/events.ts` live change stream (SSE). `todos.ts` todo parsing and
   routes. `auth.ts` tokens (scopes `full`/`mcp`, optional expiry), cookie + bearer, CSRF origin check. `oidc.ts`
-  sign-in (`client=web|android|obsidian`; the apps get a hand-back code redirected to their own scheme, swapped with a PKCE verifier
-  at `/oidc/exchange`); or a signed-in browser shows a one-time `/?login=` QR code from Settings, which the app scans (its own CameraX + ZXing scanner, `QrScanner.kt`; the app has no Google Play services dependency, keep it that way) or a phone's browser opens, swapped at `/qr/exchange`). `oauth.ts` OAuth for MCP connectors (dynamic registration, PKCE, refresh rotation). `mcp.ts` MCP tools
+  sign-in (`client=web|android|obsidian|extension`; the apps get a hand-back code redirected to their own scheme, or for the
+  browser extension to `/api/auth/extension` on the server, swapped with a PKCE verifier at `/oidc/exchange`; the extension's token has
+  the `extension` scope, limited like an assistant's); or a signed-in browser shows a one-time `/?login=` QR code from Settings, which the app scans (its own CameraX + ZXing scanner, `QrScanner.kt`; the app has no Google Play services dependency, keep it that way) or a phone's browser opens, swapped at `/qr/exchange`). `oauth.ts` OAuth for MCP connectors (dynamic registration, PKCE, refresh rotation). `mcp.ts` MCP tools
   (all go through the REST API as the caller). `email.ts`/`html.ts` IMAP ingest. `plugins.ts` + `builtin/` plugin
   host (daily notes, webhooks). `users.ts` accounts: the owner keeps `SINK_NOTES_DIR` + the main DB (email in,
   plugins); other accounts get a vault + DB under `SINK_USERS_DIR`. `app.ts` builds each account's `/api` routes

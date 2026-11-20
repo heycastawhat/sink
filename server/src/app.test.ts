@@ -287,6 +287,31 @@ describe("auth", () => {
     expect((await get(token, "/api/notes")).status).toBe(200);
   });
 
+  test("the browser extension's sign-in comes back to this server, for a token limited to notes and todos", async () => {
+    const verifier = "e".repeat(64);
+    const { callback } = await signIn(`client=extension&challenge=${s256(verifier)}`);
+    const location = new URL(callback.headers.get("location")!);
+    expect(location.origin + location.pathname).toBe(`${PUBLIC}/api/auth/extension`);
+    expect(callback.headers.get("set-cookie")).toBeNull();
+    expect((await setup.app.request(location.pathname + location.search)).status).toBe(200);
+    const res = await setup.app.request("/api/auth/oidc/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: location.searchParams.get("code"), verifier }),
+    });
+    const { token } = (await res.json()) as { token: string };
+    expect((await get(token, "/api/notes")).status).toBe(200);
+    expect((await get(token, "/api/todos")).status).toBe(200);
+    expect((await get(token, "/api/auth/tokens")).status).toBe(403);
+    const send = (method: string, path: string, body: unknown) =>
+      setup.app.request(path, { method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+    expect((await send("POST", "/api/notes", { title: "Out", content: "---\npublish: true\n---\n# Out" })).status).toBe(403);
+    expect((await send("POST", "/api/notes/share", { path: "Out.md" })).status).toBe(403);
+    const owner = await login();
+    const tokens = ((await (await get(owner, "/api/auth/tokens")).json()) as any).tokens;
+    expect(tokens.find((t: any) => t.name === "Browser extension")?.scope).toBe("extension");
+  });
+
   test("a QR code signs a phone in once, as the same account", async () => {
     const token = await login();
     const make = async (t: string) => {

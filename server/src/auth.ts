@@ -119,7 +119,7 @@ export class Auth {
   }
 }
 
-export type Scope = "full" | "mcp" | "calendar";
+export type Scope = "full" | "mcp" | "calendar" | "extension";
 export type AuthEnv = { Variables: { tokenId: string; scope: Scope; subject: string } };
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -165,7 +165,7 @@ type Pending = {
   verifier: string;
   nonce: string;
   origin: string;
-  client: "web" | "android" | "obsidian";
+  client: SignedIn["client"];
   device: string;
   appChallenge?: string;
   // Web: same-origin path to land on after signing in (e.g. back to an OAuth consent page).
@@ -173,10 +173,10 @@ type Pending = {
   created: number;
 };
 
-type Handback = { challenge: string; device: string; subject: string; created: number };
+type Handback = { challenge: string; device: string; subject: string; scope: Scope; created: number };
 
 const startQuery = z.object({
-  client: z.enum(["web", "android", "obsidian"]).default("web"),
+  client: z.enum(["web", "android", "obsidian", "extension"]).default("web"),
   device: z.string().max(100).optional(),
   // Apps: S256 of a verifier only the app holds, so an intercepted hand-back code is useless.
   challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
@@ -220,12 +220,18 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     return opts.publicUrls.includes(origin) ? origin : opts.publicUrls[0]!;
   };
 
-  /** Signs `subject` in: a session cookie for the web, or a one-time code handed back to the Android or Obsidian app. */
+  /**
+   * Signs `subject` in: a session cookie for the web, or a one-time code handed back to an app. The browser extension's
+   * comes back to a page on this server, which the extension watches for: its own redirect URL would depend on its ID.
+   */
   const finish = (c: Context, to: SignedIn & { origin?: string }, subject: string) => {
     if (to.client !== "web") {
       const handback = randomString();
-      handbacks.set(handback, { challenge: to.challenge!, device: to.device, subject, created: now() });
-      return `${to.client === "android" ? ANDROID_REDIRECT : OBSIDIAN_REDIRECT}?code=${handback}`;
+      // The extension's token only reaches notes and todos, as an assistant's does.
+      const scope = to.client === "extension" ? "extension" : "full";
+      handbacks.set(handback, { challenge: to.challenge!, device: to.device, subject, scope, created: now() });
+      const back = { android: ANDROID_REDIRECT, obsidian: OBSIDIAN_REDIRECT, extension: `${to.origin ?? allowedOrigin(c)}/api/auth/extension` }[to.client];
+      return `${back}?code=${handback}`;
     }
     const origin = to.origin ?? allowedOrigin(c);
     setSession(c, origin, to.device, subject);
@@ -262,7 +268,7 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
       nonce: randomString(),
       origin: allowedOrigin(c),
       client: q.data.client,
-      device: q.data.device ?? { web: "Web", android: "Android", obsidian: "Obsidian" }[q.data.client],
+      device: q.data.device ?? { web: "Web", android: "Android", obsidian: "Obsidian", extension: "Browser extension" }[q.data.client],
       appChallenge: q.data.challenge,
       next: q.data.next,
       created: now(),
@@ -322,8 +328,14 @@ export function authRoutes(auth: Auth, oidc: Oidc, opts: { secureCookies: boolea
     if (!entry || s256(body.data.verifier) !== entry.challenge || auth.signedOutSince(entry.subject, entry.created)) {
       return c.json({ error: "invalid or expired code" }, 400);
     }
-    return c.json({ ok: true, token: auth.issueToken(entry.device, entry.subject) });
+    return c.json({ ok: true, token: auth.issueToken(entry.device, entry.subject, entry.scope) });
   });
+
+  // Where the extension's sign-in lands. The extension reads the code from the address and closes the tab.
+  app.get("/extension", (c) =>
+    c.html(`<!doctype html><meta name=viewport content="width=device-width"><title>Sink</title>
+<body style="font-family:system-ui;padding:32px"><h2>Signed in</h2><p>You can close this tab and go back to the Sink extension.</p>`),
+  );
 
   // Signing a phone in from a browser that's already signed in: a one-time link shown as a QR code. The Sink app
   // scans it and swaps the code for a token; a phone's camera opens it in the browser, which gets a session instead.

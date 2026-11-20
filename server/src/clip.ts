@@ -106,6 +106,11 @@ export async function fetchPage(input: string, allowHost?: string): Promise<{ ht
   }
 }
 
+/** A selection's HTML (from the browser extension) as markdown, links made absolute against the page. */
+export function fragmentMarkdown(html: string, url: string): string {
+  return htmlToMarkdown(parseHTML(`<html><body>${html}</body></html>`).document.body as any, url);
+}
+
 /** The page's main article as a title and markdown. Falls back to the page's plain text when nothing looks like an article. */
 export function extractArticle(html: string, url: string): { title: string; markdown: string } {
   const { document } = parseHTML(html);

@@ -105,6 +105,24 @@ describe("clipping a page", () => {
     expect((await vault.read(note.path)).content).toContain(`source: "${origin}/article"`);
   });
 
+  test("takes the page's HTML from the browser instead of fetching it", async () => {
+    const page = (await (await fetch(`${origin}/article`)).text()).replace("Soup Weather</h1>", "Soup Weather</h1><p>SIGNED-IN-ONLY</p>");
+    const res = await clip("https://intranet.example/soup", { html: page });
+    expect(res.status).toBe(201);
+    const { content } = await vault.read(((await res.json()) as any).path);
+    expect(content).toContain('source: "https://intranet.example/soup"');
+    expect(content).toContain("the **coldest** week");
+    expect((await clip("javascript:alert(1)", { html: page })).status).toBe(400);
+  });
+
+  test("a selection comes back as markdown and isn't saved", async () => {
+    const before = vault.list().notes.length;
+    const res = await clip("https://example.com/a/b", { html: '<p>Read <a href="../c">this</a> <em>now</em></p><ul><li>one</li></ul>', selection: true });
+    expect(await res.json()).toEqual({ markdown: "Read [this](https://example.com/c) *now*\n\n- one" });
+    expect(vault.list().notes.length).toBe(before);
+    expect((await clip(`${origin}/article`, { selection: true })).status).toBe(400);
+  });
+
   test("falls back to the page text when there's no article", async () => {
     const note = (await (await clip(`${origin}/bare`)).json()) as any;
     expect((await vault.read(note.path)).content).toContain("Just a short line of text");
