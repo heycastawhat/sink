@@ -1,10 +1,26 @@
 package nz.joshp.sink.ui
 
+import android.view.View
+import android.view.ViewGroup
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.navigation.NavController
+
+internal fun clearViewFocus(view: View?, focus: FocusManager) {
+    val root = view?.rootView as? ViewGroup
+    val descendants = root?.descendantFocusability
+    try {
+        // Keep Android's initial-focus search from focusing a Compose text field as the View lets go.
+        root?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        view?.findFocus()?.clearFocus()
+        focus.clearFocus(force = true)
+    } finally {
+        if (root != null && descendants != null) root.descendantFocusability = descendants
+    }
+}
 
 @Composable
 internal fun ClearFocusOnNavigation(nav: NavController) {
@@ -16,8 +32,7 @@ internal fun ClearFocusOnNavigation(nav: NavController) {
             val current = controller.currentBackStackEntry
             if (previous != null && previous != current) {
                 // Focus recovery during AndroidView detach can remeasure the lazy grid mid-apply.
-                view.findFocus()?.clearFocus()
-                focus.clearFocus(force = true)
+                clearViewFocus(view, focus)
             }
             previous = current
         }

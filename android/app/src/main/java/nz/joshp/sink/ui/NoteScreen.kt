@@ -303,8 +303,7 @@ fun NoteScreen(
     var web by remember { mutableStateOf<WebView?>(null) }
     val focus = LocalFocusManager.current
     fun clearEditorFocus() {
-        web?.clearFocus()
-        focus.clearFocus(force = true)
+        clearViewFocus(web, focus)
     }
     fun leave() {
         clearEditorFocus()
