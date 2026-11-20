@@ -408,7 +408,7 @@ describe("mcp", () => {
       "update_todo",
     ]);
 
-    const created = await call(token, "save_note", { title: "Packing list", folder: "Trips", content: "# Packing list\n\n- [ ] passport\n" });
+    const created = await call(token, "save_note", { title: "Packing list", folder: "Trips", content: "# Packing list\n\n- [ ] passport 🔽\n" });
     expect(created.data.created.path).toBe("Trips/Packing list.md");
     const found = await call(token, "search_notes", { query: "passport" });
     expect(found.data.results.map((r: any) => r.path)).toEqual(["Trips/Packing list.md"]);
@@ -424,7 +424,7 @@ describe("mcp", () => {
     expect(noHash.result.isError).toBe(true);
     const stale = await call(token, "save_note", { path: "Trips/Packing list.md", hash: "0".repeat(64), content: "x" });
     expect(stale.result.isError).toBe(true);
-    const edited = await call(token, "save_note", { path: "Trips/Packing list.md", hash: read.data.hash, content: read.result.content[1].text + "- [ ] charger\n" });
+    const edited = await call(token, "save_note", { path: "Trips/Packing list.md", hash: read.data.hash, content: read.result.content[1].text + "- [ ] charger 🔽\n" });
     expect(edited.data.saved.title).toBe("Packing list");
 
     const added = await call(token, "add_todo", { text: "call the bank", due: "2026-11-02", time: "09:30" });
@@ -438,7 +438,7 @@ describe("mcp", () => {
     expect((await call(token, "list_todos")).data.todos.map((t: any) => t.text)).toEqual(["passport", "charger"]);
     const passport = (await call(token, "list_todos")).data.todos[0];
     const moved = await call(token, "update_todo", { path: passport.path, line: passport.line, raw: passport.raw, due: "2026-12-01" });
-    expect(moved.data.updated).toBe("- [ ] passport 📅 2026-12-01");
+    expect(moved.data.updated).toBe("- [ ] passport 🔽 📅 2026-12-01");
   });
 
   test("clip_url goes through the clip API and refuses private addresses", async () => {
@@ -1359,7 +1359,7 @@ describe("notes", () => {
     const token = await login();
     expect((await send(token, "POST", "/api/notes/folders", { path: "Projects/Empty" })).status).toBe(201);
     expect(((await (await get(token, "/api/notes")).json()) as any).folders).toEqual(["Projects", "Projects/Empty"]);
-    await send(token, "POST", "/api/notes", { folder: "Projects/Sink", title: "Plan", content: "# Plan\n- [ ] ship" });
+    await send(token, "POST", "/api/notes", { folder: "Projects/Sink", title: "Plan", content: "# Plan\n- [ ] ship #todo" });
     await send(token, "POST", "/api/notes", { folder: "Projects/Sink/Ideas", title: "Later", content: "# Later" });
     expect((await send(token, "POST", "/api/notes/move", { from: "Projects/Sink", to: "Work/Sink" })).status).toBe(200);
     const trashed = (await (await send(token, "DELETE", q("Work"))).json()) as any;
@@ -1477,7 +1477,7 @@ describe("todos", () => {
 
   test("list, tick, untick, quick add, and they follow their note", async () => {
     const token = await login();
-    await send(token, "POST", "/api/notes", { folder: "Trips", title: "Japan", content: "# Japan\n\n- [ ] passport 📅 2026-11-20\n- [ ] yen\n" });
+    await send(token, "POST", "/api/notes", { folder: "Trips", title: "Japan", content: "# Japan\n\n- [ ] passport 📅 2026-11-20\n- [ ] yen 🔽\n" });
     const added = (await (await send(token, "POST", "/api/todos", { text: "milk", due: "2026-11-01" })).json()) as any;
     expect(added).toMatchObject({ path: "Todo.md", raw: "- [ ] milk 📅 2026-11-01" });
     await send(token, "POST", "/api/todos", { text: "bread" });
@@ -1503,6 +1503,11 @@ describe("todos", () => {
     expect(unticked.raw).toBe("- [ ] passport 📅 2026-11-20");
 
     await send(token, "POST", "/api/notes/move", { from: "Trips", to: "Travel" });
+    open = ((await (await get(token, "/api/todos")).json()) as any).todos;
+    // The jr pass line added above is a plain checkbox, not a todo.
+    expect(open.filter((t: any) => t.path === "Travel/Japan.md").map((t: any) => t.text)).toEqual(["passport", "yen"]);
+    const elsewhere = (await (await send(token, "POST", "/api/todos", { text: "visa", path: "Travel/Japan.md" })).json()) as any;
+    expect(elsewhere.raw).toBe("- [ ] visa #todo");
     open = ((await (await get(token, "/api/todos")).json()) as any).todos;
     expect(open.filter((t: any) => t.path === "Travel/Japan.md")).toHaveLength(3);
     await send(token, "DELETE", "/api/notes/file?path=Travel");

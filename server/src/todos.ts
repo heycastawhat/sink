@@ -84,6 +84,13 @@ export function parseTodos(content: string, timeZone: string): Todo[] {
   return out;
 }
 
+/**
+ * Whether a task line goes on the Todos list: all of Todo.md, and elsewhere only lines that say they're todos (a date,
+ * reminder, priority, repeat or #todo tag), so a checklist in a note stays a checklist.
+ */
+export const listed = (path: string, t: Todo) =>
+  path === TODO_FILE || !!t.due || !!t.start || t.priority !== 3 || /🔁|(?:^|\s)#todo\b/u.test(t.raw);
+
 /** Sets a task line's status, with the `✅ date` (done) or `❌ date` (cancelled) Tasks writes. */
 export function setStatus(raw: string, status: "open" | "done" | "cancelled", today: string): string {
   const m = TASK.exec(raw);
@@ -474,7 +481,8 @@ export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
     const { path = TODO_FILE, natural, ...given } = body.data;
     const { text, due, time, every }: { text: string; due?: string; time?: string; every?: string } =
       natural && !given.due ? parseQuick(given.text, today()) : given;
-    const line = todoLine(text, due, time, every);
+    // Undated in another note, it'd be a plain checkbox; the tag keeps it on the list.
+    const line = todoLine(text, due, time, every) + (path !== TODO_FILE && !due && !every ? " #todo" : "");
     try {
       for (let attempt = 0; ; attempt++) {
         const note = await vault.read(path).catch((err) => {

@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { now } from "./db";
-import { parseTodos } from "./todos";
+import { listed, parseTodos } from "./todos";
 import { EXTRACTABLE, extractText, type Extractor } from "./extract";
 
 /**
@@ -421,7 +421,7 @@ export class Vault {
         "INSERT INTO todos (path, line, raw, text, status, due, remind_at, done_on, priority, start, scheduled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
       for (const t of parseTodos(content, this.timeZone))
-        insert.run(path, t.line, t.raw, t.text, t.status, t.due, t.remind_at, t.done_on, t.priority, t.start, t.scheduled);
+        if (listed(path, t)) insert.run(path, t.line, t.raw, t.text, t.status, t.due, t.remind_at, t.done_on, t.priority, t.start, t.scheduled);
     }
     this.db.query("DELETE FROM links WHERE src = ?").run(path);
     const link = this.db.query("INSERT INTO links (src, target, line) VALUES (?, ?, ?)");

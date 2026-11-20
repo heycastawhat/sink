@@ -24,7 +24,7 @@ export const daily: BuiltinPlugin = {
       "append",
       {
         title: "Add to today's daily note",
-        description: "Append text (a line, a todo like '- [ ] call mum', a paragraph) to today's daily note, creating it from the template if needed.",
+        description: "Append text (a line, a todo like '- [ ] call mum #todo', a paragraph) to today's daily note, creating it from the template if needed.",
         inputSchema: { text: z.string().min(1).max(10_000) },
       },
       async ({ text }: { text: string }) => {

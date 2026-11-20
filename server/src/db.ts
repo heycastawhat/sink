@@ -424,6 +424,10 @@ export const migrations: string[] = [
     INSERT INTO attachment_fts(rowid, text) VALUES (new.rowid, new.text);
   END;
   `,
+  // Plain checkboxes outside Todo.md are no longer todos (listed in todos.ts); mtime 0 re-reads every note.
+  `
+  UPDATE notes SET mtime = 0;
+  `,
 ];
 
 export function openDb(path: string): Database {
