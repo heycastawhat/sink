@@ -124,6 +124,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -300,6 +301,15 @@ fun NoteScreen(
     // Picking a template to drop in: from /template (the page waits for an answer) or the menu.
     var templating by remember { mutableStateOf<TemplateAsk?>(null) }
     var web by remember { mutableStateOf<WebView?>(null) }
+    val focus = LocalFocusManager.current
+    fun clearEditorFocus() {
+        web?.clearFocus()
+        focus.clearFocus(force = true)
+    }
+    fun leave() {
+        clearEditorFocus()
+        onBack()
+    }
     var pageReady by remember { mutableStateOf(false) }
     var loadedNote by remember { mutableStateOf<String?>(null) }
     var saveJob by remember { mutableStateOf<Job?>(null) }
@@ -466,10 +476,13 @@ fun NoteScreen(
     }
 
     // Not if it's gone meanwhile (back pressed again): it would leave whatever's under it too.
-    fun flushAndLeave() = flush { if (!ed.closed) onBack() }
+    fun flushAndLeave() {
+        clearEditorFocus()
+        flush { if (!ed.closed) leave() }
+    }
     // Handed back when this note goes, so a later tap in the list doesn't wait on a closed page.
     if (flusher != null) DisposableEffect(flusher) {
-        flusher.flush = ::flush
+        flusher.flush = { then -> flush { clearEditorFocus(); then() } }
         onDispose { flusher.flush = { it() } }
     }
 
@@ -496,6 +509,7 @@ fun NoteScreen(
         val w = web ?: return
         w.evaluateJavascript("document.activeElement && document.activeElement.blur()", null)
         (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(w.windowToken, 0)
+        clearEditorFocus()
     }
 
     // Switching apps or locking the phone saves too.
@@ -571,7 +585,7 @@ fun NoteScreen(
         val err = fresh.exceptionOrNull()
         if (err is ApiException && err.code == 404) {
             snackbar.showSnackbar("That note is gone")
-            onBack()
+            leave()
             return@LaunchedEffect
         }
         if (fresh.getOrNull() == null && store.note(path) == null) {
@@ -677,7 +691,10 @@ fun NoteScreen(
             saveJob?.cancel()
             save()
             val hit = vm.resolveLink(target) ?: vm.createLinked(target)
-            if (hit != null) onOpenNote(hit.path) else snackbar.showSnackbar("Couldn't open “$target”")
+            if (hit != null) {
+                clearEditorFocus()
+                onOpenNote(hit.path)
+            } else snackbar.showSnackbar("Couldn't open “$target”")
         }
     }
 
@@ -754,7 +771,7 @@ fun NoteScreen(
                         vm.renameOpened(p, dest)
                         ed.saved = ed.current
                         vm.refresh()
-                        onBack()
+                        leave()
                     }
                     .onFailure {
                         snackbar.showSnackbar(
@@ -772,7 +789,7 @@ fun NoteScreen(
     /** No "are you sure?": the notes list offers Undo, and the web's Trash page has it after that. */
     fun trash() {
         saveJob?.cancel()
-        val p = ed.path ?: return onBack()
+        val p = ed.path ?: return leave()
         // Saved first, so what comes back from the trash is what was on screen.
         flush {
             scope.launch {
@@ -783,7 +800,7 @@ fun NoteScreen(
                         store.clearPending(p)
                         ed.saved = ed.current
                         vm.trashed(p, trashedTo)
-                        onBack()
+                        leave()
                     }
                     .onFailure { snackbar.showSnackbar(it.message ?: "Couldn't delete") }
             }
