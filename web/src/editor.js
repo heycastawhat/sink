@@ -99,10 +99,12 @@ class ImageWidget extends WidgetType {
     const wrap = document.createElement('span');
     wrap.className = 'cm-embed';
     const img = document.createElement('img');
-    img.src = this.src;
     img.alt = this.alt;
     img.loading = 'lazy';
     img.onerror = () => wrap.classList.add('broken');
+    // A promise when the image has to be fetched with a token first (the browser extension, which has no cookie).
+    if (typeof this.src === 'string') img.src = this.src;
+    else this.src.then((url) => (img.src = url), img.onerror);
     wrap.append(img);
     return wrap;
   }
@@ -982,8 +984,8 @@ function pasteLink(e, view) {
  *  onChange(text) every edit
  *  onOpenLink(target, {newTab})  [[wikilink]] or url clicked
  *  readOnly                      a page to read (a shared note), not edit
- *  resolveEmbed(name) -> url     for ![[image.png]]
- *  resolveImage(src) -> url      for ![](relative/path.png)
+ *  resolveEmbed(name) -> url     for ![[image.png]]; or a Promise of one, the same object for the same name
+ *  resolveImage(src) -> url      for ![](relative/path.png); likewise
  *  loadEmbed(name) -> Promise<{path, title, content, resolveEmbed?, resolveImage?} | null>  for ![[Note]]
  *  path                          this note's path (so an embed never shows it inside itself)
  *  linkTargets() -> [{label, detail}]  for [[ completion

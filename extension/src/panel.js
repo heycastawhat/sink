@@ -119,8 +119,8 @@ function mount(text, path) {
       timer = setTimeout(save, SAVE_DELAY);
     },
     onOpenLink: openLink,
-    resolveEmbed: attachmentUrl,
-    resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachmentUrl(decodeLink(src).replace(/^(\.\.\/)+/, ''))),
+    resolveEmbed: (ref) => image(attachmentUrl(ref)),
+    resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : image(attachmentUrl(decodeLink(src).replace(/^(\.\.\/)+/, '')))),
     linkTargets: () => notes.filter((n) => !/\.excalidraw\.md$/i.test(n.path)).map((n) => ({ label: fileName(n.path), detail: folderOf(n.path) })),
     loadEmbed: async (target) => {
       const hit = findLinked(target);
@@ -129,6 +129,21 @@ function mount(text, path) {
     placeholder: 'Write a note…',
   });
   $('note-name').textContent = path ? fileName(path) : 'New note';
+}
+
+// An <img> can't send the token, so images are fetched with it and shown from a blob URL. One promise per image: the
+// editor redraws an image only when its source changes, and a new promise would count as a change.
+const images = new Map();
+function image(url) {
+  if (!images.has(url)) {
+    const loaded = fetch(url, { headers: { authorization: `Bearer ${cfg.token}` } })
+      .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((blob) => URL.createObjectURL(blob));
+    // A failure (offline, not uploaded yet) is tried again the next time the image is drawn.
+    loaded.catch(() => images.delete(url));
+    images.set(url, loaded);
+  }
+  return images.get(url);
 }
 
 const attachmentUrl = (ref) => `${cfg.server}/api/notes/attachment?${ref.includes('/') ? 'path' : 'name'}=${encodeURIComponent(ref)}`;
