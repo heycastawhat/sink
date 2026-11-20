@@ -1,0 +1,10 @@
+{
+  "name": "sink-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build.ts",
+    "zip": "bun build.ts && cd dist && rm -f ../sink-extension.zip && zip -qr ../sink-extension.zip ."
+  }
+}

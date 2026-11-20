@@ -19,6 +19,7 @@ database loses nothing a rescan can't rebuild.
 | `web/` | Vite + `@m3e/web` (Material 3 Expressive web components) + CodeMirror 6. Plain JS, no framework. |
 | `android/` | Kotlin + Jetpack Compose (Material 3 Expressive). The note editor is the web editor in a WebView. |
 | `obsidian/` | Obsidian plugin that syncs a local vault with the server over the API (Bun build, TypeScript, `bun test` against an in-process server). See `obsidian/README.md`. |
+| `extension/` | Chrome extension (Manifest V3, plain JS, Bun build): a side panel hosting `web/src/editor.js` for quick notes and todos, plus a clipper that sends the page's HTML to `/api/clip`. See `extension/README.md`. |
 | `docs/plugins.md`, `examples/plugins/` | Plugin API and an example plugin. |
 | `.github/workflows/` | `ci.yml` (server tests + web build), `docker.yml` (GHCR image), `android.yml` (APK; releases on `v*` tags). |
 

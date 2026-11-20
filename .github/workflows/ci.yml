@@ -24,6 +24,9 @@ jobs:
         run: |
           bun install --frozen-lockfile
           bun run build
+      - name: Browser extension
+        working-directory: extension
+        run: bun run build
       - name: Obsidian plugin
         working-directory: obsidian
         run: |

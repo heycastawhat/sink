@@ -29,6 +29,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Boards:** Excalidraw whiteboards, saved in the Obsidian Excalidraw plugin's format.
 - **Android app:** the same grid and editor, works offline and syncs when you're back.
 - **Obsidian plugin:** keeps a local Obsidian vault (desktop or mobile) in sync with Sink over the internet.
+- **Chrome extension:** a side panel with the same editor for quick notes and todos, and a web clipper that saves pages
+  as you see them (signed-in pages and all). See `extension/README.md`.
 - **AI assistants:** connect Claude, ChatGPT or Poke as a custom connector (MCP) to search, read and write notes.
 - **Email in (optional):** forward an email and it becomes a note, or `you+todo@` makes it a todo.
 - **Public page:** pick a name in Settings, then Share → "Show on my public page" lists a note at

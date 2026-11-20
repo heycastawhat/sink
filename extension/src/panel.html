@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sink</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <!-- The web app's theme: same seed colour, variant and motion, so the panel looks like Sink. -->
+    <m3e-theme id="theme" color="#6750A4" variant="tonal-spot" motion="expressive" scheme="auto">
+      <form id="setup" class="setup" hidden>
+        <img src="icons/icon-128.png" alt="" class="logo" width="72" height="72" />
+        <h1 class="wordmark">Sink</h1>
+        <p class="muted">Sign in to your Sink server to write notes, add todos and clip pages from here.</p>
+        <m3e-form-field variant="outlined" hide-subscript>
+          <m3e-icon slot="prefix" name="dns"></m3e-icon>
+          <label slot="label" for="server">Server address</label>
+          <input id="server" type="url" placeholder="https://notes.example.com" required autocomplete="url" />
+        </m3e-form-field>
+        <m3e-button id="sign-in" variant="filled" size="medium" type="submit">
+          <m3e-icon slot="icon" name="key"></m3e-icon>Sign in
+        </m3e-button>
+        <p id="setup-error" class="error" hidden></p>
+      </form>
+
+      <main id="main" hidden>
+        <header class="bar">
+          <m3e-icon-button id="new" variant="tonal" aria-label="New note" title="New note"><m3e-icon name="edit_square"></m3e-icon></m3e-icon-button>
+          <m3e-search-bar id="find-bar" class="find" clearable>
+            <m3e-icon name="search" slot="leading"></m3e-icon>
+            <input id="find" slot="input" placeholder="Find a note" aria-label="Find a note" autocomplete="off" />
+          </m3e-search-bar>
+          <m3e-icon-button id="more" aria-label="Settings" title="Settings" aria-expanded="false"><m3e-icon name="more_vert"></m3e-icon></m3e-icon-button>
+        </header>
+        <div id="results" class="menu results" role="listbox" hidden></div>
+        <div id="settings" class="menu settings" hidden>
+          <m3e-form-field variant="outlined" hide-subscript>
+            <m3e-icon slot="prefix" name="folder"></m3e-icon>
+            <label slot="label" for="folder">New notes and clips go in</label>
+            <input id="folder" placeholder="Inbox" />
+          </m3e-form-field>
+          <p class="muted">Signed in to <span id="signed-in"></span></p>
+          <button class="menu-item" id="allow-all" type="button"><m3e-icon name="travel_explore"></m3e-icon><span>Clip from the panel on any site</span></button>
+          <button class="menu-item" id="sign-out" type="button"><m3e-icon name="logout"></m3e-icon><span>Sign out</span></button>
+        </div>
+        <div class="sheet">
+          <div class="note-head">
+            <span id="note-name" class="note-name"></span>
+            <span id="status" class="status" aria-live="polite"></span>
+          </div>
+          <div class="scroll"><div id="editor" class="note-editor"></div></div>
+        </div>
+        <footer class="foot">
+          <div class="actions">
+            <m3e-button id="clip" variant="tonal" size="small" title="Save this page as a new note"><m3e-icon slot="icon" name="bookmark_add"></m3e-icon>Clip page</m3e-button>
+            <m3e-button id="add-selection" variant="tonal" size="small" title="Add the page's selected text to this note"><m3e-icon slot="icon" name="format_quote"></m3e-icon>Selection</m3e-button>
+            <m3e-button id="add-link" variant="tonal" size="small" title="Add a link to this page to this note"><m3e-icon slot="icon" name="add_link"></m3e-icon>Link</m3e-button>
+          </div>
+          <form id="todo-form">
+            <m3e-form-field variant="outlined" hide-subscript class="todo">
+              <m3e-icon slot="prefix" name="add_task"></m3e-icon>
+              <label slot="label" for="todo">Add a todo</label>
+              <input id="todo" placeholder="call mum tomorrow 6pm" autocomplete="off" />
+            </m3e-form-field>
+          </form>
+        </footer>
+      </main>
+    </m3e-theme>
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>
