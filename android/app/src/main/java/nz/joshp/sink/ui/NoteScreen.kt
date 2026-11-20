@@ -593,9 +593,9 @@ fun NoteScreen(
     }
 
     // The page and the note can arrive in either order; load once both are here.
+    // Metadata may have changed before the bridge existed, so send the current text, not the initial payload.
     LaunchedEffect(pageReady, loadedNote) {
-        val text = loadedNote ?: return@LaunchedEffect
-        if (!pageReady) return@LaunchedEffect
+        val text = editorLoadText(pageReady, loadedNote, ed.current) ?: return@LaunchedEffect
         val payload = buildJsonObject {
             put("text", text)
             ed.path?.let { put("path", it) }
