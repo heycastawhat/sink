@@ -2049,6 +2049,8 @@ function wireScreen() {
     }
   });
 
+  $('note-find').addEventListener('click', () => screen.editor.format('find'));
+
   $('note-download').addEventListener('click', () => {
     const blob = new Blob([screen.editor.getText()], { type: 'text/markdown' });
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: screen.path ? screen.path.split('/').pop() : 'note.md' });

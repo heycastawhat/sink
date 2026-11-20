@@ -15,7 +15,7 @@ import { defaultKeymap, history, historyKeymap, indentLess, indentMore, indentWi
 import { syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput, indentUnit } from '@codemirror/language';
 import { markdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+import { search, searchKeymap, highlightSelectionMatches, openSearchPanel } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
 import './editor.css';
@@ -1102,6 +1102,8 @@ export function createEditor(opts) {
         // Tab takes the highlighted suggestion ([[link]] or /command); in a table it goes to the next cell; otherwise it
         // indents as usual.
         keymap.of([{ key: 'Tab', run: acceptCompletion }, { key: 'Tab', run: nextCell, shift: prevCell }, { key: 'Enter', run: enterAfterTitle }, { key: 'Enter', run: tableEnter }]),
+        // At the top: at the bottom the phone's keyboard and toolbar cover it.
+        search({ top: true }),
         keymap.of([...closeBracketsKeymap, ...markdownKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
         // writingsuggestions: no macOS/Chrome predicted words greyed in after the cursor (they look like note text).
         EditorView.contentAttributes.of({ spellcheck: 'true', autocapitalize: 'sentences', writingsuggestions: 'false', 'aria-label': 'Note text' }),
@@ -1203,8 +1205,10 @@ export function createEditor(opts) {
       view.dispatch({ selection: { anchor: line.to }, scrollIntoView: true });
       view.focus();
     },
-    /** heading (steps through h1–h3), h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike, code, link, indent, outdent, undo, redo. */
+    /** heading (steps through h1–h3), h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike, code, link, indent, outdent, undo, redo, find. */
     format(kind) {
+      // The panel focuses its Find field; the view.focus() below would take that back.
+      if (kind === 'find') return openSearchPanel(view);
       // One heading button: plain → H1 → H2 → H3 → plain, read from the caret's line.
       if (kind === 'heading') {
         const now = kindOf(view.state.doc.lineAt(view.state.selection.main.from).text.match(LINE_START)[2]);

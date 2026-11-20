@@ -15,7 +15,7 @@
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
 //   sink.setText(text)  sink.insert(text)  sink.getText()  sink.textOrNull()  sink.focus()
 //   sink.format(kind)   the bar above the keyboard: heading, h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike,
-//                       code, link, indent, outdent, undo, redo (see editor.js format)
+//                       code, link, indent, outdent, undo, redo, find (see editor.js format)
 //   sink.embed(target, note)   a note for ![[target]]: { path, title, content } as GET /api/notes/file gives it, or null
 //   sink.backlinks(items)   GET /api/notes/backlinks' items, shown under the note; tapping one calls openLink(path)
 //   sink.mentions(items)   GET /api/notes/mentions' items: unlinked mentions, a collapsed section after the backlinks

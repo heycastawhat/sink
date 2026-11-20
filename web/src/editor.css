@@ -361,6 +361,111 @@
   color: var(--md-sys-color-on-surface) !important;
 }
 
+/* Find and replace (Ctrl+F, or the note's ⋮ menu). */
+.cm-panels-top {
+  border-bottom: 1px solid var(--md-sys-color-outline-variant) !important;
+}
+
+.cm-panel.cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 44px 8px 0 !important;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+/* Rows: find and its buttons, replace and its buttons, then the options. The pseudo-elements are the line breaks. */
+.cm-panel.cm-search br {
+  display: none;
+}
+
+.cm-panel.cm-search::before,
+.cm-panel.cm-search::after {
+  content: '';
+  flex-basis: 100%;
+  height: 0;
+  margin: -3px 0;
+}
+
+.cm-panel.cm-search input[name='search'] { order: 1; }
+.cm-panel.cm-search :is(button[name='next'], button[name='prev'], button[name='select']) { order: 2; }
+.cm-panel.cm-search::before { order: 3; }
+.cm-panel.cm-search input[name='replace'] { order: 4; }
+.cm-panel.cm-search :is(button[name='replace'], button[name='replaceAll']) { order: 5; }
+.cm-panel.cm-search::after { order: 6; }
+.cm-panel.cm-search label { order: 7; }
+
+.cm-panel.cm-search .cm-textfield {
+  flex: 1 1 80px;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+}
+
+.cm-panel.cm-search .cm-textfield:focus {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -1px;
+}
+
+.cm-panel.cm-search .cm-button {
+  margin: 0;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--md-sys-color-secondary-container);
+  background-image: none;
+  color: var(--md-sys-color-on-secondary-container);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cm-panel.cm-search .cm-button::first-letter {
+  text-transform: uppercase;
+}
+
+.cm-panel.cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 8px 0 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: inherit;
+}
+
+.cm-panel.cm-search input[type='checkbox'] {
+  accent-color: var(--md-sys-color-primary);
+  margin: 0;
+}
+
+.cm-panel.cm-search button[name='close'] {
+  top: 8px !important;
+  right: 8px !important;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cm-searchMatch {
+  background: color-mix(in srgb, var(--md-sys-color-tertiary) 25%, transparent) !important;
+  outline: none !important;
+  border-radius: 2px;
+}
+
+.cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--md-sys-color-tertiary) 55%, transparent) !important;
+}
+
 
 /* Fenced code: one shaded box across its lines. */
 .note-editor .cm-editor .cm-line.cm-codeblock {

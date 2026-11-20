@@ -2612,7 +2612,7 @@ body.dragging-note [data-drop-folder] {
   overflow-wrap: anywhere;
 }
 
-.note-screen.board :is(#note-share, #note-format, #note-info-toggle) {
+.note-screen.board :is(#note-share, #note-format, #note-info-toggle, #note-find) {
   display: none;
 }
 
