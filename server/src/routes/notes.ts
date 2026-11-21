@@ -199,6 +199,15 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     }),
   );
 
+  // A copy beside the note, opened by the apps straight after.
+  app.post("/notes/duplicate", (c) =>
+    run(c, async () => {
+      const body = pathQuery.safeParse(await c.req.json().catch(() => null));
+      if (!body.success) return c.json({ error: "invalid body" }, 400);
+      return c.json(await vault.duplicate(body.data.path), 201);
+    }),
+  );
+
   app.post("/notes/move", (c) =>
     run(c, async () => {
       const body = moveBody.safeParse(await c.req.json().catch(() => null));
