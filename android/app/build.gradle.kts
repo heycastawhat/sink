@@ -14,6 +14,7 @@ android {
         applicationId = "nz.joshp.sink"
         minSdk = 30
         targetSdk = 36
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // CI sets these from the release tag (v1.2.3 -> 1.2.3, code from the run number).
         versionCode = providers.environmentVariable("SINK_VERSION_CODE").orNull?.toInt() ?: 1
         versionName = providers.environmentVariable("SINK_VERSION_NAME").orNull ?: "0.1.0-dev"
@@ -138,4 +139,8 @@ dependencies {
     implementation(libs.zxing.core)
 
     testImplementation(libs.junit)
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
