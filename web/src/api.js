@@ -68,6 +68,7 @@ export const api = {
   clip: (url, folder) => request('/clip', json('POST', { url, folder })),
   noteMeta: (path, body) => request(`/notes/meta?${p(path)}`, json('PATCH', body)),
   moveNote: (from, to) => request('/notes/move', json('POST', { from, to })),
+  duplicateNote: (path) => request('/notes/duplicate', json('POST', { path })),
   createFolder: (path) => request('/notes/folders', json('POST', { path })),
   trashNote: (path) => request(`/notes/file?${p(path)}`, { method: 'DELETE' }),
   trash: () => request('/notes/trash'),

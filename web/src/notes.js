@@ -870,6 +870,18 @@ async function archiveCard(path) {
   });
 }
 
+/** A copy beside the note (`Name copy.md`), from the card menu: stays on the grid, with the copy one tap away. */
+async function copyCard(path) {
+  if (screen.path === path) return $('note-duplicate').click();
+  try {
+    const copy = await api.duplicateNote(path);
+    await loadNotes();
+    toast('Copy made', { action: 'Open', onAction: () => openFromApp(noteHash(copy.path)) });
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
 async function moveCard(path) {
   if (screen.path === path) return $('note-move').click();
   const dest = await pickFolder({
@@ -915,6 +927,7 @@ function openCardMenu(path, x, y, { colours = false } = {}) {
       `<div class="new-item card-menu-label">${ic('palette')}<span>Colour</span></div>` +
       swatches +
       item('move', 'drive_file_move', 'Move to folder…') +
+      item('copy', 'content_copy', 'Make a copy') +
       item('archive', archived ? 'unarchive' : 'archive', archived ? 'Unarchive' : 'Archive') +
       item('link', 'link', 'Copy link') +
       '<hr class="menu-divider" />' +
@@ -944,6 +957,7 @@ async function runCardAct(act, path, from) {
   if (act === 'window') window.open(noteHash(path), '_blank', 'noopener');
   if (act === 'pin') cardMeta(path, { pinned: !n.pinned });
   if (act === 'move') moveCard(path);
+  if (act === 'copy') copyCard(path);
   if (act === 'archive') archiveCard(path);
   if (act === 'trash') trashCard(path);
   if (act === 'link') {
@@ -1970,6 +1984,19 @@ function wireScreen() {
     if (moved) {
       relocate(moved);
       toast(`Moved to ${dest ? dest.split('/').pop() : 'Notes'}`);
+    }
+  });
+  // Saved first, so the copy has what's on screen; then the copy opens, and Back returns to the original.
+  $('note-duplicate').addEventListener('click', async () => {
+    await flush();
+    if (!screen.path) return toast('Write something first');
+    try {
+      const copy = await api.duplicateNote(screen.path);
+      loadNotes();
+      navigate(noteHash(copy.path));
+      toast('Copy made');
+    } catch (err) {
+      toast(err.message);
     }
   });
   $('note-filename').addEventListener('click', () => $('note-rename').click());

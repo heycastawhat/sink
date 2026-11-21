@@ -754,6 +754,30 @@ describe("notes", () => {
     expect(readdirSync(file(`.trash/${F}`)).some((n) => n.startsWith("Dune"))).toBe(true);
   });
 
+  test("duplicating a note or board copies it beside the original, never public", async () => {
+    const token = await login();
+    writeFileSync(file("Trip.md"), "---\npinned: true\ncolor: blue\npublish: true\nsearchable: true\n---\n# Trip\n\nPack the tent\n");
+    mkdirSync(file("Draw"), { recursive: true });
+    writeFileSync(file("Draw/Plan.excalidraw.md"), "---\nexcalidraw-plugin: parsed\n---\nboard\n");
+    await setup.vault.scan();
+
+    const first = await send(token, "POST", "/api/notes/duplicate", { path: "Trip.md" });
+    expect(first.status).toBe(201);
+    const copy = (await first.json()) as any;
+    expect(copy.path).toBe("Trip copy.md");
+    expect([copy.pinned, copy.color, copy.publish, copy.searchable]).toEqual([true, "blue", false, false]);
+    expect(readFileSync(file("Trip copy.md"), "utf8")).toBe("---\npinned: true\ncolor: blue\n---\n# Trip\n\nPack the tent\n");
+    // The original is untouched, and a second copy is numbered rather than overwriting the first.
+    expect(readFileSync(file("Trip.md"), "utf8")).toContain("publish: true");
+    expect(((await (await send(token, "POST", "/api/notes/duplicate", { path: "Trip.md" })).json()) as any).path).toBe("Trip copy 1.md");
+
+    expect(((await (await send(token, "POST", "/api/notes/duplicate", { path: "Draw/Plan.excalidraw.md" })).json()) as any).path).toBe(
+      "Draw/Plan copy.excalidraw.md",
+    );
+    expect((await send(token, "POST", "/api/notes/duplicate", { path: "Nope.md" })).status).toBe(404);
+    expect((await send(token, "POST", "/api/notes/duplicate", { path: "../etc/passwd.md" })).status).toBe(400);
+  });
+
   test("a note without a heading takes its new name when renamed", async () => {
     const token = await login();
     await send(token, "POST", "/api/notes", { folder: "", title: "Old name", content: "just text\n" });

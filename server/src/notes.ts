@@ -937,6 +937,26 @@ export class Vault {
     throw new VaultError(409, "too many notes with that name");
   }
 
+  /**
+   * A copy of a note or board beside it, as `Name copy.md` (numbered if taken). It keeps its pin and colour but not
+   * `publish`/`searchable`: a copy shouldn't go public just because its original is.
+   */
+  async duplicate(path: string): Promise<NoteMeta> {
+    path = cleanPath(path, "note");
+    const { content } = await this.read(path);
+    const copy = setFrontmatterKey(setFrontmatterKey(content, "publish", null), "searchable", null);
+    const ext = isBoard(path) ? ".excalidraw.md" : ".md";
+    const stem = `${path.slice(0, -ext.length)} copy`;
+    for (let n = 0; n < 1000; n++) {
+      try {
+        return await this.write(`${stem}${n ? ` ${n}` : ""}${ext}`, copy, null);
+      } catch (err) {
+        if (!(err instanceof VaultError && err.status === 409)) throw err;
+      }
+    }
+    throw new VaultError(409, "too many copies of that note");
+  }
+
   /** Renames a note or a whole folder. Never overwrites. Links to it are not rewritten (yet). */
   async move(from: string, to: string): Promise<void> {
     from = cleanPath(from, "file");
