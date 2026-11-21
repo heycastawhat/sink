@@ -43,6 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.LazyRow
@@ -514,6 +515,16 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
             onPin = { togglePin(current) },
             onColor = { c -> haptics.confirm(); act { if (c == null) vm.setCardMeta(n.path, clearColor = true) else vm.setCardMeta(n.path, color = c) } },
             onMove = { cardMenu = null; movingNote = current },
+            onDuplicate = {
+                cardMenu = null
+                haptics.confirm()
+                scope.launch {
+                    var copy: String? = null
+                    vm.duplicateCard(n.path) { copy = it }?.let { snackbar.showSnackbar(it); return@launch }
+                    val made = copy ?: return@launch
+                    if (snackbar.showSnackbar("Copy made", actionLabel = "Open") == SnackbarResult.ActionPerformed) onOpen(made)
+                }
+            },
             onArchive = { cardMenu = null; scope.launch { archive(n) } },
             onDelete = { cardMenu = null; haptics.reject(); act { vm.trashCard(n.path) } },
             onDismiss = { cardMenu = null },
@@ -700,6 +711,7 @@ private fun CardActionsSheet(
     onPin: () -> Unit,
     onColor: (String?) -> Unit,
     onMove: () -> Unit,
+    onDuplicate: () -> Unit,
     onArchive: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -733,6 +745,7 @@ private fun CardActionsSheet(
             }
             Item(if (n.pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (n.pinned) "Unpin" else "Pin", onClick = onPin)
             Item(Icons.AutoMirrored.Outlined.DriveFileMove, "Move to folder", onClick = onMove)
+            Item(Icons.Outlined.ContentCopy, "Make a copy", onClick = onDuplicate)
             val archived = n.path.startsWith("Archive/", ignoreCase = true)
             Item(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive", onClick = onArchive)
             Item(Icons.Outlined.Delete, "Delete", danger = true, onClick = onDelete)

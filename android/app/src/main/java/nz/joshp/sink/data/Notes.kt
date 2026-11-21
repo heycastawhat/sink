@@ -219,6 +219,12 @@ suspend fun Api.moveNote(from: String, to: String) {
     call(request("/api/notes/move").post(jsonBody(body)).build()) { }
 }
 
+/** A copy beside the note, `Name copy.md` (numbered if taken); without publish/searchable. */
+suspend fun Api.duplicateNote(path: String): NoteMeta {
+    val body = buildJsonObject { put("path", path) }
+    return call(request("/api/notes/duplicate").post(jsonBody(body)).build()) { json.decodeFromString(it) }
+}
+
 /** Moves a note to the trash; returns where it went, for [restoreNote]. */
 suspend fun Api.trashNote(path: String): String =
     call(authed(pathUrl("/api/notes/file", path)).delete().build()) { json.decodeFromString<Trashed>(it).trashedTo }

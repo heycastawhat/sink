@@ -35,6 +35,7 @@ import nz.joshp.sink.data.createFolder
 import nz.joshp.sink.data.createNote
 import nz.joshp.sink.data.fillTemplate
 import nz.joshp.sink.data.note
+import nz.joshp.sink.data.duplicateNote
 import nz.joshp.sink.data.moveNote
 import nz.joshp.sink.data.noteMeta
 import nz.joshp.sink.data.restoreFolder
@@ -366,6 +367,11 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         api.moveNote(path, dest)
         store.forget(path)
         renameOpened(path, dest)
+    }
+
+    /** Copies a note beside itself; [onCopy] gets the copy's path. */
+    suspend fun duplicateCard(path: String, onCopy: (String) -> Unit = {}): String? = cardChange(path, "Too many copies of that note") { api ->
+        onCopy(api.duplicateNote(path).path)
     }
 
     suspend fun trashCard(path: String): String? = cardChange(path) { api ->
