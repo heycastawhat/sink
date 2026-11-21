@@ -23,6 +23,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.ui.unit.IntSize
 import android.annotation.SuppressLint
 import android.content.Context
+import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.WindowInsets
@@ -50,10 +51,12 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.EnterExitState
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -421,30 +424,48 @@ fun NoteScreen(
         }
     }
 
+    /** Saves the latest text outside this screen's scope, so it finishes even if the screen goes. */
+    fun saveInBackground() {
+        saveJob?.cancel()
+        if (ed.dirty && !(ed.path == null && ed.current.isBlank())) {
+            val app = context.applicationContext
+            NoteSaver.scope.launch {
+                // After any save still in flight, so the hash is the one it got back.
+                saveLock.withLock {
+                    if (!ed.dirty) return@withLock
+                    val edit = PendingEdit(ed.key, ed.path, ed.folder, ed.hash, ed.current)
+                    val result = vm.api()?.let { NoteSaver.save(app, it, edit) }
+                    // The screen may still be open (saved on pause): carry on from this file and hash.
+                    if (result is SaveResult.Saved) {
+                        ed.path = ed.path ?: result.meta.path
+                        ed.hash = result.meta.hash
+                        ed.saved = edit.text
+                    }
+                }
+            }
+        }
+    }
+
     fun readAndSave(w: WebView, then: () -> Unit) {
         w.evaluateJavascript("window.sink.getText()") { raw ->
             val text = runCatching { json.decodeFromString<String>(raw) }.getOrNull()
             if (text != null) ed.current = text
-            saveJob?.cancel()
-            if (ed.dirty && !(ed.path == null && ed.current.isBlank())) {
-                val app = context.applicationContext
-                NoteSaver.scope.launch {
-                    // After any save still in flight, so the hash is the one it got back.
-                    saveLock.withLock {
-                        if (!ed.dirty) return@withLock
-                        val edit = PendingEdit(ed.key, ed.path, ed.folder, ed.hash, ed.current)
-                        val result = vm.api()?.let { NoteSaver.save(app, it, edit) }
-                        // The screen may still be open (saved on pause): carry on from this file and hash.
-                        if (result is SaveResult.Saved) {
-                            ed.path = ed.path ?: result.meta.path
-                            ed.hash = result.meta.hash
-                            ed.saved = edit.text
-                        }
-                    }
-                }
-            }
+            saveInBackground()
             then()
         }
+    }
+
+    /**
+     * The page's renderer died. Left alone, the WebView takes the whole app down with it, so drop it, save the last
+     * text the page sent (it can't be asked for more now) and close the note.
+     */
+    fun rendererGone(w: WebView) {
+        if (web === w) web = null
+        (w.parent as? ViewGroup)?.removeView(w)
+        w.destroy()
+        saveInBackground()
+        Toast.makeText(context, "The editor stopped, so the note was closed. Open it again to carry on.", Toast.LENGTH_LONG).show()
+        if (!ed.closed) onBack()
     }
 
     /**
@@ -857,7 +878,7 @@ fun NoteScreen(
                         }
                     },
                     onEmbed = ::sendEmbed,
-                )).also { web = it; it.pullDown = pullDown } },
+                ), onRendererGone = ::rendererGone).also { web = it; it.pullDown = pullDown } },
                 modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = pageBottom),
             )
             // While typing, the bar above the keyboard is for formatting; the note's toolbar comes back with the keyboard down.
@@ -1203,7 +1224,7 @@ private fun readPicked(context: Context, uri: Uri): Triple<String, String, ByteA
  * page. `https://sink.attachment/<name>` images come from the server with our token, cached on disk.
  */
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
-private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge): NoteWebView {
+private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge, onRendererGone: (WebView) -> Unit): NoteWebView {
     val assets = WebViewAssetLoader.Builder()
         .addPathHandler("/", WebViewAssetLoader.PathHandler { path ->
             runCatching {
@@ -1254,6 +1275,12 @@ private fun editorWebView(context: Context, vm: NotesViewModel, bridge: Bridge):
 
             // The page never navigates; links go through the bridge.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
+
+            // True: we handle it (by dropping this WebView), rather than the system killing the app.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                onRendererGone(view)
+                return true
+            }
         }
         loadUrl(EDITOR_URL)
     }

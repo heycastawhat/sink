@@ -40,8 +40,13 @@
 }
 
 /* One muted colour for the whole hint, title line included: it's bigger, not darker or lighter. */
+/* Taps go through it to the empty line. Android's double-tap otherwise selects "Title" inside the non-editable hint,
+   which can take down the WebView's renderer (and the app with it). */
 .note-editor .cm-placeholder {
   color: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 85%, transparent);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .cm-hint-title {
