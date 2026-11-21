@@ -1180,6 +1180,31 @@ describe("notes", () => {
     await reader.cancel();
   });
 
+  test("live events: Bun's idle timeout doesn't cut the stream between keep-alives", async () => {
+    const token = await login();
+    // A 1s idle limit for the test (Bun's default is 10s); Bun checks it about every 4s, so 6s of silence is past it.
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 1, fetch: (req, srv) => setup.app.fetch(req, srv) });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/events`, { headers: { authorization: `Bearer ${token}` } });
+      const reader = res.body!.getReader();
+      let seen = "";
+      const until = async (needle: string) => {
+        while (!seen.includes(needle)) {
+          const { value, done } = await reader.read();
+          if (done) throw new Error(`stream closed before ${needle}`);
+          seen += new TextDecoder().decode(value);
+        }
+      };
+      await until("event: ready");
+      await Bun.sleep(6000);
+      await send(token, "POST", "/api/notes", { title: "Later", content: "# Later\n" });
+      await until("Later.md");
+      await reader.cancel();
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
+
   test("renaming only the case of a note works", async () => {
     const token = await login();
     await send(token, "POST", "/api/notes", { title: "shopping", content: "# shopping\n" });

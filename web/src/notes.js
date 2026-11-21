@@ -1719,14 +1719,25 @@ export function listenForChanges() {
     }
     if (screen.path && (change.path === screen.path || change.from === screen.path)) refreshOpenNote();
     else if (screen.editor && change.path) screen.editor.refreshEmbed?.(change.from ?? change.path);
-    // A burst of autosaves is one refresh.
-    clearTimeout(changeTimer);
-    changeTimer = setTimeout(async () => {
-      await loadNotes();
-      if (!$('todos')?.hidden) loadTodos();
-      else loadTodoBadge();
-    }, 400);
+    refreshSoon();
   });
+  // Every connection starts with "ready". After the first, the stream dropped and came back, and whatever changed
+  // in between was never sent: catch up on everything shown.
+  let connected = false;
+  source.addEventListener('ready', () => {
+    if (!connected) return void (connected = true);
+    if (screen.path) refreshOpenNote();
+    refreshSoon();
+  });
+}
+/** The grid and todos refresh after a change; a burst of autosaves is one refresh. */
+function refreshSoon() {
+  clearTimeout(changeTimer);
+  changeTimer = setTimeout(async () => {
+    await loadNotes();
+    if (!$('todos')?.hidden) loadTodos();
+    else loadTodoBadge();
+  }, 400);
 }
 
 /**
