@@ -659,7 +659,7 @@ fun NoteScreen(
     }
     LaunchedEffect(pageReady) {
         if (!pageReady) return@LaunchedEffect
-        vm.changes.collect { c -> if (c.path == ed.path || c.from == ed.path) refreshOpen() }
+        vm.changes.collect { c -> if (c.type == "ready" || c.path == ed.path || c.from == ed.path) refreshOpen() }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->

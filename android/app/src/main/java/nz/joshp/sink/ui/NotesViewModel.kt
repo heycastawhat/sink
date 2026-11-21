@@ -97,10 +97,12 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Follows the server's live changes while the app is in front: each one is passed on to [changes], and a burst of
-     * them refreshes the notes (and todos) once. Reconnects after a drop, waiting longer each time it fails.
+     * them refreshes the notes (and todos) once. Reconnects after a drop, waiting longer each time it fails; what
+     * changed while it was down was never sent, so a reconnect refreshes everything (and the open note) too.
      */
     suspend fun listen() {
         var wait = 2_000L
+        var connected = false
         while (true) {
             val api = api()
             if (api != null) {
@@ -108,6 +110,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 val ok = runCatching {
                     api.changes().collect { c ->
                         wait = 2_000L
+                        if (c.type == "ready" && !connected) {
+                            connected = true
+                            return@collect
+                        }
                         changes.emit(c)
                         refresh?.cancel()
                         refresh = viewModelScope.launch {

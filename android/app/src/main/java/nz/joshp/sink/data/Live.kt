@@ -10,7 +10,10 @@ import kotlinx.serialization.Serializable
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** A change on the server: a note created, updated, deleted or moved (from [from]), or a todo ticked. */
+/**
+ * A change on the server: a note created, updated, deleted or moved (from [from]), or a todo ticked. Each connection
+ * also starts with a `ready` one (no path).
+ */
 @Serializable
 data class Change(val type: String, val path: String, val from: String? = null)
 
@@ -30,6 +33,7 @@ fun Api.changes(): Flow<Change> = callbackFlow {
                 val line = source.readUtf8Line() ?: break
                 when {
                     line.startsWith("event:") -> event = line.removePrefix("event:").trim()
+                    line.startsWith("data:") && event == "ready" -> trySend(Change("ready", ""))
                     line.startsWith("data:") && event == "change" ->
                         runCatching { json.decodeFromString<Change>(line.removePrefix("data:").trim()) }.getOrNull()?.let { trySend(it) }
                     line.isEmpty() -> event = ""
