@@ -28,6 +28,7 @@ import { createEditor } from './editor.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
 import { decodeLink } from './util.js';
+import { deferredEditorText } from './deferred-editor-text.js';
 
 const bridge = window.SinkBridge ?? {
   ready() {},
@@ -55,6 +56,7 @@ const loadEmbed = (target) =>
   });
 
 let editor = null;
+const loadingText = deferredEditorText();
 let links = [];
 let timer = null;
 let inset = 0;
@@ -79,7 +81,7 @@ window.sink = {
     editor?.destroy();
     editor = createEditor({
       parent: document.getElementById('editor'),
-      doc: text,
+      doc: loadingText.take(text),
       onChange: (t) => {
         clearTimeout(timer);
         timer = setTimeout(() => bridge.changed(t), 250);
@@ -99,7 +101,7 @@ window.sink = {
     else if (!text.trim()) editor.focus(true);
   },
   setText(text) {
-    editor?.setText(text);
+    loadingText.replace(editor, text);
   },
   insert(text) {
     if (!editor) return;
@@ -174,7 +176,7 @@ async function loadBoard(text, dark, colors) {
   editor?.destroy();
   editor = createBoard({
     parent: document.getElementById('editor'),
-    text,
+    text: loadingText.take(text),
     dark,
     attachmentUrl: attachment,
     // Boards only change on a stroke's end, and serializing the scene isn't free: send it a little less often.
