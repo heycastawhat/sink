@@ -11,10 +11,12 @@ import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import nz.joshp.sink.data.changes
 import nz.joshp.sink.data.Change
+import nz.joshp.sink.data.LiveEvent
+import nz.joshp.sink.data.liveEvents
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,6 +51,7 @@ import nz.joshp.sink.data.editTodo
 import nz.joshp.sink.data.reminderTime
 import nz.joshp.sink.data.todoCount
 import nz.joshp.sink.reminders.ReminderSync
+import java.io.IOException
 
 data class NotesState(
     val notes: List<NoteMeta> = emptyList(),
@@ -96,28 +99,31 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     val changes = MutableSharedFlow<Change>(extraBufferCapacity = 32)
 
     /**
-     * Follows the server's live changes while the app is in front: each one is passed on to [changes], and a burst of
-     * them refreshes the notes (and todos) once. Reconnects after a drop, waiting longer each time it fails.
+     * Catch up once the stream is ready, since changes made while disconnected are not replayed. While connected,
+     * pass each change to [changes] and refresh the lists once per burst.
      */
-    suspend fun listen() {
+    suspend fun listen(): Unit = coroutineScope {
         var wait = 2_000L
+        var refreshJob: Job? = null
         while (true) {
             val api = api()
             if (api != null) {
-                var refresh: Job? = null
-                val ok = runCatching {
-                    api.changes().collect { c ->
+                try {
+                    api.liveEvents().collect { event ->
                         wait = 2_000L
-                        changes.emit(c)
-                        refresh?.cancel()
-                        refresh = viewModelScope.launch {
+                        val change = (event as? LiveEvent.Changed)?.change
+                        if (change != null) changes.emit(change)
+                        refreshJob?.cancel()
+                        refreshJob = launch {
                             delay(400)
                             refresh()
-                            if (c.type.startsWith("todo.") || _todos.value.loaded) loadTodos() else loadTodoBadge()
+                            if (_todos.value.loaded || change?.type?.startsWith("todo.") == true) loadTodos() else loadTodoBadge()
                         }
                     }
+                    wait = 2_000L
+                } catch (_: IOException) {
+                    // Back off until the next connection attempt.
                 }
-                if (ok.isSuccess) wait = 2_000L
             }
             delay(wait)
             wait = (wait * 2).coerceAtMost(60_000L)

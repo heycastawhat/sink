@@ -4,8 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -14,31 +14,41 @@ import java.util.concurrent.TimeUnit
 @Serializable
 data class Change(val type: String, val path: String, val from: String? = null)
 
+internal sealed interface LiveEvent {
+    data object Ready : LiveEvent
+    data class Changed(val change: Change) : LiveEvent
+}
+
 /**
  * The server's live change stream (GET /api/events, Server-Sent Events), until it closes or fails. The server sends a
  * keep-alive every 25s, so a read that waits 90s means the connection is gone.
  */
-fun Api.changes(): Flow<Change> = callbackFlow {
+internal fun Api.liveEvents(): Flow<LiveEvent> = callbackFlow {
     val client = Http.client.newBuilder().readTimeout(90, TimeUnit.SECONDS).build()
     val call = client.newCall(request("/api/events").header("Accept", "text/event-stream").build())
-    try {
-        call.execute().use { res ->
-            if (!res.isSuccessful) throw ApiException(res.code, "events: HTTP ${res.code}")
-            val source = res.body.source()
-            var event = ""
-            while (isActive) {
-                val line = source.readUtf8Line() ?: break
-                when {
-                    line.startsWith("event:") -> event = line.removePrefix("event:").trim()
-                    line.startsWith("data:") && event == "change" ->
-                        runCatching { json.decodeFromString<Change>(line.removePrefix("data:").trim()) }.getOrNull()?.let { trySend(it) }
-                    line.isEmpty() -> event = ""
+    // Keep the blocking read off the producer so cancellation can close the socket immediately.
+    launch(Dispatchers.IO) {
+        try {
+            call.execute().use { res ->
+                if (!res.isSuccessful) throw ApiException(res.code, "events: HTTP ${res.code}")
+                val source = res.body.source()
+                var event = ""
+                while (isActive) {
+                    val line = source.readUtf8Line() ?: break
+                    when {
+                        line.startsWith("event:") -> event = line.removePrefix("event:").trim()
+                        line.startsWith("data:") && event == "ready" -> send(LiveEvent.Ready)
+                        line.startsWith("data:") && event == "change" ->
+                            runCatching { json.decodeFromString<Change>(line.removePrefix("data:").trim()) }
+                                .getOrNull()?.let { send(LiveEvent.Changed(it)) }
+                        line.isEmpty() -> event = ""
+                    }
                 }
             }
+            close()
+        } catch (e: IOException) {
+            close(e)
         }
-        close()
-    } catch (e: IOException) {
-        close(e)
     }
     awaitClose { call.cancel() }
-}.flowOn(Dispatchers.IO)
+}
