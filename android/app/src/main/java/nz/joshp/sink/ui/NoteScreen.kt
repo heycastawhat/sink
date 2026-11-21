@@ -775,6 +775,18 @@ fun NoteScreen(
     }
 
     /** Keep's Archive: moves the note into Archive/ (or, from there, back to the top level) and leaves the note. */
+    /** Saved first, so the copy has what's on screen; then the copy opens over this note, and Back comes back here. */
+    fun duplicate() {
+        scope.launch {
+            saveJob?.cancel()
+            save()
+            val from = ed.path ?: return@launch snackbar.showSnackbar("Write something first").let { }
+            var copy: String? = null
+            vm.duplicateCard(from) { copy = it }?.let { snackbar.showSnackbar(it); return@launch }
+            copy?.let(onOpenNote)
+        }
+    }
+
     fun archive() {
         saveJob?.cancel()
         val p = ed.path ?: return
@@ -990,6 +1002,7 @@ fun NoteScreen(
                     NoteAction.GoTo -> onSwitch()
                     NoteAction.Move -> moving = true
                     NoteAction.Rename -> renaming = true
+                    NoteAction.Duplicate -> { haptics.confirm(); duplicate() }
                     NoteAction.Archive -> { haptics.confirm(); archive() }
                     NoteAction.Delete -> { haptics.reject(); trash() }
                 }
@@ -1144,7 +1157,7 @@ private fun FormatBar(onFormat: (String) -> Unit, onImage: () -> Unit, onDone: (
     }
 }
 
-private enum class NoteAction { Image, Template, Share, History, GoTo, Move, Rename, Archive, Delete }
+private enum class NoteAction { Image, Template, Share, History, GoTo, Move, Rename, Duplicate, Archive, Delete }
 
 /**
  * The note's options in a sheet, bottom up where the thumb is: its colour, then the common actions as big tiles,
@@ -1202,6 +1215,7 @@ private fun NoteActionsSheet(board: Boolean, color: String?, saved: Boolean, arc
             Item(NoteAction.GoTo, Icons.Outlined.Search, "Go to note")
             Item(NoteAction.Move, Icons.AutoMirrored.Outlined.DriveFileMove, "Move to folder")
             Item(NoteAction.Rename, Icons.Outlined.DriveFileRenameOutline, "Rename")
+            if (saved) Item(NoteAction.Duplicate, Icons.Outlined.ContentCopy, "Make a copy")
             if (saved) Item(NoteAction.Archive, if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive")
             Item(NoteAction.Delete, Icons.Outlined.Delete, "Delete", danger = true)
         }
