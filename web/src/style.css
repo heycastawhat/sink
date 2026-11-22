@@ -1934,9 +1934,9 @@ button.due:hover {
 
 .folder-tiles {
   display: grid;
-  /* Same columns and gap as the Recent row; auto-fit stretches a few tiles across the whole width. */
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
+  /* Drive-sized tiles; auto-fill keeps the empty columns, so a couple of folders don't stretch across the page. */
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
 }
 
 .folder-tile {
