@@ -70,6 +70,30 @@ m3e-form-field {
   text-align: center;
 }
 
+.setup {
+  position: relative;
+}
+
+/* The form only groups the fields; .setup lays them out. */
+#setup-form {
+  display: contents;
+}
+
+.setup .corner {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+/* The menu under the sign-in screen's ⋮, right-aligned to it. */
+.setup-menu {
+  top: 52px;
+  left: auto;
+  right: 12px;
+  min-width: 200px;
+  text-align: left;
+}
+
 .setup .logo {
   border-radius: 22px;
 }

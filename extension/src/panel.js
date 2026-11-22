@@ -9,13 +9,15 @@ import '@m3e/web/snackbar';
 import '../../web/src/fonts.css';
 import { createEditor } from '../../web/src/editor.js';
 import { decodeLink } from '../../web/src/util.js';
+import { demoApi } from './demo.js';
 import { grab } from './grab.js';
 import './panel.css';
 
 const $ = (id) => document.getElementById(id);
 const SAVE_DELAY = 800;
 
-let cfg = { server: '', token: '', folder: 'Inbox' };
+// demo: the panel talks to demo.js, a stand-in server in the extension, instead of a real one.
+let cfg = { server: '', token: '', folder: 'Inbox', demo: false };
 let notes = [];
 // The note being edited; path is null until a new note has some words.
 let note = { path: null, hash: null, saved: '' };
@@ -33,6 +35,7 @@ class ApiError extends Error {
 }
 
 async function api(path, { method = 'GET', body } = {}) {
+  if (cfg.demo) return demoApi(path, { method, body });
   const res = await fetch(`${cfg.server}/api${path}`, {
     method,
     headers: { authorization: `Bearer ${cfg.token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
@@ -91,8 +94,8 @@ async function signIn(origin) {
 
 async function signOut() {
   // Revoke the token too, so it doesn't linger in Settings → Devices.
-  if (cfg.token) await fetch(`${cfg.server}/api/auth/logout`, { method: 'POST', headers: { authorization: `Bearer ${cfg.token}` } }).catch(() => {});
-  cfg = { ...cfg, token: '' };
+  if (cfg.token && !cfg.demo) await fetch(`${cfg.server}/api/auth/logout`, { method: 'POST', headers: { authorization: `Bearer ${cfg.token}` } }).catch(() => {});
+  cfg = { ...cfg, token: '', demo: false };
   await chrome.storage.local.set({ cfg });
   show();
 }
@@ -286,7 +289,7 @@ async function addSelection(page) {
 
 // A right-click or the shortcut, sent over by the background worker.
 async function runJob(job) {
-  if (!job || Date.now() - job.at > 60_000 || !cfg.token) return;
+  if (!job || Date.now() - job.at > 60_000 || !(cfg.token || cfg.demo)) return;
   await chrome.storage.session.remove('job');
   if (job.kind === 'unreadable') return toast("Sink can't read this page (browser pages and the Web Store are off limits).");
   if (job.kind === 'page') return clipPage(job);
@@ -347,14 +350,15 @@ function toast(text) {
 }
 
 async function show() {
-  const signedIn = !!cfg.token;
+  const signedIn = !!cfg.token || cfg.demo;
   $('setup').hidden = signedIn;
   $('main').hidden = !signedIn;
   if (!signedIn) {
     $('server').value = cfg.server;
     return $('server').focus();
   }
-  $('signed-in').textContent = cfg.server;
+  $('signed-in').textContent = cfg.demo ? 'the demo. Its notes stay in this browser.' : cfg.server;
+  $('sign-out-label').textContent = cfg.demo ? 'Leave the demo' : 'Sign out';
   $('folder').value = cfg.folder;
   try {
     await loadNotes();
@@ -392,6 +396,17 @@ $('setup').addEventListener('submit', (e) => {
   });
 });
 
+$('setup-more').addEventListener('click', () => {
+  $('setup-menu').hidden = !$('setup-menu').hidden;
+  $('setup-more').setAttribute('aria-expanded', String(!$('setup-menu').hidden));
+});
+$('demo').addEventListener('click', async () => {
+  $('setup-menu').hidden = true;
+  cfg = { ...cfg, demo: true };
+  await chrome.storage.local.set({ cfg, last: 'Welcome.md' });
+  show();
+});
+
 $('new').addEventListener('click', newNote);
 $('find').addEventListener('input', find);
 $('find').addEventListener('focus', find);
@@ -413,6 +428,7 @@ $('results').addEventListener('click', (e) => {
 });
 document.addEventListener('click', (e) => {
   if (!e.target.closest('#results, #find-bar')) $('results').hidden = true;
+  if (!e.target.closest('#setup-menu, #setup-more')) $('setup-menu').hidden = true;
   if (!e.target.closest('#settings, #more')) {
     $('settings').hidden = true;
     $('more').setAttribute('aria-expanded', 'false');

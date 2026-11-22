@@ -10,7 +10,18 @@ const fromWeb: import("bun").BunPlugin = {
     build.onResolve({ filter: /^@(m3e|fontsource-variable)\// }, (args) => ({ path: Bun.resolveSync(args.path, `${import.meta.dir}/../web/src`) }));
   },
 };
-const common = { outdir: "dist", plugins: [fromWeb], target: "browser", minify: true, naming: { entry: "[name].[ext]", chunk: "[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" } } as const;
+// The demo (src/demo.js) runs the server's quick-todo and HTML-to-markdown code in the panel. todos.ts also holds the
+// todo routes, which need the vault (node:fs); the demo never calls them, so the vault is a stub here.
+const fromServer: import("bun").BunPlugin = {
+  name: "from-server",
+  setup(build) {
+    build.onResolve({ filter: /^@mozilla\/readability$/ }, (args) => ({ path: Bun.resolveSync(args.path, `${import.meta.dir}/../server/src`) }));
+    build.onResolve({ filter: /^\.\/notes$/ }, (args) =>
+      args.importer.endsWith("/server/src/todos.ts") ? { path: `${import.meta.dir}/src/demo-vault-stub.js` } : undefined,
+    );
+  },
+};
+const common = { outdir: "dist", plugins: [fromWeb, fromServer], target: "browser", minify: true, naming: { entry: "[name].[ext]", chunk: "[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" } } as const;
 const results = [
   // panel.html is copied as it is: Bun's HTML bundling links the wrong chunk once code is split. Splitting is on so
   // code languages load only when a note has that fenced block.

@@ -22,6 +22,14 @@ cd ../extension && bun run build
 Open `chrome://extensions`, turn on Developer mode, and **Load unpacked** the `extension/dist` folder. `bun run zip`
 makes `sink-extension.zip` for the Chrome Web Store.
 
+## Demo
+
+No server yet? On the sign-in screen, ⋮ → **Try the demo**. It runs a stand-in for a Sink server inside the extension,
+with a few sample notes kept in the browser: the editor, todos (using the server's own quick-add parsing), search and
+clipping (using the server's own HTML-to-markdown) all work, and nothing is sent anywhere. ⋮ → **Leave the demo** goes
+back to the sign-in screen; the demo's notes stay for next time. `src/demo.js` answers the same API calls as the
+server.
+
 ## Signing in
 
 Enter your server's address; Chrome asks to let the extension reach it (the only site it can reach until you allow

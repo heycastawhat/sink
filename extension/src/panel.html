@@ -9,20 +9,26 @@
   <body>
     <!-- The web app's theme: same seed colour, variant and motion, so the panel looks like Sink. -->
     <m3e-theme id="theme" color="#6750A4" variant="tonal-spot" motion="expressive" scheme="auto">
-      <form id="setup" class="setup" hidden>
-        <img src="icons/icon-128.png" alt="" class="logo" width="72" height="72" />
-        <h1 class="wordmark">Sink</h1>
-        <p class="muted">Sign in to your Sink server to write notes, add todos and clip pages from here.</p>
-        <m3e-form-field variant="outlined" hide-subscript>
-          <m3e-icon slot="prefix" name="dns"></m3e-icon>
-          <label slot="label" for="server">Server address</label>
-          <input id="server" type="url" placeholder="https://notes.example.com" required autocomplete="url" />
-        </m3e-form-field>
-        <m3e-button id="sign-in" variant="filled" size="medium" type="submit">
-          <m3e-icon slot="icon" name="key"></m3e-icon>Sign in
-        </m3e-button>
-        <p id="setup-error" class="error" hidden></p>
-      </form>
+      <section id="setup" class="setup" hidden>
+        <m3e-icon-button id="setup-more" class="corner" aria-label="More" title="More" aria-expanded="false"><m3e-icon name="more_vert"></m3e-icon></m3e-icon-button>
+        <div id="setup-menu" class="menu setup-menu" hidden>
+          <button class="menu-item" id="demo" type="button"><m3e-icon name="science"></m3e-icon><span>Try the demo</span></button>
+        </div>
+        <form id="setup-form">
+          <img src="icons/icon-128.png" alt="" class="logo" width="72" height="72" />
+          <h1 class="wordmark">Sink</h1>
+          <p class="muted">Sign in to your Sink server to write notes, add todos and clip pages from here.</p>
+          <m3e-form-field variant="outlined" hide-subscript>
+            <m3e-icon slot="prefix" name="dns"></m3e-icon>
+            <label slot="label" for="server">Server address</label>
+            <input id="server" type="url" placeholder="https://notes.example.com" autocomplete="url" />
+          </m3e-form-field>
+          <m3e-button id="sign-in" variant="filled" size="medium" type="submit">
+            <m3e-icon slot="icon" name="key"></m3e-icon>Sign in
+          </m3e-button>
+          <p id="setup-error" class="error" hidden></p>
+        </form>
+      </section>
 
       <main id="main" hidden>
         <header class="bar">
@@ -42,7 +48,7 @@
           </m3e-form-field>
           <p class="muted">Signed in to <span id="signed-in"></span></p>
           <button class="menu-item" id="allow-all" type="button"><m3e-icon name="travel_explore"></m3e-icon><span>Clip from the panel on any site</span></button>
-          <button class="menu-item" id="sign-out" type="button"><m3e-icon name="logout"></m3e-icon><span>Sign out</span></button>
+          <button class="menu-item" id="sign-out" type="button"><m3e-icon name="logout"></m3e-icon><span id="sign-out-label">Sign out</span></button>
         </div>
         <div class="sheet">
           <div class="note-head">

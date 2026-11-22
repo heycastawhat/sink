@@ -10,3 +10,6 @@ The extension talks to one place: the Sink server you sign in to, which you run 
 - Nothing goes to the extension's authors or anyone else. No analytics, no tracking, no ads, nothing sold.
 
 Signing out revokes the token on your server and forgets it here.
+
+**The demo** (⋮ → Try the demo on the sign-in screen) talks to nothing at all: its notes, todos and clips are kept only in
+this browser's extension storage.

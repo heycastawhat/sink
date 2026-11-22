@@ -14,3 +14,5 @@ dist/
 docker-compose.override.yml
 # Private handoff notes (hosts, deploy details).
 HANDOFF.local.md
+# Built Chrome extension package (bun run zip in extension/).
+/extension/sink-extension.zip
