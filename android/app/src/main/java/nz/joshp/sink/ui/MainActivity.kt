@@ -323,6 +323,7 @@ class MainActivity : ComponentActivity() {
         val settings = (application as SinkApp).settings
         val notesVm: NotesViewModel = viewModel(key = "notes:" + session.token)
         val nav = rememberNavController()
+        ClearFocusOnNavigation(nav)
         // Settings is a page over Notes (from its menu), so back from it lands there.
         LaunchedEffect(Unit) { if (openSettings) nav.navigate("settings") { launchSingleTop = true } }
         // Wide enough (a tablet, an unfolded phone): the notes stay on the left with the open note beside them.
