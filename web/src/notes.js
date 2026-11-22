@@ -1178,6 +1178,7 @@ function clearNewDraft() {
 
 /** Keeps unsaved text in the browser, so a crash or a dead NAS doesn't lose it. */
 function stashUnsaved() {
+  if (!dirty()) return clearUnsaved(screen.path);
   try {
     localStorage.setItem(draftKey(screen.path), JSON.stringify({ base: screen.hash, text: screen.editor.getText(), at: Date.now() }));
   } catch {}
