@@ -2409,11 +2409,21 @@ body.dragging-note [data-drop-folder] {
   flex: none;
 }
 
+/* The box sits beside the first line; centred, it drifts down beside the middle of a task that wraps. */
 .recent-preview .task {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
   --m3e-icon-size: 14px;
+}
+
+.recent-preview .task m3e-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.recent-preview .task.done .cl {
+  text-decoration: line-through;
 }
 
 .recent-board {
