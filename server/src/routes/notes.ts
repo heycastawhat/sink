@@ -53,13 +53,16 @@ const listQuery = z.object({
 export async function attachmentResponse(vault: Vault, path: string): Promise<Response> {
   const bytes = await vault.readFile(path);
   const type = TYPES[extname(path).toLowerCase()];
+  // Browsers won't open a PDF in their viewer under `sandbox`; the viewer runs no script of the file's on this origin.
+  const sandbox = type === "application/pdf" ? "" : "sandbox; ";
   return new Response(bytes, {
     headers: {
       "content-type": type ?? "application/octet-stream",
-      "content-security-policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+      "content-security-policy": `${sandbox}default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'`,
       "x-content-type-options": "nosniff",
       "cache-control": "private, max-age=300",
-      ...(!type && { "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(path.split("/").pop()!)}` }),
+      // Named, so a PDF's viewer tab and download carry its name rather than "attachment".
+      "content-disposition": `${type ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(path.split("/").pop()!)}`,
     },
   });
 }
@@ -93,9 +96,10 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     if (!parsed.success) return c.json({ error: "invalid query" }, 400);
     const { q, limit } = parsed.data;
     if (c.req.query("brief") === "true") return c.json({ notes: vault.manifest() });
-    if (!q?.trim()) return c.json(vault.list());
+    if (!q?.trim()) return run(c, async () => c.json({ ...vault.list(), files: await vault.documents() }));
     const fts = toFtsQuery(q);
-    return c.json({ items: fts ? vault.search(fts, limit) : [] });
+    // `files`: PDFs in folders whose text matches, apart from the notes since clients show them differently.
+    return c.json({ items: fts ? vault.search(fts, limit) : [], files: fts ? vault.searchDocuments(fts, limit) : [] });
   });
 
   app.post("/notes/scan", (c) => run(c, async () => c.json(await vault.scan())));
@@ -297,7 +301,9 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const file = form?.get("file");
       if (!(file instanceof File)) return c.json({ error: "need a file" }, 400);
       if (file.size > maxUploadBytes) return c.json({ error: "too large" }, 413);
-      const path = await vault.saveAttachment(file.name || "file", new Uint8Array(await file.arrayBuffer()));
+      // `folder`: file it there (a PDF dropped into a folder) rather than in attachments/.
+      const folder = form?.get("folder");
+      const path = await vault.saveAttachment(file.name || "file", new Uint8Array(await file.arrayBuffer()), typeof folder === "string" ? folder : undefined);
       return c.json({ path, embed: `![[${path.split("/").pop()}]]` }, 201);
     }),
   );

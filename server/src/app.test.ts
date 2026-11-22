@@ -1495,6 +1495,78 @@ describe("notes", () => {
     expect(existsSync(file(".trash/From Obsidian.md"))).toBe(false);
   });
 
+  test("PDFs filed in folders: one only a private note embeds is hidden from assistants", async () => {
+    const owner = await login();
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    setup.vault.extractor = async (abs: string) => Bun.file(abs).text();
+    mkdirSync(file("Papers"));
+    writeFileSync(file("Papers/Will.pdf"), "last will");
+    writeFileSync(file("Papers/Menu.pdf"), "pizza menu");
+    writeFileSync(file("Estate.md"), "---\nprivate: true\n---\n# Estate\n\n![[Will.pdf]]\n");
+    await setup.vault.scan();
+    await setup.vault.indexAttachments();
+    const files = async (token: string, query = "") => (((await (await get(token, `/api/notes${query}`)).json()) as any).files as any[]).map((f) => f.path).sort();
+    expect(await files(owner)).toEqual(["Papers/Menu.pdf", "Papers/Will.pdf"]);
+    expect(await files(mcp)).toEqual(["Papers/Menu.pdf"]);
+    expect(await files(mcp, "?q=will")).toEqual([]);
+    expect((await get(mcp, "/api/notes/attachment?path=Papers/Will.pdf")).status).toBe(404);
+  });
+
+  test("PDFs filed in folders: upload, list with their text, search, move, trash and restore", async () => {
+    const token = await login();
+    setup.vault.extractor = async (abs: string) => Bun.file(abs).text();
+    const events: any[] = [];
+    setup.vault.events.on("event", (e) => events.push(e));
+    const upload = (name: string, body: string, folder?: string) => {
+      const form = new FormData();
+      form.set("file", new File([body], name));
+      if (folder !== undefined) form.set("folder", folder);
+      return setup.app.request("/api/notes/attachments", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
+    };
+    const up = (await (await upload("Lease.pdf", "Tenancy\n\fagreement for the flat", "Home/Papers")).json()) as any;
+    expect(up.path).toBe("Home/Papers/Lease.pdf");
+    expect(((await (await upload("Lease.pdf", "second", "Home/Papers")).json()) as any).path).toBe("Home/Papers/Lease 1.pdf");
+    // Embedded files still go to attachments/, and aren't documents.
+    expect(((await (await upload("scan.pdf", "receipt")).json()) as any).path).toBe("attachments/scan.pdf");
+    expect((await upload("x.pdf", "x", "../up")).status).toBe(400);
+    await setup.vault.indexAttachments();
+    expect(events.filter((e) => e.type === "file.changed").map((e) => e.path)).toEqual(["Home/Papers/Lease.pdf", "Home/Papers/Lease 1.pdf"]);
+
+    const list = (await (await get(token, "/api/notes")).json()) as any;
+    expect(list.folders).toContain("Home/Papers");
+    expect(list.files.map((f: any) => [f.path, f.title, f.excerpt]).sort()).toEqual([
+      ["Home/Papers/Lease 1.pdf", "Lease 1", "second"],
+      ["Home/Papers/Lease.pdf", "Lease", "Tenancy agreement for the flat"],
+    ]);
+    const found = (await (await get(token, "/api/notes?q=tenancy")).json()) as any;
+    expect(found.files).toEqual([{ path: "Home/Papers/Lease.pdf", title: "Lease", mtime: expect.any(Number), snippet: "[Tenancy] agreement for the flat" }]);
+    expect(((await (await get(token, "/api/notes?q=receipt")).json()) as any).files).toEqual([]);
+    const served = await get(token, "/api/notes/attachment?path=Home/Papers/Lease.pdf");
+    expect(served.headers.get("content-type")).toBe("application/pdf");
+    expect(served.headers.get("content-security-policy")).not.toContain("sandbox");
+
+    // A PDF copied in from outside shows up on the next scan (the server's first scan, at startup, says nothing).
+    await send(token, "POST", "/api/notes/scan");
+    writeFileSync(file("Home/Bill.pdf"), "power");
+    await send(token, "POST", "/api/notes/scan");
+    expect(((await (await get(token, "/api/notes")).json()) as any).files.map((f: any) => f.path)).toContain("Home/Bill.pdf");
+    expect(events.at(-1)).toMatchObject({ type: "file.changed", path: "Home/Bill.pdf", source: "external" });
+
+    expect((await send(token, "POST", "/api/notes/move", { from: "Home/Bill.pdf", to: "Bills/Power.pdf" })).status).toBe(200);
+    expect(((await (await get(token, "/api/notes")).json()) as any).files.map((f: any) => f.path)).toContain("Bills/Power.pdf");
+
+    await send(token, "DELETE", q("Bills/Power.pdf"));
+    expect(((await (await get(token, "/api/notes")).json()) as any).files.map((f: any) => f.path)).not.toContain("Bills/Power.pdf");
+    const trash = ((await (await get(token, "/api/notes/trash")).json()) as any).items;
+    expect(trash.map((t: any) => [t.path, t.title])).toEqual([["Bills/Power.pdf", "Power"]]);
+    const back = (await (await send(token, "POST", "/api/notes/trash/restore", { path: "Bills/Power.pdf" })).json()) as any;
+    expect(back).toMatchObject({ path: "Bills/Power.pdf", title: "Power" });
+    expect(((await (await get(token, "/api/notes")).json()) as any).files.map((f: any) => f.path)).toContain("Bills/Power.pdf");
+    await send(token, "DELETE", q("Bills/Power.pdf"));
+    expect((await send(token, "DELETE", "/api/notes/trash?path=Bills/Power.pdf")).status).toBe(200);
+    expect(existsSync(file(".trash/Bills/Power.pdf"))).toBe(false);
+  });
+
   test("folders: create, rename, delete and restore a whole folder", async () => {
     const token = await login();
     expect((await send(token, "POST", "/api/notes/folders", { path: "Projects/Empty" })).status).toBe(201);

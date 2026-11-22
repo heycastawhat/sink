@@ -6,6 +6,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import nz.joshp.sink.data.attach
+import nz.joshp.sink.data.attachmentBytes
 import nz.joshp.sink.data.cachedAttachment
 import java.io.File
 import androidx.lifecycle.AndroidViewModel
@@ -55,6 +57,8 @@ import java.io.IOException
 
 data class NotesState(
     val notes: List<NoteMeta> = emptyList(),
+    /** PDFs filed in folders, shown as cards among the notes. */
+    val files: List<NoteMeta> = emptyList(),
     val folders: List<String> = emptyList(),
     val folder: String = "",
     val query: String = "",
@@ -145,7 +149,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        store.list()?.let { cached -> _state.update { it.copy(notes = cached.notes, folders = cached.folders, loaded = true) } }
+        store.list()?.let { cached -> _state.update { it.copy(notes = cached.notes, files = cached.files, folders = cached.folders, loaded = true) } }
         refresh()
     }
 
@@ -187,7 +191,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 val list = api.notes()
                 store.saveList(list)
                 runCatching { store.savePlugins(api.pluginsJson()) }
-                _state.update { it.copy(notes = list.notes, folders = list.folders, loaded = true, offline = false, error = null) }
+                _state.update { it.copy(notes = list.notes, files = list.files, folders = list.folders, loaded = true, offline = false, error = null) }
                 if (_state.value.query.isNotBlank()) search()
             } catch (e: ApiException) {
                 if (e.code == 401) loggedOut.value = true
@@ -322,7 +326,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** Called by the note screen after a delete; the list then offers Undo. */
     fun trashed(path: String, trashPath: String) {
         val title = _state.value.notes.firstOrNull { it.path == path }?.title ?: path.substringAfterLast('/').removeSuffix(".md")
-        _state.update { s -> s.copy(notes = s.notes.filterNot { it.path == path }, results = s.results?.filterNot { it.path == path }) }
+        _state.update { s -> s.copy(notes = s.notes.filterNot { it.path == path }, files = s.files.filterNot { it.path == path }, results = s.results?.filterNot { it.path == path }) }
         trashed.value = TrashedNote(title, trashPath)
         refresh()
     }
@@ -378,6 +382,45 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         val trashPath = api.trashNote(path)
         store.forget(path)
         trashed(path, trashPath)
+    }
+
+    /**
+     * A PDF to show, downloaded into the cache under its own name (an app it's opened in shows that). The copy from
+     * last time when offline.
+     */
+    suspend fun pdfFile(path: String): Result<File> = withContext(Dispatchers.IO) {
+        val id = java.security.MessageDigest.getInstance("SHA-1").digest(path.toByteArray()).joinToString("") { "%02x".format(it) }
+        val file = File(File(getApplication<Application>().cacheDir, "pdf/$id").apply { mkdirs() }, path.substringAfterLast('/'))
+        runCatching {
+            val (_, bytes) = runCatching { api()?.attachmentBytes(path, exact = true) }.getOrNull()
+                ?: if (file.isFile) return@runCatching file else error("Couldn't download it. Are you online?")
+            file.writeBytes(bytes)
+            file
+        }
+    }
+
+    /** Files PDFs picked on the phone in [folder]. Returns what to tell the person. */
+    suspend fun addPdfs(uris: List<android.net.Uri>, folder: String): String {
+        val api = api() ?: return "Signed out"
+        val resolver = getApplication<Application>().contentResolver
+        var added = 0
+        var failed: String? = null
+        for (uri in uris) {
+            runCatching {
+                val name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                } ?: "Document.pdf"
+                val bytes = withContext(Dispatchers.IO) { resolver.openInputStream(uri)!!.use { it.readBytes() } }
+                api.attach(if (name.endsWith(".pdf", ignoreCase = true)) name else "$name.pdf", "application/pdf", bytes, folder)
+            }.onSuccess { added++ }.onFailure { failed = it.message }
+        }
+        refresh()
+        val where = folder.substringAfterLast('/').ifEmpty { "Notes" }
+        return when {
+            added == 0 -> "Couldn't add ${if (uris.size == 1) "it" else "them"}: $failed"
+            failed != null -> "Added $added of ${uris.size} to $where"
+            else -> "Added ${if (added == 1) "it" else "$added PDFs"} to $where"
+        }
     }
 
     fun linkTargets(): List<Pair<String, String>> =

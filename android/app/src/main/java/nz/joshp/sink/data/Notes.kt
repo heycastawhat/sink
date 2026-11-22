@@ -56,8 +56,10 @@ data class NoteMeta(
     val image: String? = null,
 ) {
     val isBoard get() = path.endsWith(".excalidraw.md", ignoreCase = true)
+    /** A PDF filed in a folder (the server lists them as `files`), shown as a card among the notes. */
+    val isPdf get() = path.endsWith(".pdf", ignoreCase = true)
     val folder get() = path.substringBeforeLast('/', "")
-    val fileName get() = path.substringAfterLast('/').removeSuffix(".md").removeSuffix(".excalidraw")
+    val fileName get() = path.substringAfterLast('/').removeSuffix(".md").removeSuffix(".excalidraw").removeSuffix(".pdf")
 }
 
 @Serializable
@@ -72,10 +74,10 @@ data class Note(
 )
 
 @Serializable
-data class NoteList(val notes: List<NoteMeta> = emptyList(), val folders: List<String> = emptyList())
+data class NoteList(val notes: List<NoteMeta> = emptyList(), val folders: List<String> = emptyList(), val files: List<NoteMeta> = emptyList())
 
 @Serializable
-private data class SearchResult(val items: List<NoteMeta> = emptyList())
+private data class SearchResult(val items: List<NoteMeta> = emptyList(), val files: List<NoteMeta> = emptyList())
 
 @Serializable
 private data class Conflict(val current: Note? = null)
@@ -140,7 +142,7 @@ suspend fun Api.notes(): NoteList = call(request("/api/notes").build()) { json.d
 
 suspend fun Api.searchNotes(q: String): List<NoteMeta> {
     val url = (base + "/api/notes").toHttpUrl().newBuilder().addQueryParameter("q", q).addQueryParameter("limit", "100").build()
-    return call(authed(url).build()) { json.decodeFromString<SearchResult>(it).items }
+    return call(authed(url).build()) { json.decodeFromString<SearchResult>(it).let { r -> r.items + r.files } }
 }
 
 suspend fun Api.note(path: String): Note = call(authed(pathUrl("/api/notes/file", path)).build()) { json.decodeFromString(it) }
@@ -267,17 +269,19 @@ suspend fun Api.restoreFolder(trashPath: String): String {
     return call(request("/api/notes/trash/restore").post(jsonBody(body)).build()) { json.decodeFromString<FolderPath>(it).path }
 }
 
-suspend fun Api.attach(name: String, mime: String, bytes: ByteArray): Attached {
+/** Uploads a file into attachments/, or into [folder] ("" the top level) to file it there. */
+suspend fun Api.attach(name: String, mime: String, bytes: ByteArray, folder: String? = null): Attached {
     val form = MultipartBody.Builder().setType(MultipartBody.FORM)
         .addFormDataPart("file", name, bytes.toRequestBody(mime.toMediaType()))
+        .apply { if (folder != null) addFormDataPart("folder", folder) }
         .build()
     return call(request("/api/notes/attachments").post(form).build()) { json.decodeFromString(it) }
 }
 
-/** Blocking: the WebView asks for images on its own thread. */
-fun Api.attachmentBytes(ref: String): Pair<String, ByteArray>? {
+/** Blocking: the WebView asks for images on its own thread. [exact]: [ref] is a vault path, even with no folder. */
+fun Api.attachmentBytes(ref: String, exact: Boolean = false): Pair<String, ByteArray>? {
     val url = (base + "/api/notes/attachment").toHttpUrl().newBuilder()
-        .addQueryParameter(if ('/' in ref) "path" else "name", ref)
+        .addQueryParameter(if (exact || '/' in ref) "path" else "name", ref)
         .build()
     Http.client.newCall(authed(url).build()).execute().use { res ->
         if (!res.isSuccessful) return null

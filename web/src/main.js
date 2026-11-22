@@ -968,6 +968,7 @@ const NEW_ITEMS = [
   { id: 'folder', label: 'Folder', icon: 'create_new_folder', run: () => notes.newFolderHere(state.view === 'notes' ? state.folder : '') },
   { id: 'board', label: 'Board', icon: 'draw', run: () => notes.newBoard() },
   { id: 'clip', label: 'Clip a web page', icon: 'link', run: () => notes.clipPage() },
+  { id: 'pdf', label: 'PDF', icon: 'picture_as_pdf', run: () => notes.pickPdfs(state.view === 'notes' ? state.folder : '') },
   { id: 'template', label: 'From template', icon: 'content_copy', run: () => notes.newFromTemplate() },
 ];
 const itemHtml = (cls) =>

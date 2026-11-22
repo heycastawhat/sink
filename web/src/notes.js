@@ -48,6 +48,9 @@ export function initNotes(deps) {
 
 const state = {
   notes: [],
+  // PDFs filed in folders (the server's `files`), shown as cards among the notes; fileResults are a search's.
+  files: [],
+  fileResults: null,
   folders: [],
   folder: '',
   q: '',
@@ -61,7 +64,9 @@ export const folderHash = (folder) => (folder ? `#/notes/${folder.split('/').map
 const shownFolder = (f) => f !== 'attachments' && !f.startsWith('attachments/');
 const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
 const childFolders = (parent) => state.folders.filter((f) => shownFolder(f) && folderOf(f) === parent).sort(byName);
-const notesIn = (folder) => state.notes.filter((n) => n.path.startsWith(folder + '/')).length;
+const notesIn = (folder) => [...state.notes, ...state.files].filter((n) => n.path.startsWith(folder + '/')).length;
+const isPdf = (path) => /\.pdf$/i.test(path ?? '');
+const fileOf = (path) => state.files.find((f) => f.path === path);
 export const noteHash = (path, line) => `#/n/${path.split('/').map(encodeURIComponent).join('/')}${line != null ? `?line=${line}` : ''}`;
 
 function relative(ts) {
@@ -82,8 +87,9 @@ export function loadNotes() {
 
 async function listNotes() {
   try {
-    const { notes, folders } = await api.notes();
+    const { notes, folders, files = [] } = await api.notes();
     state.notes = notes;
+    state.files = files;
     state.folders = folders;
     state.loaded = true;
     // Search results are copies from when the search ran: bring them up to date (a new colour, a pin, a note
@@ -93,6 +99,7 @@ async function listNotes() {
     else if (state.results) {
       const byPath = new Map(notes.map((n) => [n.path, n]));
       state.results = state.results.flatMap((r) => (byPath.has(r.path) ? [{ ...r, ...byPath.get(r.path), snippet: r.snippet }] : []));
+      state.fileResults = state.fileResults?.filter((r) => fileOf(r.path));
     }
   } catch (err) {
     if (err instanceof Unauthorized) throw err;
@@ -117,6 +124,7 @@ const tagged = (tag) => {
 export async function setQuery(q) {
   state.q = q;
   const seq = ++searchSeq;
+  state.fileResults = null;
   if (!q) {
     state.results = null;
     return renderGrid();
@@ -130,8 +138,8 @@ export async function setQuery(q) {
     return renderGrid();
   }
   try {
-    const { items } = await api.searchNotes(q);
-    if (seq === searchSeq) state.results = items;
+    const { items, files } = await api.searchNotes(q);
+    if (seq === searchSeq) [state.results, state.fileResults] = [items, files ?? []];
   } catch (err) {
     toast(err.message);
   }
@@ -294,6 +302,23 @@ function cardHtml(n) {
 </article>`;
 }
 
+function pdfCardHtml(f) {
+  const folder = folderOf(f.path);
+  const body = f.snippet ? snippetHtml(f) : f.excerpt ? `<span class="ln"><span class="cl" style="--clamp:6">${esc(f.excerpt)}</span></span>` : '';
+  return `
+<article class="note-card pdf-card" data-path="${esc(f.path)}" tabindex="0" draggable="true">
+  <h3 class="note-title">${ic('picture_as_pdf')}${esc(f.title)}</h3>
+  ${body ? `<div class="note-body">${body}</div>` : ''}
+  <div class="note-foot">
+    ${folder && folder !== state.folder ? `<span class="note-folder">${ic('folder')}${esc(folder)}</span>` : ''}
+    <span class="note-time">${relative(f.mtime)}</span>
+  </div>
+</article>`;
+}
+
+/** Opens a PDF in the browser's own viewer, in a new tab. */
+const openPdf = (path) => window.open(api.fileUrl(path), '_blank', 'noopener');
+
 // An image that's gone (or not an image after all) leaves the card as it would be without one.
 document.addEventListener('error', (e) => e.target.matches?.('.note-image') && e.target.remove(), true);
 
@@ -342,23 +367,25 @@ function renderGrid() {
         ? folderOf(n.path) === state.folder
         : !state.folder || n.path.startsWith(state.folder + '/');
   const list = (state.results ?? state.notes).filter(inFolder);
+  const docs = (state.results ? (state.fileResults ?? []) : state.files).filter(inFolder);
 
   renderFolderBar();
   renderDrafts();
   renderRecentStrip();
 
   const pinned = state.results ? [] : list.filter((n) => n.pinned);
-  const others = state.results ? list : list.filter((n) => !n.pinned);
+  // PDFs go in among the notes by date; after them in search results.
+  const others = state.results ? [...list, ...docs] : [...list.filter((n) => !n.pinned), ...docs].sort((a, b) => b.mtime - a.mtime);
   $('notes-pinned-head').hidden = !pinned.length;
   $('notes-others-head').hidden = !pinned.length || !others.length;
   $('notes-pinned').innerHTML = pinned.map(cardHtml).join('');
-  $('notes-grid').innerHTML = others.map(cardHtml).join('');
+  $('notes-grid').innerHTML = others.map((n) => (isPdf(n.path) ? pdfCardHtml(n) : cardHtml(n))).join('');
   trimClamped($('notes-pinned'));
   trimClamped($('notes-grid'));
   popInNewCards();
   masonry();
 
-  const empty = state.loaded && !list.length;
+  const empty = state.loaded && !list.length && !docs.length;
   $('notes-empty').hidden = !empty;
   if (empty) {
     $('notes-empty-title').textContent = state.q
@@ -371,7 +398,7 @@ function renderGrid() {
     $('notes-empty-body').textContent = state.q
       ? `No notes mention “${state.q}”.`
       : state.folder
-        ? 'Notes you take here, or drag onto this folder, land in it.'
+        ? 'Notes you take here, or drag onto this folder, land in it. So do PDFs you drop here.'
         : prefs.hideFoldered && state.notes.length
           ? 'Your notes are in the folders above. New notes you take here stay on this page.'
           : 'Take a note above. It saves as a markdown file in your notes folder.';
@@ -686,6 +713,31 @@ async function deleteFolder(folder) {
   }
 }
 
+/** Files PDFs in `folder`. Anything else is left out: only PDFs show among the notes. */
+export async function uploadPdfs(files, folder = state.folder) {
+  const pdfs = files.filter((f) => f.type === 'application/pdf' || isPdf(f.name));
+  if (!pdfs.length) return void (files.length && toast('Only PDFs can be added to a folder'));
+  let done = 0;
+  for (const f of pdfs) {
+    try {
+      await api.attach(f, folder);
+      done++;
+    } catch (err) {
+      toast(`Couldn't add ${f.name}: ${err.message}`);
+    }
+  }
+  if (!done) return;
+  await loadNotes();
+  toast(`Added ${done === 1 ? `“${pdfs[0].name}”` : `${done} PDFs`} to ${folder ? folder.split('/').pop() : 'Notes'}`);
+}
+
+/** The New menu's "PDF": pick files to add to the folder on screen. */
+export function pickPdfs(folder = state.folder) {
+  const input = Object.assign(document.createElement('input'), { type: 'file', accept: 'application/pdf,.pdf', multiple: true });
+  input.onchange = () => uploadPdfs([...input.files], folder);
+  input.click();
+}
+
 /** Moves a note into `folder` keeping its file name. Returns the new path. */
 async function moveNoteTo(path, folder) {
   if (folderOf(path) === folder) return path;
@@ -723,6 +775,26 @@ function wireFolders() {
     openFolders.has(f) ? openFolders.delete(f) : openFolders.add(f);
     saveOpen();
     renderFolderTree();
+  });
+
+  // PDFs dragged in from the computer: into the folder they're dropped on, or the one on screen.
+  const fileTarget = (e) =>
+    e.dataTransfer?.types.includes('Files') && !$('notes').hidden ? (e.target.closest?.('[data-drop-folder]') ?? e.target.closest?.('#notes')) : null;
+  document.addEventListener('dragover', (e) => {
+    const t = fileTarget(e);
+    if (!t) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    document.querySelectorAll('.drop-over').forEach((el) => el !== t && el.classList.remove('drop-over'));
+    t.classList.add('drop-over');
+  });
+  document.addEventListener('dragleave', (e) => !e.relatedTarget && document.querySelectorAll('.drop-over').forEach((el) => el.classList.remove('drop-over')));
+  document.addEventListener('drop', (e) => {
+    const t = fileTarget(e);
+    if (!t) return;
+    e.preventDefault();
+    t.classList.remove('drop-over');
+    uploadPdfs([...e.dataTransfer.files], t.dataset.dropFolder ?? state.folder);
   });
 
   // Drag a card onto a folder (a tile, the sidebar, or the breadcrumb) to file it there.
@@ -775,7 +847,8 @@ function wireGrid() {
   });
   const open = (e) => {
     const card = e.target.closest('.note-card');
-    if (card && !e.target.closest('.card-acts')) openFromApp(noteHash(card.dataset.path));
+    if (!card || e.target.closest('.card-acts')) return;
+    isPdf(card.dataset.path) ? openPdf(card.dataset.path) : openFromApp(noteHash(card.dataset.path));
   };
   for (const id of ['notes-grid', 'notes-pinned']) {
     $(id).addEventListener('click', open);
@@ -900,16 +973,24 @@ async function trashCard(path) {
 
 /** The right-click menu (and the hover toolbar's ⋯ and palette). `colours` alone shows just the swatches. */
 function openCardMenu(path, x, y, { colours = false } = {}) {
-  const n = noteOf(path);
+  const n = noteOf(path) ?? fileOf(path);
   if (!n) return;
   const menu = $('card-menu');
   const item = (act, icon, label, cls = '') => `<button class="new-item${cls}" role="menuitem" data-card-act="${act}">${ic(icon)}<span>${label}</span></button>`;
+  if (isPdf(path)) colours = false;
   const swatches = `<div class="card-menu-colors">${['', ...COLORS]
     .map((c) => `<button class="note-swatch${c ? ` c-${c}` : ' none'}${(n.color ?? '') === c ? ' on' : ''}" data-card-color="${c}" aria-label="${c || 'No colour'}" title="${c || 'No colour'}">${c ? '' : ic('format_color_reset')}</button>`)
     .join('')}</div>`;
   const archived = /^archive\//i.test(path);
   menu.innerHTML = colours
     ? swatches
+    : isPdf(path)
+    ? item('open', 'open_in_new', 'Open') +
+      item('download', 'download', 'Download') +
+      '<hr class="menu-divider" />' +
+      item('move', 'drive_file_move', 'Move to folder…') +
+      '<hr class="menu-divider" />' +
+      item('trash', 'delete', 'Move to trash', ' danger')
     : item('open', 'open_in_new', 'Open') +
       item('window', 'tab', 'Open in new window') +
       '<hr class="menu-divider" />' +
@@ -936,12 +1017,19 @@ function openCardMenu(path, x, y, { colours = false } = {}) {
 const closeCardMenu = () => ($('card-menu').hidden = true);
 
 async function runCardAct(act, path, from) {
-  const n = noteOf(path);
+  const n = noteOf(path) ?? fileOf(path);
   if (!n) return;
   const r = from?.getBoundingClientRect();
   if (act === 'more') return openCardMenu(path, r.left, r.bottom + 4);
   if (act === 'colour') return openCardMenu(path, r.left, r.bottom + 4, { colours: true });
   closeCardMenu();
+  if (isPdf(path)) {
+    if (act === 'open') openPdf(path);
+    if (act === 'download') Object.assign(document.createElement('a'), { href: api.fileUrl(path), download: path.split('/').pop() }).click();
+    if (act === 'move') moveCard(path);
+    if (act === 'trash') trashCard(path);
+    return;
+  }
   if (act === 'open') openFromApp(noteHash(path));
   if (act === 'window') window.open(noteHash(path), '_blank', 'noopener');
   if (act === 'pin') cardMeta(path, { pinned: !n.pinned });
@@ -971,6 +1059,7 @@ function wireCardActions() {
   document.addEventListener('mouseover', (e) => {
     const card = e.target.closest?.('#notes .note-card');
     if (!card || !desk() || acts.parentNode === card) return;
+    if (isPdf(card.dataset.path)) return acts.remove();
     const n = noteOf(card.dataset.path);
     acts.querySelector('[data-card-act="pin"] m3e-icon').toggleAttribute('filled', !!n?.pinned);
     acts.querySelector('[data-card-act="pin"]').title = n?.pinned ? 'Unpin' : 'Pin';
@@ -2152,7 +2241,7 @@ function renderTrash() {
     .map((t) => {
       const folder = folderOf(t.original);
       return `<article class="trash-row" data-trash="${esc(t.path)}">
-  <span class="trash-icon">${ic(isBoardPath(t.path) ? 'draw' : 'description')}</span>
+  <span class="trash-icon">${ic(isBoardPath(t.path) ? 'draw' : isPdf(t.path) ? 'picture_as_pdf' : 'description')}</span>
   <div class="grow">
     <div class="trash-title">${esc(t.title)}</div>
     ${t.excerpt ? `<div class="muted small trash-excerpt">${esc(t.excerpt.split('\n').slice(0, 2).join(' · '))}</div>` : ''}

@@ -60,6 +60,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Draw
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,6 +71,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -221,7 +223,9 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
             else -> n.path.substringBeforeLast('/', "") == state.folder
         }
     }
-    val list = (state.results ?: state.notes).filter(inFolder)
+    // PDFs go in among the notes by date.
+    val all = remember(state.notes, state.files) { if (state.files.isEmpty()) state.notes else (state.notes + state.files).sortedByDescending { it.mtime } }
+    val list = (state.results ?: all).filter(inFolder)
     val searching = state.results != null
     // The server sends newest first; search keeps its own order (best match first).
     val ordered = if (byTitle && !searching) list.sortedBy { it.title.lowercase() } else list
@@ -372,7 +376,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                         if (!searching && (subfolders.isNotEmpty() || !inside)) {
                             item(key = "folders-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                             item(key = "folders", span = StaggeredGridItemSpan.FullLine) {
-                                FolderChips(subfolders, { countIn(state.notes, it) }, onOpen = { haptics.tick(); vm.setFolder(it) }, onNew = { haptics.tick(); naming = true })
+                                FolderChips(subfolders, { countIn(all, it) }, onOpen = { haptics.tick(); vm.setFolder(it) }, onNew = { haptics.tick(); naming = true })
                             }
                         }
                         if (showRecent) {
@@ -395,7 +399,9 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                         // Swipe a card one way to pin it, the other to archive it. Pinned and other cards share keys
                         // (a note is only ever in one), so a pinned card slides between the sections.
                         val card: @Composable (NoteMeta, Modifier) -> Unit = { n, modifier ->
-                            SwipeCard(n, onPin = { togglePin(n) }, onArchive = { archive(n) }, modifier) {
+                            // A PDF has no pin; its long-press menu still moves or deletes it.
+                            if (n.isPdf) NoteCard(n, onOpen, onCardMenu, vm::cardImage, modifier)
+                            else SwipeCard(n, onPin = { togglePin(n) }, onArchive = { archive(n) }, modifier) {
                                 NoteCard(n, onOpen, onCardMenu, vm::cardImage)
                             }
                         }
@@ -579,7 +585,7 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMe
     val press = remember { MutableInteractionSource() }
     val firstLine = n.excerpt.orEmpty().trimStart().lineSequence().firstOrNull().orEmpty()
     // A note with no heading is named after its first line (Keep-style); showing both would repeat it.
-    val showTitle = n.isBoard || n.snippet != null || n.title != n.fileName || !firstLine.startsWith(n.title)
+    val showTitle = n.isBoard || n.isPdf || n.snippet != null || n.title != n.fileName || !firstLine.startsWith(n.title)
     val outline = NOTE_HUES[n.color]?.copy(alpha = 0.45f) ?: MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
     val morph = LocalCardMorph.current
     val key = "card:" + n.path
@@ -606,8 +612,13 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMe
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (showTitle || n.pinned) Row(verticalAlignment = Alignment.Top) {
-                if (n.isBoard) {
-                    Icon(Icons.Outlined.Draw, null, Modifier.size(20.dp).padding(top = 2.dp))
+                if (n.isBoard || n.isPdf) {
+                    Icon(
+                        if (n.isPdf) Icons.Outlined.PictureAsPdf else Icons.Outlined.Draw,
+                        null,
+                        Modifier.size(20.dp).padding(top = 2.dp),
+                        tint = if (n.isPdf) MaterialTheme.colorScheme.error else LocalContentColor.current,
+                    )
                     Spacer(Modifier.width(6.dp))
                 }
                 Text(
@@ -621,6 +632,9 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMe
             }
             if (n.snippet != null) {
                 Text(highlight(n.snippet), style = MaterialTheme.typography.bodyMedium, maxLines = 8, overflow = TextOverflow.Ellipsis)
+            } else if (n.isPdf) {
+                // A PDF's text is plain, not markdown.
+                if (!n.excerpt.isNullOrBlank()) Text(n.excerpt, style = MaterialTheme.typography.bodyMedium, maxLines = 6, overflow = TextOverflow.Ellipsis)
             } else if (!n.isBoard) {
                 Excerpt(n.excerpt.orEmpty())
             }
@@ -713,7 +727,7 @@ private fun CardActionsSheet(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
             )
-            if (!n.isBoard) LazyRow(
+            if (!n.isBoard && !n.isPdf) LazyRow(
                 contentPadding = PaddingValues(horizontal = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(bottom = 8.dp),
@@ -731,10 +745,10 @@ private fun CardActionsSheet(
                 Icon(icon, null, tint = if (danger) error else MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(label, style = MaterialTheme.typography.bodyLarge, color = if (danger) error else MaterialTheme.colorScheme.onSurface)
             }
-            Item(if (n.pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (n.pinned) "Unpin" else "Pin", onClick = onPin)
+            if (!n.isPdf) Item(if (n.pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (n.pinned) "Unpin" else "Pin", onClick = onPin)
             Item(Icons.AutoMirrored.Outlined.DriveFileMove, "Move to folder", onClick = onMove)
             val archived = n.path.startsWith("Archive/", ignoreCase = true)
-            Item(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive", onClick = onArchive)
+            if (!n.isPdf) Item(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive", onClick = onArchive)
             Item(Icons.Outlined.Delete, "Delete", danger = true, onClick = onDelete)
         }
     }

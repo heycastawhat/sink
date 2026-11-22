@@ -333,7 +333,9 @@ class MainActivity : ComponentActivity() {
         // The note beside the list saves before another takes its place.
         val flusher = remember { NoteFlusher() }
         val open = { t: NoteTarget ->
-            if (wide) flusher.flush {
+            // A PDF has its own viewer, full screen even when wide: the pane beside the list is the note editor.
+            if (t.path?.endsWith(".pdf", ignoreCase = true) == true) nav.navigate("pdf?path=${Uri.encode(t.path)}")
+            else if (wide) flusher.flush {
                 beside = t
                 nav.navigate("notes") {
                     popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -389,7 +391,9 @@ class MainActivity : ComponentActivity() {
         // Screen changes use the theme's expressive motion (read here: the transition lambdas aren't composable).
         // Fades use the effects spec (no overshoot); movement and scale the spatial one (a little spring).
         val motion = MaterialTheme.motionScheme
-        val isNote = { e: androidx.navigation.NavBackStackEntry -> e.destination.route.let { it == "settings" || it?.startsWith("note?") == true } }
+        val isNote = { e: androidx.navigation.NavBackStackEntry ->
+            e.destination.route.let { it == "settings" || it?.startsWith("note?") == true || it?.startsWith("pdf?") == true }
+        }
 
         // A newer APK on GitHub: asked about once a day, or from Settings.
         var update by remember { mutableStateOf<Update?>(null) }
@@ -549,6 +553,9 @@ class MainActivity : ComponentActivity() {
                         navBack = true,
                     )
                     }
+                }
+                composable("pdf?path={path}", arguments = listOf(navArgument("path") { type = NavType.StringType; defaultValue = "" })) { e ->
+                    PdfScreen(notesVm, e.arguments?.getString("path").orEmpty(), onBack = { nav.popBackStack() })
                 }
                 composable("settings") { SettingsScreen(settings, notesVm, session.serverUrl, onBack = { nav.popBackStack() }, onCheckForUpdates = checkForUpdates) }
             }

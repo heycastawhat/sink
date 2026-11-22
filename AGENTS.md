@@ -33,7 +33,8 @@ database loses nothing a rescan can't rebuild.
 - `notes.ts` **the vault**: path cleaning and realpath containment (`cleanPath`, `Vault.abs`), scan/index, write with
   hash-based conflict detection (409 returns the current file), atomic writes, move (with link rewriting, case-only
   renames on case-insensitive shares), trash/restore, links index + backlinks, version history snapshots, export walk.
-  Emits `VaultEvent`s.
+  Emits `VaultEvent`s. PDFs outside `attachments/` are "documents" (`isDocument`): listed as `files` beside the notes
+  (with the start of their extracted text), searched, trashed and restored like notes, and announced as `file.changed`.
 - `routes/publish.ts` public pages: an account's `handle` (users table) and its notes with `publish: true` (indexed
   in `notes.publish`) at `/api/public/pages/<handle>`; `web/public.html` + `public.js` render `/public/…`.
 - `db.ts` migrations (append only; `user_version`). `routes/notes.ts` notes/attachments/trash/versions/backlinks/export

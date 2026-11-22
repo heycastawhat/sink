@@ -44,6 +44,14 @@ export type NoteMeta = {
 export type Note = NoteMeta & { content: string };
 /** What a sync client compares a file by. */
 export type FileMeta = { path: string; mtime: number; size: number; hash: string };
+/** A PDF filed in a folder, shown as a card beside the notes there; `excerpt` is the start of its text. */
+export type DocMeta = { path: string; title: string; mtime: number; size: number; excerpt: string };
+
+/**
+ * PDFs kept in a folder are documents the grid shows. Those in attachments/ aren't: they belong to the notes that
+ * embed them.
+ */
+export const isDocument = (path: string) => /\.pdf$/i.test(path) && !path.toLowerCase().startsWith(ATTACHMENTS + "/");
 /** A note in `.trash/`: `path` is inside the trash, `original` is where a restore puts it back. */
 export type TrashedNote = {
   path: string;
@@ -367,6 +375,9 @@ export class Vault {
   private files = new Map<string, string[]>();
   /** Hash of each attachment as of its size and mtime, so listing them doesn't read them all every time. */
   private hashes = new Map<string, FileMeta>();
+  /** Size and mtime of each document since the last scan, so listing them doesn't stat them all every time. */
+  private docStats = new Map<string, { mtime: number; size: number }>();
+  private scanned = false;
   /** Emits "event" with a VaultEvent. */
   readonly events = new EventEmitter();
   /** Reads attachments' text for search (tests swap in a stub). */
@@ -542,7 +553,15 @@ export class Vault {
       }
     })();
     this.folders = folders;
+    const before = new Set([...this.files.values()].flat().filter(isDocument));
+    const after = new Set([...files.values()].flat().filter(isDocument));
+    if (this.scanned) {
+      for (const path of after) if (!before.has(path)) this.emit({ type: "file.changed", path, source: "external" });
+      for (const path of before) if (!after.has(path)) this.emit({ type: "file.changed", path, source: "external" });
+    }
+    this.scanned = true;
     this.files = files;
+    this.docStats.clear();
     void this.indexAttachments().catch(() => {});
     return result;
   }
@@ -617,6 +636,28 @@ export class Vault {
       .all()
       .map(({ head, ...r }) => ({ ...meta(r), excerpt: cardText(r.excerpt, r.title), image: isBoard(r.path) ? null : firstImage(head) }));
     return { notes, folders: [...this.folders].sort((a, b) => a.localeCompare(b)) };
+  }
+
+  /** Every document (see isDocument), newest first. */
+  async documents(): Promise<DocMeta[]> {
+    const text = this.db.query<{ text: string }, [string]>("SELECT substr(text, 1, 800) AS text FROM attachment_text WHERE path = ?");
+    const out: DocMeta[] = [];
+    for (const path of [...this.files.values()].flat().filter((p) => isDocument(p) && !this.fileHidden(p))) {
+      let st = this.docStats.get(path);
+      if (!st) {
+        try {
+          const s = await stat(await this.abs(path));
+          st = { mtime: Math.floor(s.mtimeMs), size: s.size };
+        } catch {
+          continue;
+        }
+        this.docStats.set(path, st);
+      }
+      // pdftotext keeps the page's line breaks and form feeds; a card wants flowing text.
+      const excerpt = (text.get(path)?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 600);
+      out.push({ path, title: basename(path, extname(path)), ...st, excerpt });
+    }
+    return out.sort((a, b) => b.mtime - a.mtime);
   }
 
   /** Every note's path, mtime, size and hash, without the excerpts `list` adds. */
@@ -780,6 +821,20 @@ export class Vault {
       items.push({ ...meta(r), snippet: `${basename(attachment)}: ${snippet}`, attachment });
     }
     return items;
+  }
+
+  /** Documents whose text matches, with a snippet. */
+  searchDocuments(fts: string, limit: number): { path: string; title: string; mtime: number; snippet: string }[] {
+    return this.db
+      .query<{ path: string; mtime: number; snippet: string }, [string, number]>(
+        `SELECT a.path, a.mtime, snippet(attachment_fts, 0, '[', ']', '…', 16) AS snippet
+         FROM attachment_fts JOIN attachment_text a ON a.rowid = attachment_fts.rowid
+         WHERE attachment_fts MATCH ? ORDER BY bm25(attachment_fts) LIMIT ?`,
+      )
+      .all(fts, limit * 4)
+      .filter((r) => isDocument(r.path) && this.files.get(basename(r.path).toLowerCase())?.includes(r.path) && !this.fileHidden(r.path))
+      .slice(0, limit)
+      .map((r) => ({ path: r.path, title: basename(r.path, extname(r.path)), mtime: r.mtime, snippet: r.snippet.replace(/\s+/g, " ") }));
   }
 
   /** Pin or colour a note by rewriting its frontmatter; same conflict rules as a save. */
@@ -1038,6 +1093,7 @@ export class Vault {
     for (let d = dirname(to); d !== "."; d = dirname(d)) this.folders.add(d);
     this.refile(from, to);
     for (const old of moved) this.emit({ type: "note.moved", path: isNote ? to : to + old.slice(from.length), from: old, source: "sink" });
+    if (isDocument(from) || isDocument(to)) this.emit({ type: "file.changed", path: to, source: "sink" });
     // Links to what moved follow it, as in Obsidian. A failure here leaves a link stale, never the move undone.
     // Private notes that link here are kept up to date too, whoever moved it: the caller never sees them.
     for (const old of moved) {
@@ -1130,6 +1186,7 @@ export class Vault {
     this.repath(path, dest, !isNote);
     this.refile(path);
     for (const p of gone) this.emit({ type: "note.deleted", path: p, source: "sink" });
+    if (isDocument(path)) this.emit({ type: "file.changed", path, source: "sink" });
     if (isNote) this.unindex(path);
     else {
       this.db.query("DELETE FROM notes WHERE substr(path, 1, ?) = ?").run(chars(path) + 1, path + "/");
@@ -1162,16 +1219,17 @@ export class Vault {
         if (e.name.startsWith(".")) continue;
         const path = rel ? `${rel}/${e.name}` : e.name;
         if (e.isDirectory()) await walk(path);
-        if (!e.isFile() || !e.name.toLowerCase().endsWith(".md")) continue;
+        const pdf = /\.pdf$/i.test(e.name);
+        if (!e.isFile() || !(pdf || e.name.toLowerCase().endsWith(".md"))) continue;
         try {
-          cleanPath(path, "note");
+          cleanPath(path, "file");
         } catch {
           continue;
         }
         const abs = join(this.dir, TRASH, path);
         const st = await stat(abs);
-        const content = st.size > MAX_NOTE_BYTES ? "" : await readFile(abs, "utf8");
-        const { title, body, private: secret } = parseNote(path, content);
+        const content = pdf || st.size > MAX_NOTE_BYTES ? "" : await readFile(abs, "utf8");
+        const { title, body, private: secret } = pdf ? { title: basename(path, extname(path)), body: "", private: false } : parseNote(path, content);
         if (secret && limited()) continue;
         const from = trashOrigin(rows, path);
         out.push({
@@ -1237,16 +1295,17 @@ export class Vault {
   }
 
   /** Puts a trashed note or folder back where it was (numbered if that name is taken now). */
-  async restore(trashPath: string): Promise<NoteMeta | { path: string; notes: number }> {
+  async restore(trashPath: string): Promise<NoteMeta | DocMeta | { path: string; notes: number }> {
     const rel = this.trashPath(trashPath, "file");
     try {
       const src = await this.abs(`${TRASH}/${rel}`);
       if ((await stat(src)).isDirectory()) return this.restoreFolder(rel);
-      cleanPath(rel, "note");
-      if (limited() && parseNote(rel, await readFile(src, "utf8")).private) throw new VaultError(404, "note not found");
+      const pdf = /\.pdf$/i.test(rel);
+      if (!pdf) cleanPath(rel, "note");
+      if (!pdf && limited() && parseNote(rel, await readFile(src, "utf8")).private) throw new VaultError(404, "note not found");
       const from = trashOrigin(this.trashRows(), rel);
-      const original = cleanPath(from?.original ?? rel, "note");
-      const ext = original.toLowerCase().endsWith(".excalidraw.md") ? ".excalidraw.md" : ".md";
+      const original = cleanPath(from?.original ?? rel, pdf ? "file" : "note");
+      const ext = pdf ? extname(original) : original.toLowerCase().endsWith(".excalidraw.md") ? ".excalidraw.md" : ".md";
       const stem = original.slice(0, -ext.length);
       let dest = original;
       for (let n = 1; await exists(await this.abs(dest)); n++) dest = `${stem} ${n}${ext}`;
@@ -1254,6 +1313,14 @@ export class Vault {
       await rename(src, await this.abs(dest));
       this.repath(`${TRASH}/${rel}`, dest, false);
       await this.tidyTrash(dirname(rel), from?.row);
+      if (pdf) {
+        this.addFile(dest);
+        for (let d = dirname(dest); d !== "."; d = dirname(d)) this.folders.add(d);
+        void this.indexAttachments().catch(() => {});
+        if (isDocument(dest)) this.emit({ type: "file.changed", path: dest, source: "sink" });
+        const st = await stat(await this.abs(dest));
+        return { path: dest, title: basename(dest, ext), mtime: Math.floor(st.mtimeMs), size: st.size, excerpt: "" };
+      }
       const content = await readFile(await this.abs(dest), "utf8");
       const st = await stat(await this.abs(dest));
       const m = this.index(dest, content, st.size, Math.floor(st.mtimeMs));
@@ -1264,9 +1331,9 @@ export class Vault {
     }
   }
 
-  /** Deletes one trashed note for good. */
+  /** Deletes one trashed note or PDF for good. */
   async deleteForever(trashPath: string): Promise<void> {
-    const rel = this.trashPath(trashPath);
+    const rel = this.trashPath(trashPath, /\.pdf$/i.test(trashPath.trim()) ? "file" : "note");
     try {
       const abs = await this.abs(`${TRASH}/${rel}`);
       await stat(abs);
@@ -1362,6 +1429,7 @@ export class Vault {
       files.set(key, [...(files.get(key) ?? []), next]);
     }
     this.files = files;
+    this.docStats.clear();
   }
 
   async createFolder(path: string): Promise<string> {
@@ -1375,16 +1443,17 @@ export class Vault {
     return path;
   }
 
-  /** Stores an uploaded file in `attachments/` under a free name. Returns its vault path. */
-  async saveAttachment(name: string, bytes: Uint8Array): Promise<string> {
+  /** Stores an uploaded file in `folder` (attachments/ unless given; "" the top level) under a free name. Returns its vault path. */
+  async saveAttachment(name: string, bytes: Uint8Array, folder = ATTACHMENTS): Promise<string> {
+    if (folder) folder = cleanPath(folder, "folder");
     const ext = extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 10);
     // A note arriving this way would skip the checks on saving notes (an assistant's token can't publish one, say).
     if (ext === ".md") throw new VaultError(400, "notes can't be uploaded as attachments");
     const stem = fileNameFor(basename(name, extname(name))).slice(0, 80);
     try {
-      await mkdir(await this.abs(ATTACHMENTS), { recursive: true });
+      await mkdir(await this.abs(folder || "."), { recursive: true });
       for (let n = 0; n < 1000; n++) {
-        const path = `${ATTACHMENTS}/${n ? `${stem} ${n}` : stem}${ext}`;
+        const path = `${folder ? folder + "/" : ""}${n ? `${stem} ${n}` : stem}${ext}`;
         try {
           await writeFile(join(this.dir, path), bytes, { flag: "wx" });
         } catch (err) {
@@ -1392,8 +1461,9 @@ export class Vault {
           throw err;
         }
         this.addFile(path);
-        this.folders.add(ATTACHMENTS);
+        for (let d = folder; d && d !== "."; d = dirname(d)) this.folders.add(d);
         void this.indexAttachments().catch(() => {});
+        if (isDocument(path)) this.emit({ type: "file.changed", path, source: "sink" });
         return path;
       }
     } catch (err) {
@@ -1403,6 +1473,7 @@ export class Vault {
   }
 
   private addFile(path: string) {
+    this.docStats.delete(path);
     const key = basename(path).toLowerCase();
     if (!this.files.get(key)?.includes(path)) this.files.set(key, [...(this.files.get(key) ?? []), path]);
   }
@@ -1440,6 +1511,10 @@ export class Vault {
       this.hashes.set(path, m);
       this.addFile(path);
       for (let d = dirname(path); d !== "."; d = dirname(d)) this.folders.add(d);
+      if (isDocument(path)) {
+        void this.indexAttachments().catch(() => {});
+        this.emit({ type: "file.changed", path, source: "sink" });
+      }
       return m;
     } catch (err) {
       fsError(err, "file");
@@ -1485,6 +1560,8 @@ export class Vault {
 export type VaultEvent = (
   | { type: "note.created" | "note.updated" | "note.deleted"; path: string; source: "sink" | "external" }
   | { type: "note.moved"; path: string; from: string; source: "sink" }
+  /** A document (a PDF in a folder) was added, moved, replaced or removed. */
+  | { type: "file.changed"; path: string; source: "sink" | "external" }
   | { type: "todo.done" | "todo.undone"; path: string; text: string; source: "sink" }
 ) & { private?: boolean };
 

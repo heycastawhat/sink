@@ -74,11 +74,14 @@ export const api = {
   restoreNote: (path) => request('/notes/trash/restore', json('POST', { path })),
   deleteForever: (path) => request(`/notes/trash?${p(path)}`, { method: 'DELETE' }),
   emptyTrash: () => request('/notes/trash?all=true', { method: 'DELETE' }),
-  attach: (file) => {
+  /** Uploads a file into attachments/, or into `folder` ('' the top level) to file it there. */
+  attach: (file, folder) => {
     const form = new FormData();
     form.set('file', file);
+    if (folder !== undefined) form.set('folder', folder);
     return request('/notes/attachments', { method: 'POST', body: form });
   },
+  fileUrl: (path) => `/api/notes/attachment?path=${encodeURIComponent(path)}`,
   attachmentUrl: (ref) => `/api/notes/attachment?${ref.includes('/') ? 'path' : 'name'}=${encodeURIComponent(ref)}`,
 
   todos: (view = 'open') => request(`/todos?view=${view}`),

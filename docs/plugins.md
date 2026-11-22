@@ -47,7 +47,7 @@ export default function setup(sink) {
 | | |
 |---|---|
 | `sink.vault` | Your notes: `list()`, `read(path)`, `write(path, content, hash)`, `create(folder, title, content)`, `move(from, to)`, `trash(path)`, `saveAttachment(name, bytes)`. `write` takes the hash from `read` (or `null` for a new note) and refuses if the note changed since, so a plugin never overwrites an edit. |
-| `sink.on(fn)` | Called for every change: `note.created`, `note.updated`, `note.deleted`, `note.moved` (with `from`), `todo.done`, `todo.undone` (with `text`). `source` is `"sink"`, or `"external"` when a scan found an edit made in Obsidian or a file manager. |
+| `sink.on(fn)` | Called for every change: `note.created`, `note.updated`, `note.deleted`, `note.moved` (with `from`), `todo.done`, `todo.undone` (with `text`), `file.changed` (a PDF filed in a folder was added, moved, replaced or removed). `source` is `"sink"`, or `"external"` when a scan found an edit made in Obsidian or a file manager. |
 | `sink.routes` | A [Hono](https://hono.dev) app mounted at `/api/plugins/<id>/`. Requests are already signed in. |
 | `sink.mcpTool(name, def, handler)` | A tool AI assistants get over MCP, named `<id>_<name>`. `def.inputSchema` is a map of [zod](https://zod.dev) schemas. Return a string or an object; throw an `Error` to report a problem the assistant can read. |
 | `sink.every(ms, fn)` | A scheduled job (never runs twice at once). |

@@ -13,6 +13,8 @@ app, and an MCP server so AI assistants can read and write your notes.
 - **Share a note:** a link anyone can open, no account needed: read-only, or let people with the link edit after
   giving a name. Stop sharing any time.
 - **Version history:** earlier versions of every note, to read or restore.
+- **PDFs in folders:** drop PDFs onto a folder (or New → PDF) and they sit among its notes as cards with the start
+  of their text, open in the browser's viewer (a page viewer on Android), and turn up in search, the trash and moves.
 - **Search inside attachments:** words in embedded PDFs and photos (OCR) find their note. Runs in the background;
   outside Docker it needs `pdftotext` (poppler-utils) and `tesseract` with English data, and skips what's missing.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.

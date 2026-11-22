@@ -2028,6 +2028,17 @@ body.dragging-note [data-drop-folder] {
   background: color-mix(in srgb, var(--md-sys-color-primary) 14%, transparent) !important;
 }
 
+/* PDFs dragged in from the computer, over the grid itself. */
+#notes.drop-over {
+  outline: 2px dashed var(--md-sys-color-primary);
+  outline-offset: -6px;
+  border-radius: 16px;
+}
+
+.pdf-card .note-title m3e-icon {
+  color: var(--md-sys-color-error);
+}
+
 .note-card[draggable='true']:active {
   cursor: grabbing;
 }

@@ -1,6 +1,8 @@
 package nz.joshp.sink.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,6 +15,7 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Draw
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Event
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingActionButtonMenu
@@ -37,7 +40,7 @@ import java.time.LocalDate
 
 /**
  * The "new" button on Notes: a toggle FAB that opens a stack of labelled actions (Material 3 Expressive's
- * FAB menu) for a note (blank or from a template), a todo, a folder or a board. [folder] is where new things go;
+ * FAB menu) for a note (blank or from a template), a todo, a folder, a board or a PDF to file. [folder] is where new things go;
  * [onNewNote] opens a draft starting with the given text.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -57,6 +60,9 @@ fun NewMenuFab(
     var templating by remember { mutableStateOf(false) }
     val haptics = rememberHaptics()
     BackHandler(enabled = expanded) { expanded = false }
+    val pdfs = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) scope.launch { snackbar.showSnackbar(vm.addPdfs(uris, folder)) }
+    }
     fun pick(action: () -> Unit) {
         expanded = false
         haptics.confirm()
@@ -109,6 +115,11 @@ fun NewMenuFab(
             },
             icon = { Icon(Icons.Outlined.Draw, null) },
             text = { Text("Board") },
+        )
+        FloatingActionButtonMenuItem(
+            onClick = { pick { pdfs.launch(arrayOf("application/pdf")) } },
+            icon = { Icon(Icons.Outlined.PictureAsPdf, null) },
+            text = { Text("PDF") },
         )
     }
 
