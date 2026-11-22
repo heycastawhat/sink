@@ -128,6 +128,12 @@ export function createApp(deps: {
   );
   // Obsidian's sync plugin reads the change stream with fetch (EventSource can't send the bearer header) from the
   // app's own origins. Bearer only: no credentials, so a page on one of these can't ride a session cookie.
+  // Bun closes a request that sends nothing for 10s (its default idleTimeout), long before the stream's 25s keep-alive,
+  // and anything that changes while the client reconnects is missed. The stream is meant to stay open: no idle limit.
+  app.use("/api/events", async (c, next) => {
+    (c.env as { timeout?: (req: Request, seconds: number) => void } | undefined)?.timeout?.(c.req.raw, 0);
+    await next();
+  });
   app.use("/api/events", cors({ origin: ["app://obsidian.md", "capacitor://localhost", "http://localhost", "https://localhost"], allowHeaders: ["authorization"] }));
   // Shared notes, readable without signing in. Before the signed-in API, which would answer 401.
   app.route("/api/public", publicShareRoutes(() => users?.all() ?? [owner]));
