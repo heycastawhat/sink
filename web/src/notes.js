@@ -6,6 +6,7 @@ import { decodeLink, esc, folderOf, inlineHtml, tableCells } from './util.js';
 import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
+import { deferredEditorText } from './deferred-editor-text.js';
 import { registry, onRegistryChange } from './plugin-api.js';
 import { buzz } from './haptics.js';
 import { askConfirm, askText, editTodo, pickFolder, pickFromList, pickVersion, shareNote } from './dialogs.js';
@@ -1022,6 +1023,7 @@ const screen = {
 };
 
 const dirty = () => screen.editor && screen.editor.getText() !== screen.saved;
+let loadingText = deferredEditorText();
 
 function setStatus(text, kind = '') {
   const el = $('note-status');
@@ -1070,13 +1072,16 @@ function isDark() {
 async function mountBoard(text) {
   screen.editor?.destroy();
   screen.editor = null;
+  const initial = deferredEditorText();
+  initial.replace(null, text);
+  loadingText = initial;
   $('note-editor').innerHTML = '';
   $('note-screen').classList.add('board');
   window.EXCALIDRAW_ASSET_PATH = '/excalidraw/';
   const { createBoard } = await import('./board.js');
   screen.editor = createBoard({
     parent: $('note-editor'),
-    text,
+    text: initial.take(text),
     dark: isDark(),
     attachmentUrl: (name) => api.attachmentUrl(name),
     upload: (file) => api.attach(file),
@@ -1104,6 +1109,7 @@ export async function newBoard() {
 }
 
 function mountEditor(text) {
+  loadingText = deferredEditorText();
   screen.editor?.destroy();
   $('note-editor').innerHTML = '';
   $('note-screen').classList.remove('board');
@@ -1833,9 +1839,10 @@ async function setMeta(changes) {
     const meta = await api.noteMeta(screen.path, changes);
     const note = await api.note(meta.path);
     // Typed meanwhile: keep that body under the server's new frontmatter, so the next save doesn't undo the change.
-    const text = dirty() ? frontmatterOf(note.content) + bodyOf(screen.editor.getText()) : note.content;
+    const current = loadingText.read(screen.editor, screen.saved);
+    const text = current !== screen.saved ? frontmatterOf(note.content) + bodyOf(current) : note.content;
     Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
-    if (text !== screen.editor.getText()) screen.editor.setText(text);
+    if (text !== current) loadingText.replace(screen.editor, text);
     applyLook();
   })();
   screen.saving = run.catch((err) => toast(err.message)).finally(() => (screen.saving = null));

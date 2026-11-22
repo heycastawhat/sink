@@ -447,9 +447,8 @@ fun NoteScreen(
     }
 
     fun readAndSave(w: WebView, then: () -> Unit) {
-        w.evaluateJavascript("window.sink.getText()") { raw ->
-            val text = runCatching { json.decodeFromString<String>(raw) }.getOrNull()
-            if (text != null) ed.current = text
+        readEditorText({ ed.current }, { script, done -> w.evaluateJavascript(script) { done(it) } }) { latest ->
+            ed.current = latest
             saveInBackground()
             then()
         }
@@ -614,9 +613,9 @@ fun NoteScreen(
     }
 
     // The page and the note can arrive in either order; load once both are here.
+    // Metadata may have changed before the bridge existed, so send the current text, not the initial payload.
     LaunchedEffect(pageReady, loadedNote) {
-        val text = loadedNote ?: return@LaunchedEffect
-        if (!pageReady) return@LaunchedEffect
+        val text = editorLoadText(pageReady, loadedNote, ed.current) ?: return@LaunchedEffect
         val payload = buildJsonObject {
             put("text", text)
             ed.path?.let { put("path", it) }
@@ -720,8 +719,8 @@ fun NoteScreen(
     fun restore(text: String) {
         history = false
         val w = web ?: return
-        w.evaluateJavascript("window.sink.getText()") { raw ->
-            runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
+        readEditorText({ ed.current }, { script, done -> w.evaluateJavascript(script) { done(it) } }) { latest ->
+            ed.current = latest
             saveJob?.cancel()
             scope.launch {
                 saveLock.withLock {
