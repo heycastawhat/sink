@@ -15,8 +15,10 @@ export function eventRoutes(vault: Vault, keepAliveMs = 25_000) {
     c.header("cache-control", "no-store");
     c.header("x-accel-buffering", "no");
     return streamSSE(c, async (stream) => {
+      const limited = c.get("scope") !== "full";
       const send = (e: VaultEvent) => {
-        const { source: _source, ...data } = e as VaultEvent & { text?: string };
+        if (e.private && limited) return;
+        const { source: _source, private: _private, ...data } = e as VaultEvent & { text?: string };
         void stream.writeSSE({ event: "change", data: JSON.stringify(data) });
       };
       vault.events.on("event", send);

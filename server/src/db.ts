@@ -428,6 +428,11 @@ export const migrations: string[] = [
   `
   UPDATE notes SET mtime = 0;
   `,
+  // Private notes (`private: true`), hidden from assistants' and the extension's tokens. mtime 0 re-reads every note.
+  `
+  ALTER TABLE notes ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
+  UPDATE notes SET mtime = 0;
+  `,
 ];
 
 export function openDb(path: string): Database {

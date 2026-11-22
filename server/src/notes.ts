@@ -38,6 +38,8 @@ export type NoteMeta = {
   // (`searchable: true`; off unless asked for).
   publish: boolean;
   searchable: boolean;
+  /** `private: true`: hidden from assistants' and the extension's tokens (see `limited`). */
+  private: boolean;
 };
 export type Note = NoteMeta & { content: string };
 /** What a sync client compares a file by. */
@@ -55,11 +57,13 @@ export type TrashedNote = {
 };
 
 /**
- * Set while a request made with an assistant's (`mcp`) token runs. Its writes may not put a note on the public page or
- * open one to search engines, by whatever route they come: a save, a todo edit, a plugin's tool appending to the daily
- * note. Checked here, against the file as it is, because each of those can change frontmatter.
+ * Set while a request made with an assistant's (`mcp`) or the extension's token runs. Its writes may not put a note on
+ * the public page or open one to search engines, by whatever route they come: a save, a todo edit, a plugin's tool
+ * appending to the daily note. Checked here, against the file as it is, because each of those can change frontmatter.
+ * Private notes are hidden from it here too, so every route and tool built on the Vault leaves them out.
  */
 export const assistantWrites = new AsyncLocalStorage<true>();
+const limited = () => assistantWrites.getStore() === true;
 
 /** 404 / 409 / 400 / 503 for the routes, so file system detail never reaches clients. */
 export class VaultError extends Error {
@@ -145,6 +149,7 @@ export function readFrontmatter(yaml: string): {
   color?: string;
   publish?: boolean;
   searchable?: boolean;
+  private?: boolean;
 } {
   const unquote = (s: string) => s.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
   const out: ReturnType<typeof readFrontmatter> = { tags: [], aliases: [] };
@@ -157,6 +162,7 @@ export function readFrontmatter(yaml: string): {
     if (key === "pinned") out.pinned = /^(true|yes|1)$/i.test(unquote(value!));
     if (key === "publish") out.publish = /^(true|yes|1)$/i.test(unquote(value!));
     if (key === "searchable") out.searchable = /^(true|yes|1)$/i.test(unquote(value!));
+    if (key === "private") out.private = /^(true|yes|1)$/i.test(unquote(value!));
     if (key === "color" && COLORS.includes(unquote(value!).toLowerCase())) out.color = unquote(value!).toLowerCase();
     if (key === "tags" || key === "tag") {
       if (value) {
@@ -212,7 +218,7 @@ export const isBoard = (path: string) => path.toLowerCase().endsWith(".excalidra
 export function parseNote(
   path: string,
   content: string,
-): { title: string; tags: string[]; body: string; pinned: boolean; color: string | null; publish: boolean; searchable: boolean } {
+): { title: string; tags: string[]; body: string; pinned: boolean; color: string | null; publish: boolean; searchable: boolean; private: boolean } {
   const { yaml, body: full } = splitFrontmatter(content);
   // `%% … %%` is an Obsidian comment; Excalidraw boards keep their whole drawing JSON in one.
   // The Excalidraw plugin's "==⚠ Switch to EXCALIDRAW VIEW … ==" banner isn't content either.
@@ -224,10 +230,10 @@ export function parseNote(
   const title = heading || fm.title || basename(path).replace(/(\.excalidraw)?\.md$/i, "");
   const seen = new Map<string, string>();
   for (const t of [...fm.tags, ...inlineTags(body)]) if (!seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t);
-  return { title, tags: [...seen.values()], body, pinned: fm.pinned ?? false, color: fm.color ?? null, publish: fm.publish ?? false, searchable: fm.searchable ?? false };
+  return { title, tags: [...seen.values()], body, pinned: fm.pinned ?? false, color: fm.color ?? null, publish: fm.publish ?? false, searchable: fm.searchable ?? false, private: fm.private ?? false };
 }
 
-type Row = { path: string; title: string; tags: string; mtime: number; size: number; hash: string; pinned: number; color: string | null; publish: number; searchable: number };
+type Row = { path: string; title: string; tags: string; mtime: number; size: number; hash: string; pinned: number; color: string | null; publish: number; searchable: number; private: number };
 
 /** Card preview: the body without the heading that became the title, trimmed to whole lines. */
 /**
@@ -368,8 +374,37 @@ export class Vault {
   private extracting: Promise<void> | null = null;
   private extractAgain = false;
 
+  /** `private`: whether the note is private, for listeners that pass events on to limited tokens. */
   emit(event: VaultEvent) {
-    this.events.emit("event", event);
+    this.events.emit("event", { ...event, private: event.private ?? this.isPrivate(event.path) });
+  }
+
+  private isPrivate(path: string) {
+    return this.db.query<{ private: number }, [string]>("SELECT private FROM notes WHERE path = ?").get(path)?.private === 1;
+  }
+
+  /** A private note, and the caller may not see it: answered as if it weren't there. */
+  private hide(path: string) {
+    if (limited() && this.isPrivate(path)) throw new VaultError(404, "note not found");
+  }
+
+  /** SQL that leaves out private notes (table alias `n`) for a caller that may not see them. */
+  private get shown() {
+    return limited() ? "n.private = 0" : "1";
+  }
+
+  /**
+   * An attachment only private notes embed (`![[name]]` or by path), hidden like them. One that a note the caller can
+   * see embeds too stays visible.
+   */
+  private fileHidden(path: string) {
+    if (!limited()) return false;
+    const refs = [basename(path).toLowerCase(), path.toLowerCase()];
+    const embeds = this.db
+      .query<{ private: number }, [string, string]>("SELECT DISTINCT n.private FROM links l JOIN notes n ON n.path = l.src WHERE l.target IN (?, ?)")
+      .all(...(refs as [string, string]))
+      .map((r) => r.private);
+    return embeds.includes(1) && !embeds.includes(0);
   }
 
   constructor(
@@ -406,15 +441,16 @@ export class Vault {
   // ---- index
 
   private index(path: string, content: string, size: number, mtime: number, hash = sha256(content)): NoteMeta {
-    const { title, tags, body, pinned, color, publish, searchable } = parseNote(path, content);
+    const { title, tags, body, pinned, color, publish, searchable, private: secret } = parseNote(path, content);
     this.db
       .query(
-        `INSERT INTO notes (path, title, tags, body, hash, size, mtime, indexed_at, pinned, color, publish, searchable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO notes (path, title, tags, body, hash, size, mtime, indexed_at, pinned, color, publish, searchable, private) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET title = excluded.title, tags = excluded.tags, body = excluded.body,
            hash = excluded.hash, size = excluded.size, mtime = excluded.mtime, indexed_at = excluded.indexed_at,
-           pinned = excluded.pinned, color = excluded.color, publish = excluded.publish, searchable = excluded.searchable`,
+           pinned = excluded.pinned, color = excluded.color, publish = excluded.publish, searchable = excluded.searchable,
+           private = excluded.private`,
       )
-      .run(path, title, JSON.stringify(tags), body, hash, size, mtime, now(), pinned ? 1 : 0, color, publish ? 1 : 0, searchable ? 1 : 0);
+      .run(path, title, JSON.stringify(tags), body, hash, size, mtime, now(), pinned ? 1 : 0, color, publish ? 1 : 0, searchable ? 1 : 0, secret ? 1 : 0);
     this.db.query("DELETE FROM todos WHERE path = ?").run(path);
     if (!isBoard(path)) {
       const insert = this.db.query(
@@ -427,7 +463,7 @@ export class Vault {
     const link = this.db.query("INSERT INTO links (src, target, line) VALUES (?, ?, ?)");
     for (const l of parseLinks(content)) link.run(path, l.target, l.line);
     for (let d = dirname(path); d !== "."; d = dirname(d)) this.folders.add(d);
-    return { path, title, tags, mtime, size, hash, pinned, color, publish, searchable };
+    return { path, title, tags, mtime, size, hash, pinned, color, publish, searchable, private: secret };
   }
 
   private unindex(path: string) {
@@ -446,7 +482,7 @@ export class Vault {
   private async walkAndIndex(): Promise<ScanResult> {
     const known = new Map(
       this.db
-        .query<{ path: string; size: number; mtime: number }, []>("SELECT path, size, mtime FROM notes")
+        .query<{ path: string; size: number; mtime: number; private: number }, []>("SELECT path, size, mtime, private FROM notes")
         .all()
         .map((r) => [r.path, r]),
     );
@@ -497,11 +533,11 @@ export class Vault {
       throw new VaultError(503, "notes storage unavailable");
     }
     this.db.transaction(() => {
-      for (const path of known.keys()) {
+      for (const [path, row] of known) {
         if (!seen.has(path)) {
           this.unindex(path);
           result.removed++;
-          this.emit({ type: "note.deleted", path, source: "external" });
+          this.emit({ type: "note.deleted", path, source: "external", private: row.private === 1 });
         }
       }
     })();
@@ -575,8 +611,8 @@ export class Vault {
   list(): { notes: (NoteMeta & { excerpt: string; image: string | null })[]; folders: string[] } {
     const notes = this.db
       .query<Row & { excerpt: string; head: string }, []>(
-        `SELECT path, title, tags, mtime, size, hash, pinned, color, publish, searchable, substr(body, 1, 600) AS excerpt, substr(body, 1, 4000) AS head
-         FROM notes ORDER BY pinned DESC, mtime DESC`,
+        `SELECT path, title, tags, mtime, size, hash, pinned, color, publish, searchable, private, substr(body, 1, 600) AS excerpt, substr(body, 1, 4000) AS head
+         FROM notes n WHERE ${this.shown} ORDER BY pinned DESC, mtime DESC`,
       )
       .all()
       .map(({ head, ...r }) => ({ ...meta(r), excerpt: cardText(r.excerpt, r.title), image: isBoard(r.path) ? null : firstImage(head) }));
@@ -585,7 +621,7 @@ export class Vault {
 
   /** Every note's path, mtime, size and hash, without the excerpts `list` adds. */
   manifest(): FileMeta[] {
-    return this.db.query<FileMeta, []>("SELECT path, mtime, size, hash FROM notes").all();
+    return this.db.query<FileMeta, []>(`SELECT path, mtime, size, hash FROM notes n WHERE ${this.shown}`).all();
   }
 
   /** Every non-note file (images, PDFs, boards' drawings, anything else) with its hash. */
@@ -622,7 +658,7 @@ export class Vault {
     // The walk is fresher than the last scan: fetching by path shouldn't fall back to a same-named file elsewhere.
     this.files = new Map();
     for (const m of out) this.addFile(m.path);
-    return out;
+    return out.filter((m) => !this.fileHidden(m.path));
   }
 
   /**
@@ -632,6 +668,7 @@ export class Vault {
    */
   backlinks(path: string): { path: string; title: string; lines: string[] }[] {
     const clean = cleanPath(path, "note");
+    this.hide(clean);
     const target = clean.replace(/\.md$/i, "").toLowerCase();
     const parts = target.split("/");
     // The full path, every shorter end of it ("garden/soil", "soil"), and the title.
@@ -642,7 +679,7 @@ export class Vault {
     const rows = this.db
       .query<{ src: string; title: string; line: string }, string[]>(
         `SELECT l.src, n.title, l.line FROM links l JOIN notes n ON n.path = l.src
-         WHERE l.target IN (${list.map(() => "?").join(", ")}) AND l.src != ?
+         WHERE l.target IN (${list.map(() => "?").join(", ")}) AND l.src != ? AND ${this.shown}
          ORDER BY n.mtime DESC, l.rowid`,
       )
       .all(...list, clean);
@@ -677,7 +714,7 @@ export class Vault {
     const candidates = this.db
       .query<{ path: string }, string[]>(
         `SELECT n.path FROM notes_fts JOIN notes n ON n.rowid = notes_fts.rowid
-         WHERE notes_fts MATCH ? AND n.path != ? AND n.path NOT LIKE '%.excalidraw.md'
+         WHERE notes_fts MATCH ? AND n.path != ? AND n.path NOT LIKE '%.excalidraw.md' AND ${this.shown}
          ORDER BY n.mtime DESC LIMIT 100`,
       )
       .all(`body : (${phrases.map((p) => `"${p}"`).join(" OR ")})`, clean);
@@ -720,21 +757,21 @@ export class Vault {
   search(fts: string, limit: number) {
     const items: (NoteMeta & { snippet: string; attachment?: string })[] = this.db
       .query<Row & { snippet: string }, [string, number]>(
-        `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color, n.publish, n.searchable,
+        `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color, n.publish, n.searchable, n.private,
            snippet(notes_fts, 2, '[', ']', '…', 16) AS snippet
          FROM notes_fts JOIN notes n ON n.rowid = notes_fts.rowid
-         WHERE notes_fts MATCH ? ORDER BY bm25(notes_fts, 2.0, 5.0, 1.0, 3.0) LIMIT ?`,
+         WHERE notes_fts MATCH ? AND ${this.shown} ORDER BY bm25(notes_fts, 2.0, 5.0, 1.0, 3.0) LIMIT ?`,
       )
       .all(fts, limit)
       .map((r) => ({ ...meta(r), snippet: r.snippet }));
     const seen = new Set(items.map((i) => i.path));
     const hits = this.db
       .query<Row & { snippet: string; attachment: string }, [string, number]>(
-        `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color, a.path AS attachment,
+        `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color, n.publish, n.searchable, n.private, a.path AS attachment,
            snippet(attachment_fts, 0, '[', ']', '…', 16) AS snippet
          FROM attachment_fts JOIN attachment_text a ON a.rowid = attachment_fts.rowid
            JOIN links l ON l.target IN (a.name, a.lpath) JOIN notes n ON n.path = l.src
-         WHERE attachment_fts MATCH ? ORDER BY bm25(attachment_fts) LIMIT ?`,
+         WHERE attachment_fts MATCH ? AND ${this.shown} ORDER BY bm25(attachment_fts) LIMIT ?`,
       )
       .all(fts, limit);
     for (const { attachment, snippet, ...r } of hits) {
@@ -746,7 +783,10 @@ export class Vault {
   }
 
   /** Pin or colour a note by rewriting its frontmatter; same conflict rules as a save. */
-  async setMeta(path: string, changes: { pinned?: boolean; color?: string | null; publish?: boolean; searchable?: boolean }): Promise<NoteMeta> {
+  async setMeta(
+    path: string,
+    changes: { pinned?: boolean; color?: string | null; publish?: boolean; searchable?: boolean; private?: boolean },
+  ): Promise<NoteMeta> {
     for (let attempt = 0; ; attempt++) {
       const note = await this.read(path);
       let content = note.content;
@@ -754,6 +794,7 @@ export class Vault {
       if (changes.color !== undefined) content = setFrontmatterKey(content, "color", changes.color);
       if (changes.publish !== undefined) content = setFrontmatterKey(content, "publish", changes.publish ? "true" : null);
       if (changes.searchable !== undefined) content = setFrontmatterKey(content, "searchable", changes.searchable ? "true" : null);
+      if (changes.private !== undefined) content = setFrontmatterKey(content, "private", changes.private ? "true" : null);
       try {
         return await this.write(note.path, content, note.hash);
       } catch (err) {
@@ -774,6 +815,7 @@ export class Vault {
       const row = this.db.query<{ hash: string }, [string]>("SELECT hash FROM notes WHERE path = ?").get(path);
       // Edited outside Sink since the last scan.
       const m = row?.hash === hash ? meta(this.row(path)!) : this.index(path, content, st.size, Math.floor(st.mtimeMs), hash);
+      if (m.private && limited()) throw new VaultError(404, "note not found");
       return { ...m, content };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") this.unindex(path);
@@ -808,6 +850,7 @@ export class Vault {
   /** A note's earlier versions, newest first: when, how big, and how it starts. */
   versions(path: string): { id: number; at: number; size: number; preview: string }[] {
     path = cleanPath(path, "note");
+    this.hide(path);
     return this.db
       .query<{ id: number; at: number; size: number; preview: string }, [string]>(
         // Enough to get past long frontmatter before taking the words.
@@ -829,6 +872,7 @@ export class Vault {
 
   /** One earlier version's full text. */
   version(path: string, id: number): { id: number; at: number; content: string } {
+    this.hide(cleanPath(path, "note"));
     const v = this.db
       .query<{ id: number; at: number; content: string }, [number, string]>("SELECT id, at, content FROM versions WHERE id = ? AND path = ?")
       .get(id, cleanPath(path, "note"));
@@ -842,7 +886,9 @@ export class Vault {
   }
 
   private row(path: string) {
-    return this.db.query<Row, [string]>("SELECT path, title, tags, mtime, size, hash, pinned, color, publish, searchable FROM notes WHERE path = ?").get(path);
+    return this.db
+      .query<Row, [string]>("SELECT path, title, tags, mtime, size, hash, pinned, color, publish, searchable, private FROM notes WHERE path = ?")
+      .get(path);
   }
 
   /**
@@ -895,6 +941,9 @@ export class Vault {
         throw err;
       });
       if (current === null && baseHash !== null) throw new VaultError(409, "note was deleted");
+      // Before the conflict check, whose 409 would hand back the text.
+      if (current !== null && limited() && parseNote(path, current).private)
+        throw baseHash === null ? new VaultError(409, "note already exists") : new VaultError(404, "note not found");
       if (current !== null) {
         if (baseHash === null) throw new VaultError(409, "note already exists");
         const hash = sha256(current);
@@ -941,6 +990,7 @@ export class Vault {
   async move(from: string, to: string): Promise<void> {
     from = cleanPath(from, "file");
     to = cleanPath(to, "file");
+    this.hide(from);
     if (to === from) return;
     let isNote = false;
     try {
@@ -989,8 +1039,9 @@ export class Vault {
     this.refile(from, to);
     for (const old of moved) this.emit({ type: "note.moved", path: isNote ? to : to + old.slice(from.length), from: old, source: "sink" });
     // Links to what moved follow it, as in Obsidian. A failure here leaves a link stale, never the move undone.
+    // Private notes that link here are kept up to date too, whoever moved it: the caller never sees them.
     for (const old of moved) {
-      await this.relink(old, isNote ? to : to + old.slice(from.length)).catch((err) =>
+      await assistantWrites.exit(() => this.relink(old, isNote ? to : to + old.slice(from.length))).catch((err) =>
         console.warn(`[notes] couldn't update links to ${old}: ${(err as Error).message}`),
       );
     }
@@ -1049,6 +1100,7 @@ export class Vault {
   /** Moves a note or folder into `.trash/`, keeping its path there (Obsidian's "move to .trash" behaviour). */
   async trash(path: string): Promise<{ trashed_to: string }> {
     path = cleanPath(path, "file");
+    this.hide(path);
     let isNote = false;
     let dest = `${TRASH}/${path}`;
     try {
@@ -1119,7 +1171,8 @@ export class Vault {
         const abs = join(this.dir, TRASH, path);
         const st = await stat(abs);
         const content = st.size > MAX_NOTE_BYTES ? "" : await readFile(abs, "utf8");
-        const { title, body } = parseNote(path, content);
+        const { title, body, private: secret } = parseNote(path, content);
+        if (secret && limited()) continue;
         const from = trashOrigin(rows, path);
         out.push({
           path,
@@ -1190,6 +1243,7 @@ export class Vault {
       const src = await this.abs(`${TRASH}/${rel}`);
       if ((await stat(src)).isDirectory()) return this.restoreFolder(rel);
       cleanPath(rel, "note");
+      if (limited() && parseNote(rel, await readFile(src, "utf8")).private) throw new VaultError(404, "note not found");
       const from = trashOrigin(this.trashRows(), rel);
       const original = cleanPath(from?.original ?? rel, "note");
       const ext = original.toLowerCase().endsWith(".excalidraw.md") ? ".excalidraw.md" : ".md";
@@ -1415,6 +1469,7 @@ export class Vault {
 
   async readFile(path: string): Promise<Uint8Array> {
     path = cleanPath(path, "file");
+    if (this.fileHidden(path)) throw new VaultError(404, "file not found");
     try {
       return await readFile(await this.abs(path));
     } catch (err) {
@@ -1427,10 +1482,11 @@ export class Vault {
  * What changed in the vault, for plugins. `source` says whether Sink made the change or a scan found it
  * (Obsidian, Syncthing, a file manager).
  */
-export type VaultEvent =
+export type VaultEvent = (
   | { type: "note.created" | "note.updated" | "note.deleted"; path: string; source: "sink" | "external" }
   | { type: "note.moved"; path: string; from: string; source: "sink" }
-  | { type: "todo.done" | "todo.undone"; path: string; text: string; source: "sink" };
+  | { type: "todo.done" | "todo.undone"; path: string; text: string; source: "sink" }
+) & { private?: boolean };
 
 export type ScanResult = { added: number; updated: number; removed: number; notes: number };
 
@@ -1440,6 +1496,7 @@ const meta = ({ excerpt: _, snippet: __, ...r }: Row & { excerpt?: string; snipp
   pinned: r.pinned === 1,
   publish: r.publish === 1,
   searchable: r.searchable === 1,
+  private: r.private === 1,
 });
 type TrashRow = { path: string; original: string; at: number };
 

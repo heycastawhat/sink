@@ -1108,6 +1108,96 @@ describe("notes", () => {
     expect((await setup.app.request("/api/notes/attachments", { method: "POST", headers: { authorization: `Bearer ${mcp}` }, body: form })).status).toBe(400);
   });
 
+  test("private notes: hidden from assistants' and the extension's tokens, shown to yours", async () => {
+    const owner = await login();
+    const secret = "---\nprivate: true\n---\n# Diary\n\nzanzibar feelings [[Plans]] ![[scan.png]]\n- [ ] call mum 📅 2026-01-01\n";
+    writeFileSync(file("Diary.md"), secret);
+    writeFileSync(file("Plans.md"), "# Plans\n\nzanzibar trip, see [[Diary]]\n");
+    mkdirSync(file("attachments"));
+    writeFileSync(file("attachments/scan.png"), png);
+    await setup.vault.scan();
+    await setup.vault.attachments();
+    const diary = ((await (await get(owner, q("Diary.md"))).json()) as any);
+    expect(diary.private).toBe(true);
+
+    for (const token of [setup.auth.issueToken("assistant", "abc123", "mcp"), setup.auth.issueToken("extension", "abc123", "extension")]) {
+      const json = async (path: string) => (await (await get(token, path)).json()) as any;
+      const paths = (items: { path: string }[]) => items.map((n) => n.path);
+      expect(paths((await json("/api/notes")).notes)).toEqual(["Plans.md"]);
+      expect(paths((await json("/api/notes?brief=true")).notes)).toEqual(["Plans.md"]);
+      expect(paths((await json("/api/notes?q=zanzibar")).items)).toEqual(["Plans.md"]);
+      expect((await get(token, q("Diary.md"))).status).toBe(404);
+      expect((await get(token, "/api/notes/versions?path=Diary.md")).status).toBe(404);
+      expect((await get(token, "/api/notes/backlinks?path=Diary.md")).status).toBe(404);
+      expect((await get(token, "/api/notes/mentions?path=Diary.md")).status).toBe(404);
+      expect((await json("/api/notes/backlinks?path=Plans.md")).items).toEqual([]);
+      expect((await json("/api/todos")).todos).toEqual([]);
+      expect((await json("/api/todos/count")).overdue).toBe(0);
+      // Only a private note embeds it, so the image is private too.
+      expect((await get(token, "/api/notes/attachment?name=scan.png")).status).toBe(404);
+      expect(paths((await json("/api/notes/attachments")).items)).toEqual([]);
+      // A stale save would answer 409 with the text: it must look like there's nothing there instead.
+      const overwrite = await send(token, "PUT", q("Diary.md"), { content: "# Mine\n", base_hash: "x" });
+      expect(overwrite.status).toBe(404);
+      expect(JSON.stringify(await overwrite.json())).not.toContain("zanzibar");
+      expect((await send(token, "PUT", q("Diary.md"), { content: "# Mine\n", base_hash: null })).status).toBe(409);
+      expect((await send(token, "PATCH", "/api/notes/meta?path=Diary.md", { pinned: true })).status).toBe(404);
+      expect((await send(token, "PATCH", "/api/notes/meta?path=Plans.md", { private: true })).status).toBe(403);
+      expect((await send(token, "POST", "/api/notes/move", { from: "Diary.md", to: "Out.md" })).status).toBe(404);
+      expect((await send(token, "DELETE", q("Diary.md"))).status).toBe(404);
+      expect((await send(token, "POST", "/api/todos/toggle", { path: "Diary.md", line: 5, raw: "- [ ] call mum 📅 2026-01-01", done: true })).status).toBe(404);
+      // A new note with its name goes beside it, without touching it.
+      const made = (await (await send(token, "POST", "/api/notes", { title: "Diary", content: "# Diary\n" })).json()) as any;
+      expect(made.path).toBe("Diary 1.md");
+      await send(owner, "DELETE", q("Diary 1.md"));
+    }
+    expect(readFileSync(file("Diary.md"), "utf8")).toBe(secret);
+
+    // Your own token sees and changes it as ever.
+    expect(((await (await get(owner, "/api/notes?q=zanzibar")).json()) as any).items).toHaveLength(2);
+    expect(((await (await get(owner, "/api/todos")).json()) as any).todos).toHaveLength(1);
+    expect((await get(owner, "/api/notes/attachment?name=scan.png")).status).toBe(200);
+    expect((await send(owner, "PATCH", "/api/notes/meta?path=Diary.md", { private: false })).status).toBe(200);
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    expect((await get(mcp, q("Diary.md"))).status).toBe(200);
+  });
+
+  test("private notes: an assistant's rename still updates a private note's links, and its trash hides them", async () => {
+    const owner = await login();
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    writeFileSync(file("Diary.md"), "---\nprivate: true\n---\n# Diary\n\nsee [[Plans]]\n");
+    writeFileSync(file("Plans.md"), "# Plans\n");
+    mkdirSync(file("Box"));
+    writeFileSync(file("Box/Secret.md"), "---\nprivate: true\n---\n# Secret\n");
+    await setup.vault.scan();
+    expect((await send(mcp, "POST", "/api/notes/move", { from: "Plans.md", to: "Ideas.md" })).status).toBe(200);
+    expect(readFileSync(file("Diary.md"), "utf8")).toContain("[[Ideas]]");
+    // Trashing the folder takes the private note with it; the trash still doesn't show it, or put it back alone.
+    expect((await send(mcp, "DELETE", q("Box"))).status).toBe(200);
+    const trash = ((await (await get(mcp, "/api/notes/trash")).json()) as any).items;
+    expect(trash).toEqual([]);
+    expect((await send(mcp, "POST", "/api/notes/trash/restore", { path: "Box/Secret.md" })).status).toBe(404);
+    expect(((await (await get(owner, "/api/notes/trash")).json()) as any).items.map((t: any) => t.path)).toEqual(["Box/Secret.md"]);
+  });
+
+  test("private notes: an assistant's change stream leaves them out", async () => {
+    const owner = await login();
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    const res = await get(mcp, "/api/events");
+    const reader = res.body!.getReader();
+    let seen = "";
+    const until = async (needle: string) => {
+      while (!seen.includes(needle)) seen += new TextDecoder().decode((await reader.read()).value);
+    };
+    await until("event: ready");
+    await send(owner, "POST", "/api/notes", { title: "Hidden", content: "---\nprivate: true\n---\n# Hidden\n" });
+    await send(owner, "DELETE", q("Hidden.md"));
+    await send(owner, "POST", "/api/notes", { title: "Shown", content: "# Shown\n" });
+    await until("Shown.md");
+    expect(seen).not.toContain("Hidden");
+    await reader.cancel();
+  });
+
   test("a file asked for by path is that file, even at the top level", async () => {
     const token = await login();
     mkdirSync(file("attachments"));

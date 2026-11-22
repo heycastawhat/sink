@@ -287,6 +287,7 @@ function cardHtml(n) {
   ${board ? '' : `<div class="note-body">${body}</div>`}
   <div class="note-foot">
     ${folder && folder !== state.folder ? `<span class="note-folder">${ic('folder')}${esc(folder)}</span>` : ''}
+    ${n.private ? `<span class="note-tag" title="Hidden from AI assistants">${ic('lock')}</span>` : ''}
     ${(n.tags ?? []).slice(0, 3).map((t) => `<span class="note-tag">#${esc(t)}</span>`).join('')}
     <span class="note-time">${relative(n.mtime)}</span>
   </div>
@@ -1019,6 +1020,7 @@ const screen = {
   poll: null,
   color: null,
   pinned: false,
+  private: false,
   failures: 0,
 };
 
@@ -1203,6 +1205,8 @@ function applyLook() {
   const archived = /^archive\//i.test(screen.path ?? '');
   $('note-archive').querySelector('m3e-icon').setAttribute('name', archived ? 'unarchive' : 'archive');
   $('note-archive').querySelector('span').textContent = archived ? 'Unarchive' : 'Archive';
+  $('note-private').querySelector('m3e-icon').setAttribute('name', screen.private ? 'lock_open' : 'lock');
+  $('note-private').querySelector('span').textContent = screen.private ? 'Show to AI' : 'Hide from AI';
   // Where the note lives (or will), drafts included: the same crumb before and after the first save.
   $('note-crumb').textContent = screen.folder || 'Notes';
   showFileName();
@@ -1274,7 +1278,7 @@ export async function openNote(path, { line } = {}) {
   try {
     const note = await api.note(path);
     if (seq !== openSeq) return;
-    Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color, fresh: false });
+    Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color, fresh: false });
     opened.touch(note.path);
     let text = note.content;
     // Unsaved edits from last time, made on this exact version: bring them back.
@@ -1504,7 +1508,7 @@ export async function openDraft({ text = draftText, folder = state.folder, id } 
   } else id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   // Clean shared text out of the address once it's in the draft.
   history.replaceState(history.state, '', draftHash(folder, id));
-  Object.assign(screen, { path: null, draftId: id, folder, hash: null, saved: '', pinned: false, color: null, fresh: true });
+  Object.assign(screen, { path: null, draftId: id, folder, hash: null, saved: '', pinned: false, private: false, color: null, fresh: true });
   const show = () => {
     showScreen();
     mountEditor(text);
@@ -1657,12 +1661,12 @@ async function resolveConflict(mine, current) {
     const copy = await api.createNote({ folder: screen.folder, title: conflictTitle(path), content: mine });
     clearUnsaved(path);
     if (current && screen.editor.getText() === mine) {
-      Object.assign(screen, { hash: current.hash, saved: current.content, pinned: current.pinned, color: current.color });
+      Object.assign(screen, { hash: current.hash, saved: current.content, pinned: current.pinned, private: current.private, color: current.color });
       screen.editor.setText(current.content);
     } else {
       // The original was deleted, or more text arrived while creating the copy. Keep editing the copy.
       if (location.hash.split('?')[0] === noteHash(path)) history.replaceState(history.state, '', noteHash(copy.path));
-      Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine, pinned: copy.pinned, color: copy.color });
+      Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine, pinned: copy.pinned, private: copy.private, color: copy.color });
     }
     applyLook();
     toast(`Changed somewhere else. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
@@ -1684,7 +1688,7 @@ async function refreshOpenNote() {
     const note = await api.note(path);
     // Only if nothing happened meanwhile: another note opened, a save landed, or typing started.
     if (note.hash !== hash && screen.path === path && screen.hash === hash && !screen.saving && !dirty()) {
-      Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
+      Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color });
       screen.editor.setText(note.content);
       applyLook();
       setStatus(`Updated ${relative(note.mtime)}`);
@@ -1841,7 +1845,7 @@ async function setMeta(changes) {
     // Typed meanwhile: keep that body under the server's new frontmatter, so the next save doesn't undo the change.
     const current = loadingText.read(screen.editor, screen.saved);
     const text = current !== screen.saved ? frontmatterOf(note.content) + bodyOf(current) : note.content;
-    Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, color: note.color });
+    Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color });
     if (text !== current) loadingText.replace(screen.editor, text);
     applyLook();
   })();
@@ -1901,6 +1905,12 @@ function wireScreen() {
     }
   });
   $('note-pin').addEventListener('click', () => setMeta({ pinned: !screen.pinned }));
+  // Private: assistants (MCP) and the browser extension can't see the note, its todos or what only it embeds.
+  $('note-private').addEventListener('click', async () => {
+    const hide = !screen.private;
+    await setMeta({ private: hide });
+    if (screen.private === hide) toast(hide ? 'Hidden from AI assistants' : 'AI assistants can see this note');
+  });
   $('note-palette').addEventListener('click', () => {
     const colors = $('note-colors');
     // On wider screens it's a popover under the button (see style.css); phones show it as a row under the bar.

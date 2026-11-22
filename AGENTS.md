@@ -114,7 +114,9 @@ small script against that data dir to call the API or set the `sink_session` coo
   vault). Migrations are append-only.
 - Never write to a note without its last-seen hash; a mismatch is a conflict, never an overwrite.
 - Anything public (share pages, `/api/public`) exposes only that note's text (no frontmatter) and the images it
-  embeds; an editable share writes only that note's body (frontmatter kept), with the usual hash check; assistants' `mcp` tokens can't manage tokens, empty the trash, share, or export.
+  embeds; an editable share writes only that note's body (frontmatter kept), with the usual hash check; assistants' `mcp` tokens can't manage tokens, empty the trash, share, or export. Notes with `private: true` are hidden from
+  `mcp` and `extension` tokens in the Vault itself (`limited()` in `notes.ts`): any new read path must go through it or
+  filter on `notes.private`.
 - The repo is public: keep personal details (hosts, domains, NAS paths) out of tracked files. Deployment-specific
   config lives in the git-ignored `docker-compose.override.yml`; private notes in `HANDOFF.local.md`.
 - Android: application id `nz.joshp.sink`. Release builds are signed in CI from repo secrets.

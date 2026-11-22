@@ -361,6 +361,8 @@ const listQuery = z.object({ view: z.enum(["open", "done", "all"]).default("open
 export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
   const app = new Hono<AuthEnv>();
   const today = () => localIso(new Date(), timeZone).slice(0, 10);
+  // Private notes' todos are left out for assistants' and the extension's tokens, as the notes are.
+  const shown = (c: Context<AuthEnv>) => (c.get("scope") === "full" ? "1" : "n.private = 0");
 
   app.get("/todos", (c) => {
     const q = listQuery.safeParse(c.req.query());
@@ -376,7 +378,7 @@ export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
       .query<Row, []>(
         `SELECT t.path, t.line, t.raw, t.text, t.status, t.due, t.remind_at, t.done_on, t.priority, t.start, t.scheduled,
                 n.title AS note_title, n.mtime
-         FROM todos t JOIN notes n ON n.path = t.path WHERE ${where} ORDER BY ${order} LIMIT 500`,
+         FROM todos t JOIN notes n ON n.path = t.path WHERE ${where} AND ${shown(c)} ORDER BY ${order} LIMIT 500`,
       )
       .all();
     return c.json({ todos: rows, today: today() });
@@ -387,8 +389,8 @@ export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
     const t = today();
     const row = db
       .query<{ overdue: number; today: number }, [string, string, string]>(
-        `SELECT COALESCE(SUM(due < ?1), 0) AS overdue, COALESCE(SUM(due = ?2), 0) AS today FROM todos
-         WHERE status = 'open' AND due IS NOT NULL AND (start IS NULL OR start <= ?3)`,
+        `SELECT COALESCE(SUM(due < ?1), 0) AS overdue, COALESCE(SUM(due = ?2), 0) AS today FROM todos t JOIN notes n ON n.path = t.path
+         WHERE status = 'open' AND due IS NOT NULL AND (start IS NULL OR start <= ?3) AND ${shown(c)}`,
       )
       .get(t, t, t);
     return c.json({ overdue: row?.overdue ?? 0, today: row?.today ?? 0 });

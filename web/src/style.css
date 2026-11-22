@@ -1214,7 +1214,8 @@ m3e-theme {
   background: color-mix(in srgb, var(--md-sys-color-on-surface) 7%, transparent);
 }
 
-.note-folder m3e-icon {
+.note-folder m3e-icon,
+.note-tag m3e-icon {
   font-size: 14px;
 }
 
