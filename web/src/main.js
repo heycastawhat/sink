@@ -484,7 +484,7 @@ async function renderSettings() {
   <div class="setting-row">
     <div class="grow">
       <div class="setting-title">Clip web pages</div>
-      <div class="muted small">New → Clip a web page saves a page's article as a note, with its address. Or drag this to your bookmarks bar and click it on any page: <a id="clip-bookmarklet" href="javascript:location.href='${esc(location.origin)}/#/clip?url='+encodeURIComponent(location.href)">Clip to Sink</a>.</div>
+      <div class="muted small">New → Clip a web page saves a page's article as a note, with its address. Or drag this to your bookmarks bar and click it on any page: <a id="clip-bookmarklet" href="javascript:location.href='${esc(location.origin)}/#/clip?url='+encodeURIComponent(location.href)">Clip to Sink</a>. In Chrome, <a href="https://chromewebstore.google.com/detail/sink/mbocbimebnaeojjiinpdbnckhiboghih" target="_blank" rel="noopener">the Sink extension</a> clips pages as you see them, signed-in ones too, and adds a side panel for quick notes and todos.</div>
     </div>
   </div>
   <div class="setting-row">

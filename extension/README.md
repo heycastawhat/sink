@@ -14,6 +14,10 @@ plain words ("call mum tomorrow 6pm"), and clip web pages.
 
 ## Install
 
+From the [Chrome Web Store](https://chromewebstore.google.com/detail/sink/mbocbimebnaeojjiinpdbnckhiboghih), then enter your Sink address and sign in.
+
+Or build it yourself:
+
 ```bash
 cd web && bun install        # the panel bundles the web app's editor
 cd ../extension && bun run build
