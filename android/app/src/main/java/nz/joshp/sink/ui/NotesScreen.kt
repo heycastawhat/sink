@@ -759,7 +759,7 @@ private fun CardActionsSheet(
             }
             if (!n.isPdf) Item(if (n.pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, if (n.pinned) "Unpin" else "Pin", onClick = onPin)
             Item(Icons.AutoMirrored.Outlined.DriveFileMove, "Move to folder", onClick = onMove)
-            Item(Icons.Outlined.ContentCopy, "Make a copy", onClick = onDuplicate)
+            if (!n.isPdf) Item(Icons.Outlined.ContentCopy, "Make a copy", onClick = onDuplicate)
             val archived = n.path.startsWith("Archive/", ignoreCase = true)
             if (!n.isPdf) Item(if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, if (archived) "Unarchive" else "Archive", onClick = onArchive)
             Item(Icons.Outlined.Delete, "Delete", danger = true, onClick = onDelete)

@@ -774,7 +774,6 @@ fun NoteScreen(
         }
     }
 
-    /** Keep's Archive: moves the note into Archive/ (or, from there, back to the top level) and leaves the note. */
     /** Saved first, so the copy has what's on screen; then the copy opens over this note, and Back comes back here. */
     fun duplicate() {
         scope.launch {
@@ -787,6 +786,7 @@ fun NoteScreen(
         }
     }
 
+    /** Keep's Archive: moves the note into Archive/ (or, from there, back to the top level) and leaves the note. */
     fun archive() {
         saveJob?.cancel()
         val p = ed.path ?: return
