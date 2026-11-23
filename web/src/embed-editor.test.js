@@ -9,7 +9,8 @@ const create = (options) => {
 };
 mock.module('./editor.js', () => ({ createEditor: create }));
 mock.module('./board.js', () => ({ createBoard: create }));
-mock.module('./plugin-api.js', () => ({ loadPlugins: () => plugins() }));
+const pluginApi = await import('./plugin-api.js');
+mock.module('./plugin-api.js', () => ({ ...pluginApi, loadPlugins: () => plugins() }));
 mock.module('./plugins/index.js', () => ({ bundledPlugins: {} }));
 mock.module('./backlinks.js', () => ({ backlinksHtml() {}, mentionsHtml() {}, onLinkMention() {} }));
 
