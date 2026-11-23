@@ -2035,6 +2035,12 @@ body.dragging-note [data-drop-folder] {
   border-radius: 16px;
 }
 
+/* The top of page one, where its heading is. */
+.note-image.pdf-page {
+  object-position: top;
+  background: #fff;
+}
+
 .pdf-card .note-title m3e-icon {
   color: var(--md-sys-color-error);
 }
@@ -2080,6 +2086,49 @@ body.dragging-note [data-drop-folder] {
     box-shadow:
       0 0 0 1px color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent),
       0 12px 40px color-mix(in srgb, #000 50%, transparent);
+  }
+}
+
+.sink-dialog.pdf-dialog {
+  width: min(1100px, calc(100vw - 32px));
+  max-width: none;
+  height: calc(100dvh - 48px);
+  max-height: none;
+}
+
+.pdf-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.pdf-view-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 8px 8px 24px;
+}
+
+.pdf-dialog .pdf-view-bar h2 {
+  flex: 1;
+  min-width: 0;
+  font-size: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-view iframe {
+  flex: 1;
+  border: 0;
+  background: var(--md-sys-color-surface-container);
+}
+
+@media (max-width: 743px) {
+  .sink-dialog.pdf-dialog {
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
   }
 }
 

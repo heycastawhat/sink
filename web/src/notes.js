@@ -9,7 +9,7 @@ import { createEditor } from './editor.js';
 import { deferredEditorText } from './deferred-editor-text.js';
 import { registry, onRegistryChange } from './plugin-api.js';
 import { buzz } from './haptics.js';
-import { askConfirm, askText, editTodo, pickFolder, pickFromList, pickVersion, shareNote } from './dialogs.js';
+import { askConfirm, askText, editTodo, pickFolder, pickFromList, pickVersion, shareNote, viewPdf } from './dialogs.js';
 import { fillTemplate, templatesIn } from './templates.js';
 
 const $ = (id) => document.getElementById(id);
@@ -304,9 +304,11 @@ function cardHtml(n) {
 
 function pdfCardHtml(f) {
   const folder = folderOf(f.path);
-  const body = f.snippet ? snippetHtml(f) : f.excerpt ? `<span class="ln"><span class="cl" style="--clamp:6">${esc(f.excerpt)}</span></span>` : '';
+  // Page one rather than its text; a search shows where it matched instead.
+  const body = f.snippet ? snippetHtml(f) : '';
   return `
 <article class="note-card pdf-card" data-path="${esc(f.path)}" tabindex="0" draggable="true">
+  ${f.snippet ? '' : `<img class="note-image pdf-page" src="${esc(api.thumbnailUrl(f.path, f.mtime))}" alt="" loading="lazy" draggable="false">`}
   <h3 class="note-title">${ic('picture_as_pdf')}${esc(f.title)}</h3>
   ${body ? `<div class="note-body">${body}</div>` : ''}
   <div class="note-foot">
@@ -316,8 +318,7 @@ function pdfCardHtml(f) {
 </article>`;
 }
 
-/** Opens a PDF in the browser's own viewer, in a new tab. */
-const openPdf = (path) => window.open(api.fileUrl(path), '_blank', 'noopener');
+const openPdf = (path) => viewPdf({ title: fileOf(path)?.title ?? path.split('/').pop(), url: api.fileUrl(path), name: path.split('/').pop() });
 
 // An image that's gone (or not an image after all) leaves the card as it would be without one.
 document.addEventListener('error', (e) => e.target.matches?.('.note-image') && e.target.remove(), true);

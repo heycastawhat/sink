@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { openDb } from "./db";
 import { Vault } from "./notes";
-import { extractText, extractTools } from "./extract";
+import { extractText, extractTools, pdfThumbnail } from "./extract";
 
 // "Warranty card" in Helvetica; pdftotext rebuilds the missing xref table.
 const pdf = `%PDF-1.1
@@ -98,6 +98,14 @@ describe("attachment text", () => {
     const dir = mkdtempSync(join(tmpdir(), "sink-extract-"));
     writeFileSync(join(dir, "a.pdf"), pdf);
     expect(await extractText(join(dir, "a.pdf"))).toBe("Warranty card");
+  });
+
+  test.skipIf(!Bun.which("pdftoppm"))("pdftoppm draws a PDF's first page", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sink-extract-"));
+    writeFileSync(join(dir, "a.pdf"), pdf);
+    const jpeg = await pdfThumbnail(join(dir, "a.pdf"), 120);
+    expect([...jpeg!.slice(0, 2)]).toEqual([0xff, 0xd8]);
+    expect(await pdfThumbnail(join(dir, "missing.pdf"))).toBeNull();
   });
 
   test.skipIf(!extractTools.includes("ocr"))("tesseract reads an image", async () => {

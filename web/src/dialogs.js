@@ -498,3 +498,24 @@ export function pickFolder({ title, folders, current = '', exclude = null, actio
     },
   );
 }
+
+/** Shows a PDF in the browser's own viewer, framed in a dialog over the app. */
+export function viewPdf({ title, url, name }) {
+  return open(
+    `<div class="pdf-view">
+  <div class="pdf-view-bar">
+    <h2>${esc(title)}</h2>
+    <m3e-icon-button data-tab aria-label="Open in new tab" title="Open in new tab">${ic('open_in_new')}</m3e-icon-button>
+    <m3e-icon-button data-download aria-label="Download" title="Download">${ic('download')}</m3e-icon-button>
+    <m3e-icon-button data-close aria-label="Close" title="Close">${ic('close')}</m3e-icon-button>
+  </div>
+  <iframe src="${esc(url)}" title="${esc(title)}"></iframe>
+</div>`,
+    (dlg, done) => {
+      dlg.classList.add('pdf-dialog');
+      dlg.querySelector('[data-close]').addEventListener('click', () => done(null));
+      dlg.querySelector('[data-tab]').addEventListener('click', () => window.open(url, '_blank', 'noopener'));
+      dlg.querySelector('[data-download]').addEventListener('click', () => Object.assign(document.createElement('a'), { href: url, download: name }).click());
+    },
+  );
+}

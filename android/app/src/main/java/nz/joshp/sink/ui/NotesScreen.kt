@@ -401,7 +401,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                         // (a note is only ever in one), so a pinned card slides between the sections.
                         val card: @Composable (NoteMeta, Modifier) -> Unit = { n, modifier ->
                             // A PDF has no pin; its long-press menu still moves or deletes it.
-                            if (n.isPdf) NoteCard(n, onOpen, onCardMenu, vm::cardImage, modifier)
+                            if (n.isPdf) NoteCard(n, onOpen, onCardMenu, vm::cardImage, modifier, vm::pdfThumbnail)
                             else SwipeCard(n, onPin = { togglePin(n) }, onArchive = { archive(n) }, modifier) {
                                 NoteCard(n, onOpen, onCardMenu, vm::cardImage)
                             }
@@ -592,7 +592,14 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMeta) -> Unit, loadImage: suspend (String) -> ImageBitmap?, modifier: Modifier = Modifier) {
+private fun NoteCard(
+    n: NoteMeta,
+    onOpen: (String) -> Unit,
+    onLongPress: (NoteMeta) -> Unit,
+    loadImage: suspend (String) -> ImageBitmap?,
+    modifier: Modifier = Modifier,
+    loadPdfPage: (suspend (NoteMeta) -> ImageBitmap?)? = null,
+) {
     val press = remember { MutableInteractionSource() }
     val firstLine = n.excerpt.orEmpty().trimStart().lineSequence().firstOrNull().orEmpty()
     // A note with no heading is named after its first line (Keep-style); showing both would repeat it.
@@ -617,6 +624,13 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMe
         if (n.image != null && n.snippet == null) {
             val image by produceState<ImageBitmap?>(null, n.image) { value = loadImage(n.image) }
             image?.let { Image(it, null, Modifier.fillMaxWidth().heightIn(max = 200.dp), contentScale = ContentScale.Crop) }
+        }
+        // A PDF shows the top of its first page rather than its text; a search shows where it matched instead.
+        if (loadPdfPage != null && n.snippet == null) {
+            val page by produceState<ImageBitmap?>(null, n.path, n.mtime) { value = loadPdfPage(n) }
+            page?.let {
+                Image(it, null, Modifier.fillMaxWidth().heightIn(max = 200.dp).background(Color.White), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
+            }
         }
         Column(
             Modifier.padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
@@ -643,10 +657,7 @@ private fun NoteCard(n: NoteMeta, onOpen: (String) -> Unit, onLongPress: (NoteMe
             }
             if (n.snippet != null) {
                 Text(highlight(n.snippet), style = MaterialTheme.typography.bodyMedium, maxLines = 8, overflow = TextOverflow.Ellipsis)
-            } else if (n.isPdf) {
-                // A PDF's text is plain, not markdown.
-                if (!n.excerpt.isNullOrBlank()) Text(n.excerpt, style = MaterialTheme.typography.bodyMedium, maxLines = 6, overflow = TextOverflow.Ellipsis)
-            } else if (!n.isBoard) {
+            } else if (!n.isBoard && !n.isPdf) {
                 Excerpt(n.excerpt.orEmpty())
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {

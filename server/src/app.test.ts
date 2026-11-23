@@ -1536,6 +1536,30 @@ describe("notes", () => {
     expect((await get(mcp, "/api/notes/attachment?path=Papers/Will.pdf")).status).toBe(404);
   });
 
+  test("PDFs filed in folders: a first-page picture for the card, once per version", async () => {
+    const owner = await login();
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    let renders = 0;
+    setup.vault.thumbnailer = async (abs: string) => (renders++, abs.endsWith("Blank.pdf") ? null : new TextEncoder().encode("jpeg"));
+    mkdirSync(file("Papers"));
+    mkdirSync(file("attachments"));
+    writeFileSync(file("Papers/Will.pdf"), "last will");
+    writeFileSync(file("Papers/Blank.pdf"), "");
+    writeFileSync(file("attachments/scan.pdf"), "receipt");
+    writeFileSync(file("Estate.md"), "---\nprivate: true\n---\n# Estate\n\n![[Will.pdf]]\n");
+    await setup.vault.scan();
+    const res = await get(owner, "/api/notes/thumbnail?path=Papers/Will.pdf");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    expect(await res.text()).toBe("jpeg");
+    await get(owner, "/api/notes/thumbnail?path=Papers/Will.pdf");
+    expect(renders).toBe(1);
+    expect((await get(owner, "/api/notes/thumbnail?path=Papers/Blank.pdf")).status).toBe(404);
+    expect((await get(owner, "/api/notes/thumbnail?path=attachments/scan.pdf")).status).toBe(404);
+    expect((await get(owner, "/api/notes/thumbnail?path=Papers/Gone.pdf")).status).toBe(404);
+    expect((await get(mcp, "/api/notes/thumbnail?path=Papers/Will.pdf")).status).toBe(404);
+  });
+
   test("PDFs filed in folders: upload, list with their text, search, move, trash and restore", async () => {
     const token = await login();
     setup.vault.extractor = async (abs: string) => Bun.file(abs).text();

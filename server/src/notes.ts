@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { now } from "./db";
 import { listed, parseTodos } from "./todos";
-import { EXTRACTABLE, extractText, type Extractor } from "./extract";
+import { EXTRACTABLE, extractText, pdfThumbnail, type Extractor } from "./extract";
 
 /**
  * The notes vault: plain markdown files in a folder (often a NAS share), laid out the way Obsidian expects.
@@ -382,6 +382,9 @@ export class Vault {
   readonly events = new EventEmitter();
   /** Reads attachments' text for search (tests swap in a stub). */
   extractor: Extractor = extractText;
+  /** Renders a document's card picture (tests swap in a stub). */
+  thumbnailer: (abs: string) => Promise<Uint8Array | null> = pdfThumbnail;
+  private thumbs = new Map<string, Promise<Uint8Array | null>>();
   private extracting: Promise<void> | null = null;
   private extractAgain = false;
 
@@ -1560,6 +1563,22 @@ export class Vault {
       }
     };
     yield* walk.call(this, "");
+  }
+
+  /** Page one of a document (see isDocument) as a JPEG, kept per version so a grid of cards renders each once. */
+  async thumbnail(path: string): Promise<Uint8Array | null> {
+    path = cleanPath(path, "file");
+    if (!isDocument(path) || this.resolveFile(path, { exact: true }) !== path || this.fileHidden(path)) throw new VaultError(404, "file not found");
+    const abs = await this.abs(path);
+    const st = await stat(abs).catch((err) => fsError(err, "file"));
+    const key = `${path}:${st.mtimeMs}:${st.size}`;
+    let thumb = this.thumbs.get(key);
+    if (!thumb) {
+      thumb = this.thumbnailer(abs);
+      this.thumbs.set(key, thumb);
+      if (this.thumbs.size > 200) this.thumbs.delete(this.thumbs.keys().next().value!);
+    }
+    return thumb;
   }
 
   async readFile(path: string): Promise<Uint8Array> {

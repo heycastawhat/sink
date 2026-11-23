@@ -295,16 +295,25 @@ fun Api.attachmentBytes(ref: String, exact: Boolean = false): Pair<String, ByteA
     }
 }
 
+/** Blocking: page one of a PDF filed in a folder, as a JPEG for its card. */
+fun Api.pdfThumbnailBytes(path: String): Pair<String, ByteArray>? {
+    val url = (base + "/api/notes/thumbnail").toHttpUrl().newBuilder().addQueryParameter("path", path).build()
+    Http.client.newCall(authed(url).build()).execute().use { res ->
+        if (!res.isSuccessful) return null
+        return "image/jpeg" to res.body.bytes()
+    }
+}
+
 /**
  * Blocking: an attachment from the on-disk cache in [dir], fetched (and kept) first if it isn't there yet. The file
  * and its content type, or null if it can't be had.
  */
-fun Api?.cachedAttachment(dir: File, ref: String): Pair<File, String>? {
+fun Api?.cachedAttachment(dir: File, ref: String, fetch: Api.() -> Pair<String, ByteArray>? = { attachmentBytes(ref) }): Pair<File, String>? {
     val id = java.security.MessageDigest.getInstance("SHA-1").digest(ref.toByteArray()).joinToString("") { "%02x".format(it) }
     val file = File(dir, id)
     val typeFile = File(dir, "$id.type")
     if (!file.isFile) {
-        val (type, bytes) = runCatching { this?.attachmentBytes(ref) }.getOrNull() ?: return null
+        val (type, bytes) = runCatching { this?.fetch() }.getOrNull() ?: return null
         file.writeBytes(bytes)
         typeFile.writeText(type)
     }

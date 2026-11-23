@@ -83,6 +83,7 @@ export const api = {
     return request('/notes/attachments', { method: 'POST', body: form });
   },
   fileUrl: (path) => `/api/notes/attachment?path=${encodeURIComponent(path)}`,
+  thumbnailUrl: (path, version) => `/api/notes/thumbnail?path=${encodeURIComponent(path)}&v=${version}`,
   attachmentUrl: (ref) => `/api/notes/attachment?${ref.includes('/') ? 'path' : 'name'}=${encodeURIComponent(ref)}`,
 
   todos: (view = 'open') => request(`/todos?view=${view}`),

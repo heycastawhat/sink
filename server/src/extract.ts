@@ -25,3 +25,17 @@ export const extractText: Extractor = async (abs) => {
   const text = await new Response(proc.stdout).text();
   return (await proc.exited) === 0 ? text.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT) : "";
 };
+
+const pdftoppm = Bun.which("pdftoppm");
+
+/** Page one of a PDF as a JPEG `width` pixels wide, for its card; null without `pdftoppm` or when it fails. */
+export async function pdfThumbnail(abs: string, width = 480): Promise<Uint8Array | null> {
+  if (!pdftoppm) return null;
+  const proc = Bun.spawn([pdftoppm, "-q", "-jpeg", "-f", "1", "-l", "1", "-singlefile", "-scale-to-x", String(width), "-scale-to-y", "-1", abs], {
+    stdout: "pipe",
+    stderr: "ignore",
+    timeout: 30_000,
+  });
+  const bytes = new Uint8Array(await new Response(proc.stdout).arrayBuffer());
+  return (await proc.exited) === 0 && bytes.length ? bytes : null;
+}

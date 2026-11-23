@@ -270,6 +270,15 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     }),
   );
 
+  // A PDF's first page for its card. Versioned by the client (`v`), so it can be kept.
+  app.get("/notes/thumbnail", (c) =>
+    run(c, async () => {
+      const bytes = await vault.thumbnail(c.req.query("path") ?? "");
+      if (!bytes) return c.json({ error: "no preview" }, 404);
+      return new Response(bytes, { headers: { "content-type": "image/jpeg", "x-content-type-options": "nosniff", "cache-control": "private, max-age=31536000, immutable" } });
+    }),
+  );
+
   app.get("/notes/attachments", (c) => run(c, async () => c.json({ items: await vault.attachments() })));
 
   // Save a file at a path, like a note save: `base_hash` is what the client last saw (none: it must not exist yet).

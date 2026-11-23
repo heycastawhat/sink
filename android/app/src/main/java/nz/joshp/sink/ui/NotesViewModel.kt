@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import nz.joshp.sink.data.attach
 import nz.joshp.sink.data.attachmentBytes
 import nz.joshp.sink.data.cachedAttachment
+import nz.joshp.sink.data.pdfThumbnailBytes
 import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -159,16 +160,23 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     private val cardImages = android.util.LruCache<String, ImageBitmap>(40)
 
     /** A card's image, scaled down to about card width, from the disk cache the editor's images use (works offline). */
-    suspend fun cardImage(ref: String): ImageBitmap? = cardImages[ref] ?: withContext(Dispatchers.IO) {
+    suspend fun cardImage(ref: String): ImageBitmap? = cachedImage(ref) { cachedAttachment(it, ref) }
+
+    /** A PDF's first page; keyed by its mtime so a new version is fetched again. */
+    suspend fun pdfThumbnail(n: NoteMeta): ImageBitmap? = cachedImage("pdf:${n.path}@${n.mtime}") { dir ->
+        cachedAttachment(dir, "pdf:${n.path}@${n.mtime}") { pdfThumbnailBytes(n.path) }
+    }
+
+    private suspend fun cachedImage(key: String, load: suspend Api?.(File) -> Pair<File, String>?): ImageBitmap? = cardImages[key] ?: withContext(Dispatchers.IO) {
         val dir = File(getApplication<Application>().cacheDir, "attachments").apply { mkdirs() }
-        val (file, type) = api().cachedAttachment(dir, ref) ?: return@withContext null
+        val (file, type) = api().load(dir) ?: return@withContext null
         if (!type.startsWith("image/") || type == "image/svg+xml") return@withContext null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= 600) sample *= 2
         BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
-    }?.also { cardImages.put(ref, it) }
+    }?.also { cardImages.put(key, it) }
 
     val hideFoldered: StateFlow<Boolean> = sinkApp.settings.hideFoldered.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
