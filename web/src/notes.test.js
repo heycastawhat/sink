@@ -15,6 +15,11 @@ const create = (options) => {
   return editor;
 };
 mock.module('./editor.js', () => ({ createEditor: create }));
+// Live editing needs a real CodeMirror view to connect; without one these tests cover saving the usual way.
+mock.module('./live.js', () => ({
+  liveSession: () => ({ extension: [], started: false, unavailable: false, start() {}, destroy() {} }),
+  renderPeople() {},
+}));
 
 let notes;
 let current;

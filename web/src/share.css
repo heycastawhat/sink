@@ -107,3 +107,11 @@ body {
   top: 8px;
   z-index: 1;
 }
+
+/* Who else has the note open, top right. */
+.share-top {
+  display: flex;
+  justify-content: flex-end;
+  margin: -16px 16px 8px;
+  min-height: 26px;
+}

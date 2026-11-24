@@ -1,8 +1,11 @@
 // A shared note (/s/<id>), through the same editor so it looks the way it does in Sink. The note comes from
 // /api/public/share/<id>, and so do the images it embeds. Diagrams and maths render with the bundled plugins.
-// If the owner lets the link edit, a visitor gives a name and their changes autosave back to the note.
+// Everyone on the link sees changes live (live.js), with the cursors of whoever is typing. If the owner lets the link
+// edit, a visitor gives a name and types along. Without live editing (an older server) edits save the old way:
+// autosave with the hash, and a poll for others' edits.
 
 import { createEditor } from './editor.js';
+import { liveSession, renderPeople } from './live.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
 import { decodeLink } from './util.js';
@@ -17,15 +20,19 @@ const SAVE_DELAY = 1000;
 const POLL_MS = 10_000;
 
 let editor;
+let session = null;
 const state = { hash: null, saved: '', saving: null, timer: null, mine: null };
+const shareName = () => localStorage.getItem('sink-share-name');
 
-function mount(doc, readOnly) {
+function mount(doc, readOnly, live = null) {
   editor?.view.destroy();
   editor = createEditor({
     parent: $('editor'),
     doc,
     readOnly,
+    extensions: live?.extension,
     onChange: () => {
+      if (live) return;
       // Someone else's text put in by refresh or a conflict is already saved: no save, and the notice stays.
       if (!dirty()) return;
       clearTimeout(state.timer);
@@ -43,7 +50,42 @@ function mount(doc, readOnly) {
 }
 
 function status(text) {
-  $('share-status').textContent = `Editing as ${localStorage.getItem('sink-share-name')} · ${text}`;
+  $('share-status').textContent = `Editing as ${shareName()} · ${text}`;
+}
+
+/** Live: everyone on the link sees changes as they happen; `editing`, this visitor types along too. */
+function startLive(note, editing) {
+  session?.destroy();
+  const live = liveSession({
+    base: { text: note.content, hash: note.hash ?? '' },
+    streamUrl: (params) => {
+      if (editing) params.set('name', shareName());
+      return `${base}/live?${params}`;
+    },
+    actionUrl: (name) => `${base}/live/${name}`,
+    onStatus: (text) => editing && status(text),
+    onPeople: (people) => renderPeople($('share-people'), people),
+    // Typed while away and the note changed meanwhile: nothing safe to merge it onto, so it stays copyable.
+    onConflict: (text) => {
+      state.mine = text;
+      $('share-copy').hidden = false;
+      status('The note changed while you were away, so your last edits weren’t saved');
+    },
+    onRefused: (message) => status(`${message[0].toUpperCase()}${message.slice(1)}`),
+    onReadOnly: () => status('Editing was turned off'),
+    onGone: () => {
+      renderPeople($('share-people'), []);
+      if (editing) status('Editing was turned off, or the note isn’t shared any more');
+      mount(editor.getText(), true);
+    },
+    onUnavailable: () => {
+      session = null;
+      renderPeople($('share-people'), []);
+      if (editing) startEditingOldWay(note);
+    },
+  });
+  session = live;
+  mount(note.content, !editing, live);
 }
 
 const dirty = () => editor.getText() !== state.saved;
@@ -105,15 +147,23 @@ async function refresh() {
 }
 
 function startEditing(note) {
-  Object.assign(state, { hash: note.hash, saved: note.content });
   $('share-name').hidden = true;
   $('share-editing').hidden = false;
+  status('Connecting…');
+  startLive(note, true);
+  addEventListener('beforeunload', (e) => {
+    if (session ? session.pending() : dirty()) e.preventDefault();
+  });
+}
+
+async function startEditingOldWay(note) {
+  // The note may have changed since the page loaded.
+  const fresh = await fetch(base).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (fresh) note = fresh;
+  Object.assign(state, { hash: note.hash, saved: note.content });
   status('Saved');
   mount(note.content, false);
   setInterval(refresh, POLL_MS);
-  addEventListener('beforeunload', (e) => {
-    if (dirty()) e.preventDefault();
-  });
 }
 
 async function show() {
@@ -134,7 +184,7 @@ async function show() {
     },
     bundledPlugins,
   );
-  mount(note.content, true);
+  if (!note.editable || !shareName()) startLive(note, false);
   if (!note.editable) return;
   $('share-copy').addEventListener('click', () => navigator.clipboard?.writeText(state.mine).then(() => ($('share-copy').hidden = true)));
   if (localStorage.getItem('sink-share-name')) return startEditing(note);

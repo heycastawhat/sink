@@ -7,6 +7,7 @@ import { cleanPath, isBoard, splitFrontmatter, VaultError, type Vault } from "..
 import { clientIp, rateLimit } from "../ratelimit";
 import { attachmentResponse } from "./notes";
 import type { Space } from "../users";
+import { liveActions, liveFor, LiveError, liveStream, streamQuery, type Room } from "../live";
 
 /**
  * Share links: a note anyone with the link can read at /s/<id>, and edit too if the owner turns that on. The id is
@@ -60,7 +61,10 @@ export function shareRoutes(db: Database, vault: Vault) {
     }
     const existing = byPath(path);
     if (existing) {
-      if (body.data.editable !== undefined) db.query("UPDATE shares SET editable = ? WHERE id = ?").run(body.data.editable ? 1 : 0, existing.id);
+      if (body.data.editable !== undefined) {
+        db.query("UPDATE shares SET editable = ? WHERE id = ?").run(body.data.editable ? 1 : 0, existing.id);
+        liveFor(vault).room(path)?.shareChanged(existing.id, body.data.editable);
+      }
       return c.json(view(byPath(path)!));
     }
     db.query("INSERT INTO shares (id, path, created_at, editable) VALUES (?, ?, ?, ?)").run(random(), path, now(), body.data.editable ? 1 : 0);
@@ -73,7 +77,9 @@ export function shareRoutes(db: Database, vault: Vault) {
     if (!q.success) return c.json({ error: "invalid query" }, 400);
     const path = notePath(q.data.path);
     if (!path) return c.json({ error: "invalid path" }, 400);
+    const share = byPath(path);
     db.query("DELETE FROM shares WHERE path = ?").run(path);
+    if (share) liveFor(vault).room(path)?.shareChanged(share.id, null);
     return c.json({ ok: true });
   });
 
@@ -101,8 +107,11 @@ export function embedsOf(content: string): Set<string> {
 export function publicShareRoutes(spaces: () => Space[]) {
   const app = new Hono();
   const allowed = rateLimit(120, 60_000);
+  // Live editing sends a few requests a second while someone types.
+  const allowedLive = rateLimit(1500, 60_000);
   app.use("/share/*", async (c, next) => {
-    if (!allowed(clientIp(c))) return c.json({ error: "slow down" }, 429);
+    const live = /^\/api\/public\/share\/[^/]+\/live(\/|$)/.test(c.req.path);
+    if (!(live ? allowedLive : allowed)(clientIp(c))) return c.json({ error: "slow down" }, 429);
     await next();
     c.header("x-robots-tag", "noindex, nofollow");
     c.header("cache-control", "no-store");
@@ -163,6 +172,48 @@ export function publicShareRoutes(spaces: () => Space[]) {
       return c.json({ error: err.message, current }, err.status);
     }
   });
+
+  /** What a share link's visitor may not do, checked on each live change as on PUT. */
+  const allow = (before: string, after: string) => {
+    if (splitFrontmatter(after).yaml !== splitFrontmatter(before).yaml) return "the text can't change the note's properties";
+    const embeds = embedsOf(before);
+    if ([...embedsOf(after)].some((e) => !embeds.has(e))) return "images can't be added to a shared note";
+    return null;
+  };
+
+  // Live: everyone on the link sees changes as they're made. A visitor who gave a name can edit, if the link allows it.
+  app.get("/share/:id/live", async (c) => {
+    const q = streamQuery.safeParse(c.req.query());
+    if (!q.success) return c.json({ error: "invalid query" }, 400);
+    const id = c.req.param("id");
+    const found = find(id);
+    if (!found) return c.json({ error: "not found" }, 404);
+    let room: Room;
+    try {
+      room = await liveFor(found.vault).open(found.share.path);
+    } catch (err) {
+      if (err instanceof LiveError || err instanceof VaultError) return c.json({ error: "not found" }, 404);
+      throw err;
+    }
+    const name = (c.req.query("name") ?? "").trim().slice(0, 60);
+    const editor = !!found.share.editable && !!name;
+    return liveStream(c, room, { clientID: q.data.client, principal: `share:${id}:${name}`, name: name || "Viewer", view: "body", editor, allow, shareId: id }, q.data);
+  });
+  app.route(
+    "/share/:id/live",
+    liveActions((c, conn) => {
+      const id = c.req.param("id")!;
+      const found = find(id);
+      if (!found?.share.editable) return null;
+      const room = liveFor(found.vault).conns.get(conn);
+      const peer = room?.peers.get(conn);
+      if (!room || peer?.shareId !== id) return null;
+      // Who edited last, for the owner's share dialog (as a PUT records it).
+      if (c.req.path.endsWith("/push") && (found.share.edited_by !== peer.name || now() - (found.share.edited_at ?? 0) > 60_000))
+        found.db.query("UPDATE shares SET edited_by = ?, edited_at = ? WHERE id = ?").run(peer.name, now(), id);
+      return room;
+    }),
+  );
 
   app.get("/share/:id/attachment", async (c) => {
     const found = await shared(c.req.param("id"));
