@@ -317,3 +317,32 @@ test("a client that goes quiet is dropped, cursor and all", async () => {
   const people = a.st.events.filter((e) => e.event === "presence").at(-1)!.data.people;
   expect(people.map((p: any) => p.id)).toEqual(["clientaaa"]);
 });
+
+test("an editable share link's visitor can paste an image in, and only an image", async () => {
+  s = makeSetup();
+  await put("Pics.md", "text\n");
+  const share = (await (await post("/api/notes/share", { path: "Pics.md", editable: true })).json()) as any;
+  const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (ch) => ch.charCodeAt(0));
+  const upload = (bytes: Uint8Array, name: string, id = share.id) => {
+    const form = new FormData();
+    form.set("file", new File([bytes], name));
+    return s.app.request(`/api/public/share/${id}/attachment`, { method: "POST", body: form });
+  };
+  // Not an image, whatever it's called.
+  expect((await upload(new TextEncoder().encode("<script>"), "x.png")).status).toBe(400);
+  const res = await upload(png, "whatever.html");
+  expect(res.status).toBe(201);
+  const { embed } = (await res.json()) as { embed: string };
+  expect(embed).toMatch(/^!\[\[Pasted image \d{14} [\w-]{6}\.png\]\]$/);
+  const name = embed.slice(3, -2);
+  // Served at once (a live edit can show it before the note is written), and the visitor's edit may embed it.
+  expect((await s.app.request(`/api/public/share/${share.id}/attachment?name=${encodeURIComponent(name)}`)).status).toBe(200);
+  const kim = await openShare(share.id, "clientkim", "Kim");
+  const ok = await post(`/api/public/share/${share.id}/live/push`, { conn: kim.hello.conn, version: 0, updates: [{ clientID: "clientkim", changes: insert(5, 5, embed + "\n") }] }, false);
+  expect(ok.status).toBe(200);
+  await post(`/api/public/share/${share.id}/live/save`, { conn: kim.hello.conn }, false);
+  expect(file("Pics.md")).toBe(`text\n${embed}\n`);
+  // A read-only link takes no uploads.
+  await post("/api/notes/share", { path: "Pics.md", editable: false });
+  expect((await upload(png, "a.png")).status).toBe(404);
+});

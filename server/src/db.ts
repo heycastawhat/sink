@@ -433,6 +433,10 @@ export const migrations: string[] = [
   ALTER TABLE notes ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
   UPDATE notes SET mtime = 0;
   `,
+  // Images pasted into a note through its editable share link: the only new embeds a visitor's edit may add.
+  `
+  CREATE TABLE share_uploads (share_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (share_id, name));
+  `,
 ];
 
 export function openDb(path: string): Database {
