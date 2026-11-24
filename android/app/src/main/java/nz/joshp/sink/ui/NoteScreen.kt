@@ -373,7 +373,7 @@ fun NoteScreen(
             store.takeCreated(ed.key)?.let(store::note)?.let { n ->
                 ed.path = n.path
                 ed.hash = n.hash
-                if (n.content == ed.queued) ed.saved = n.content
+                if (n.content == ed.queued?.text) ed.saved = n.content
                 ed.queued = null
                 shownPath = n.path
             }
@@ -414,7 +414,7 @@ fun NoteScreen(
                     if (ed.dirty) continue
                 }
                 SaveResult.Offline -> {
-                    ed.queued = edit.text
+                    ed.queued = edit
                     status = "Offline, will save"
                 }
                 is SaveResult.Failed -> {
@@ -611,7 +611,7 @@ fun NoteScreen(
         // Unsaved edits from before: show them, and save (a stale base becomes a conflict copy, never an overwrite).
         val start = pending?.let {
             ed.hash = it.baseHash
-            ed.queued = it.text
+            ed.queued = it
             it.text
         } ?: ed.saved
         ed.current = start

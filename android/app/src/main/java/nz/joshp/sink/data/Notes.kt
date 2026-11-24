@@ -430,7 +430,7 @@ data class PendingEdit(
     val folder: String = "",
     @SerialName("base_hash") val baseHash: String?,
     val text: String,
-    val at: Long = System.currentTimeMillis(),
+    val at: Long = 0,
 )
 
 /**
@@ -526,6 +526,9 @@ internal sealed interface QueuedSave {
 
     data class Saved(override val edit: PendingEdit, val path: String, val hash: String) : QueuedSave
     data class Conflict(override val edit: PendingEdit, val server: Note?, val copy: NoteMeta?) : QueuedSave {
+        fun matches(queued: PendingEdit?, key: String, baseHash: String?) =
+            edit == queued && edit.key == key && edit.baseHash == baseHash
+
         fun result() = SaveResult.Conflict(server, copy, edit.text)
     }
 }
@@ -554,9 +557,9 @@ object NoteSaver {
         return first.replace(Regex("""^[-*+]\s+(\[.]\s+)?|^#+\s+"""), "").take(60)
     }
 
-    suspend fun save(context: Context, api: Api, edit: PendingEdit, queued: String?): SaveResult = lock.withLock {
+    suspend fun save(context: Context, api: Api, edit: PendingEdit, queued: PendingEdit?): SaveResult = lock.withLock {
         val outcome = outcomes[edit.key] as? QueuedSave.Conflict
-        if (outcome != null && outcome.edit.baseHash == edit.baseHash && outcome.edit.text == queued) {
+        if (outcome?.matches(queued, edit.key, edit.baseHash) == true) {
             return@withLock outcome.result()
         }
         saveLocked(context, api, edit, requeue = true)

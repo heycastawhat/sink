@@ -4,6 +4,7 @@ import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.NoteMeta
 import nz.joshp.sink.data.QueuedSave
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,12 +18,12 @@ class EditorConflictTest {
         hash = "old-hash"
         saved = "original text"
         current = "Android edit"
-        queued = current
+        queued = pendingEdit()!!.copy(at = 2L)
     }
 
     @Test fun `a worker conflict followed by two unchanged flushes creates only the worker copy`() {
         val editor = editor()
-        val outcome = QueuedSave.Conflict(editor.pendingEdit()!!, original, copy)
+        val outcome = QueuedSave.Conflict(editor.queued!!, original, copy)
         assertTrue(editor.matchesConflict(outcome))
         editor.adoptConflict(outcome.result())
 
@@ -37,7 +38,7 @@ class EditorConflictTest {
 
     @Test fun `text typed after the worker edit is saved against the conflict copy`() {
         val editor = editor()
-        val outcome = QueuedSave.Conflict(editor.pendingEdit()!!, original, copy)
+        val outcome = QueuedSave.Conflict(editor.queued!!, original, copy)
         editor.current = "Android edit and then more"
 
         assertTrue(editor.matchesConflict(outcome))
@@ -47,5 +48,14 @@ class EditorConflictTest {
         assertEquals(copy.path, next.path)
         assertEquals(copy.hash, next.baseHash)
         assertEquals("Android edit and then more", next.text)
+    }
+
+    @Test fun `an old conflict does not acknowledge a new queued edit with identical text and base`() {
+        val editor = editor()
+        val earlier = editor.queued!!.copy(at = 1L)
+        val staleOutcome = QueuedSave.Conflict(earlier, original, copy)
+
+        assertFalse(editor.matchesConflict(staleOutcome))
+        assertEquals(original.path, editor.pendingEdit()?.path)
     }
 }
