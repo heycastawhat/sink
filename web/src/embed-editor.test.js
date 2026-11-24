@@ -1,11 +1,18 @@
 import { beforeEach, expect, mock, test } from 'bun:test';
+import { EditorState } from '@codemirror/state';
 
 let plugins;
 let sequence = 0;
 let sink;
+let replaceEditorText;
 const create = (options) => {
-  let text = options.doc ?? options.text;
-  return { getText: () => text, setText: (value) => (text = value), destroy() {} };
+  const asEditorText = (text) => options.doc == null ? text : EditorState.create({ doc: text }).doc.toString();
+  let text = asEditorText(options.doc ?? options.text);
+  replaceEditorText = (value) => {
+    text = asEditorText(value);
+    options.onChange?.(text);
+  };
+  return { getText: () => text, setText: replaceEditorText, destroy() {} };
 };
 mock.module('./editor.js', () => ({ createEditor: create }));
 mock.module('./board.js', () => ({ createBoard: create }));
@@ -18,7 +25,7 @@ beforeEach(async () => {
   plugins = async () => {};
   const element = { addEventListener() {}, style: { setProperty() {} }, classList: { add() {} } };
   globalThis.document = { getElementById: () => element, documentElement: { dataset: {}, style: element.style }, body: element };
-  globalThis.window = { SinkBridge: { ready() {} } };
+  globalThis.window = { SinkBridge: { ready() {}, changed() {} } };
   await import(`./embed-editor.js?test=${++sequence}`);
   sink = window.sink;
 });
@@ -79,4 +86,21 @@ test('a failed initialization does not consume the pending replacement', async (
   plugins = async () => {};
   await sink.load({ text: original });
   expect(sink.textOrNull()).toBe(blue);
+});
+
+test('back without edits reads the original CRLF bytes, but a real edit is returned', async () => {
+  const crlf = original.replaceAll('\n', '\r\n');
+  await sink.load({ text: crlf });
+  expect(sink.textOrNull()).toBe(crlf);
+  replaceEditorText(original + 'Another line.\n');
+  expect(sink.textOrNull()).toBe(original + 'Another line.\n');
+});
+
+test('replacing an open note with CRLF text does not report a line-ending-only edit', async () => {
+  await sink.load({ text: original });
+  const crlf = pinned.replaceAll('\n', '\r\n');
+  const sent = new Promise((resolve) => { window.SinkBridge.changed = resolve; });
+  sink.setText(crlf);
+  expect(await sent).toBe(crlf);
+  expect(sink.textOrNull()).toBe(crlf);
 });

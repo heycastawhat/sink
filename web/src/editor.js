@@ -2,7 +2,7 @@
 // CodeMirror edits the raw text (files are the truth, and Obsidian edits them too), with Obsidian-style live preview:
 // markup hides on lines the cursor isn't on, checkboxes tick, `![[images]]` show, `[[links]]` open.
 
-import { EditorSelection, EditorState, RangeSetBuilder, StateEffect, StateField, Transaction } from '@codemirror/state';
+import { EditorSelection, EditorState, RangeSetBuilder, StateEffect, StateField, Text, Transaction } from '@codemirror/state';
 import {
   EditorView,
   Decoration,
@@ -1067,16 +1067,17 @@ export function createEditor(opts) {
     return true;
   };
 
+  const doc = Text.of((opts.doc ?? '').split(/\r\n?|\n/));
   const view = new EditorView({
     parent: opts.parent,
     // The page sits in <m3e-theme>, and CodeMirror follows the slot into that element's shadow root, then looks
     // for focus and the selection there and never finds them: typing lands wherever the browser's caret was.
     root: document,
     state: EditorState.create({
-      doc: opts.doc ?? '',
+      doc,
       // Not at 0: a caret there counts as being in the frontmatter, which would show it as raw YAML until the first
       // tap (touch screens don't focus the note on open).
-      selection: { anchor: (opts.doc ?? '').length },
+      selection: { anchor: doc.length },
       extensions: [
         history(),
         // Tabs indent, as in Obsidian, so nested lists line up in both apps; editor.css makes each one wide enough to read.
@@ -1190,9 +1191,10 @@ export function createEditor(opts) {
     },
     /** Replaces the text (a newer version from elsewhere), keeping the cursor near where it was. Not undoable into. */
     setText(text) {
-      const head = Math.min(view.state.selection.main.head, text.length);
+      const doc = view.state.toText(text);
+      const head = Math.min(view.state.selection.main.head, doc.length);
       view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: text },
+        changes: { from: 0, to: view.state.doc.length, insert: doc },
         selection: { anchor: head },
         // Kept out of undo history: Ctrl+Z must never bring back the old version (autosave would then write it over
         // the new one with the new hash, silently undoing someone else's edit).
