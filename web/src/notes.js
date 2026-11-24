@@ -1229,6 +1229,9 @@ export async function newBoard() {
  * into the same copy and sees each other's cursors. The server saves; a new note joins once its first save makes a file.
  */
 function startLive() {
+  const stash = screen.path && readUnsaved(screen.path);
+  // A failed conflict copy belongs to another version, not to the editor joining this session.
+  const retainedDraft = stash && stash.base !== screen.hash && stash.text !== screen.saved;
   const session = liveSession({
     start: !!screen.path,
     base: { text: screen.saved, hash: screen.hash },
@@ -1248,7 +1251,7 @@ function startLive() {
       screen.hash = hash;
       if (!session.pending()) {
         screen.saved = screen.editor.getText();
-        clearUnsaved(screen.path);
+        if (!retainedDraft) clearUnsaved(screen.path);
       }
     },
     // What was typed while the server was away couldn't be merged (the note changed meanwhile): kept as a copy.

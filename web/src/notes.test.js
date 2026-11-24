@@ -279,6 +279,29 @@ test('a clean first hello clears an offline draft that the server already saved'
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
+test('a clean live hello and later saved event retain a failed conflict copy for retry', async () => {
+  useLive = true;
+  liveStream();
+  const stash = JSON.stringify({ base: 'original', text: original + '\nUnsaved offline edit' });
+  storage.set('sink:unsaved:' + path, stash);
+  current = { ...current, content: latest, hash: 'android' };
+  failCopy = true;
+  await notes.openNote(path);
+  expect(storage.get('sink:unsaved:' + path)).toBe(stash);
+  hello();
+  await tick();
+  expect(notes.openNoteInfo().text).toBe(latest);
+  expect(storage.get('sink:unsaved:' + path)).toBe(stash);
+  stream.enqueue(new TextEncoder().encode('event: saved\ndata: ' + JSON.stringify({ hash: current.hash, dirty: false }) + '\n\n'));
+  await tick();
+  expect(storage.get('sink:unsaved:' + path)).toBe(stash);
+  await notes.closeNote();
+  failCopy = false;
+  await notes.openNote(path);
+  expect(copies).toHaveLength(1);
+  expect(copies[0].content).toBe(JSON.parse(stash).text);
+});
+
 test('pin then leave and reopen after an Android edit does not resurrect a saved body', async () => {
   await notes.openNote(path);
   await notes.setOpenMeta({ pinned: true });
