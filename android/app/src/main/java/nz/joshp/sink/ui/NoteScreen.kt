@@ -140,6 +140,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.JsonPrimitive
@@ -160,6 +161,10 @@ import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.NOTE_COLORS
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.NoteSaver
+import nz.joshp.sink.data.LiveSocket
+import nz.joshp.sink.data.LiveState
+import okio.ByteString
+import okio.ByteString.Companion.decodeBase64
 import nz.joshp.sink.data.NoteStore
 import nz.joshp.sink.data.SaveResult
 import nz.joshp.sink.data.QueuedSave
@@ -190,6 +195,12 @@ private class Bridge(
     val onPickTemplate: () -> Unit,
     val onHaptic: (String) -> Unit,
     val onEmbed: (String) -> Unit,
+    val onLive: (String) -> Unit,
+    val onLiveFlushed: (String) -> Unit,
+    val onLiveOpen: (String) -> Unit,
+    val onLiveSend: (String) -> Unit,
+    val onLiveSendBinary: (String) -> Unit,
+    val onLiveClose: () -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
 
@@ -201,6 +212,20 @@ private class Bridge(
     @JavascriptInterface fun pickImage() = main.post(onPickImage).let { }
     @JavascriptInterface fun pickTemplate() = main.post(onPickTemplate).let { }
     @JavascriptInterface fun embed(target: String) = main.post { onEmbed(target) }.let { }
+    @JavascriptInterface fun live(state: String) = main.post { onLive(state) }.let { }
+    @JavascriptInterface fun liveFlushed(state: String) = main.post { onLiveFlushed(state) }.let { }
+    @JavascriptInterface fun liveOpen(path: String) = main.post { onLiveOpen(path) }.let { }
+    // Straight to the socket (OkHttp's send is thread-safe), so typing isn't held up behind the main thread.
+    @JavascriptInterface fun liveSend(text: String) = onLiveSend(text)
+    @JavascriptInterface fun liveSendBinary(base64: String) = onLiveSendBinary(base64)
+    @JavascriptInterface fun liveClose() = main.post(onLiveClose).let { }
+}
+
+/** The page's live-editing socket and what it last said about live editing (see [LiveSocket]). */
+private class LiveLink {
+    @Volatile var socket: LiveSocket? = null
+    var state = LiveState()
+    var flushReply: ((LiveState) -> Unit)? = null
 }
 
 private enum class TemplateAsk { Slash, Menu }
@@ -299,11 +324,31 @@ fun NoteScreen(
     var loadedNote by remember { mutableStateOf<String?>(null) }
     var saveJob by remember { mutableStateOf<Job?>(null) }
     val saveLock = remember { Mutex() }
+    val live = remember { LiveLink() }
 
     fun js(code: String) = web?.evaluateJavascript(code, null)
     fun setEditorText(text: String) = js("window.sink.setText(${JsonPrimitive(text)})")
 
     suspend fun api(): Api? = vm.api()
+
+    fun closeLive() {
+        live.socket?.close()
+        live.socket = null
+    }
+
+    fun destroyPage(w: WebView) {
+        closeLive()
+        w.destroy()
+    }
+
+    /** Has the page send what's typed and the server write it; the page's state after (pending if it took too long). */
+    suspend fun liveFlush(): LiveState =
+        withTimeoutOrNull(3000) {
+            suspendCancellableCoroutine { k ->
+                live.flushReply = { k.resume(it) }
+                js("window.sink.liveFlush()")
+            }
+        } ?: live.state.copy(pending = true)
 
     // Linked mentions, then the unlinked ones (slower: the server reads notes); a failure just leaves a section out.
     suspend fun showLinks(p: String) {
@@ -333,7 +378,7 @@ fun NoteScreen(
             }
             runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
         } finally {
-            if (--ed.flushing == 0 && ed.closed) w.destroy()
+            if (--ed.flushing == 0 && ed.closed) destroyPage(w)
         }
     }
 
@@ -368,6 +413,7 @@ fun NoteScreen(
      * half way: a save cut off after the server wrote would lose the new hash and make the next save a false conflict.
      */
     suspend fun saveNow(saveContext: Context = context) {
+        if (ed.liveMode) return
         // A new note queued offline that the sync worker has since created: carry on in that file, not a second one.
         if (ed.path == null && ed.queued != null) {
             store.takeCreated(ed.key)?.let(store::note)?.let { n ->
@@ -426,7 +472,10 @@ fun NoteScreen(
         }
     }
 
-    suspend fun save(): Unit = withContext(NonCancellable) { saveLock.withLock { saveNow() } }
+    suspend fun save(): Unit = withContext(NonCancellable) {
+        // Live, "save" means the server writes what the page has synced.
+        if (ed.liveMode) liveFlush() else saveLock.withLock { saveNow() }
+    }
 
     fun scheduleSave() {
         saveJob?.cancel()
@@ -448,6 +497,49 @@ fun NoteScreen(
         }
     }
 
+    // ---- live editing: while `ed.liveMode`, the page syncs every edit with the server itself and nothing here saves.
+
+    fun liveOpen(p: String) {
+        live.socket?.close()
+        live.socket = null
+        scope.launch {
+            val a = api() ?: return@launch js("window.sink.live.closed(0)").let { }
+            live.socket = LiveSocket(a, p, object : LiveSocket.Listener {
+                override fun opened() = main.post { js("window.sink.live.opened()") }.let { }
+                override fun text(text: String) = main.post { js("window.sink.live.text(${JsonPrimitive(text)})") }.let { }
+                override fun binary(bytes: ByteString) = main.post { js("window.sink.live.binary('${bytes.base64()}')") }.let { }
+                override fun closed(status: Int) = main.post { js("window.sink.live.closed($status)") }.let { }
+            })
+        }
+    }
+
+    /** Back to saving here: live editing isn't on offer, or what's typed couldn't reach it before leaving. */
+    fun exitLive() {
+        if (!ed.liveMode) return
+        ed.liveMode = false
+        js("window.sink.retireLive()")
+        closeLive()
+    }
+
+    fun onLive(raw: String) {
+        val s = runCatching { json.decodeFromString<LiveState>(raw) }.getOrNull() ?: return
+        live.state = s
+        if (!ed.liveMode) return
+        if (s.gone || (s.unavailable && !s.bound)) {
+            exitLive()
+            if (ed.dirty) scheduleSave()
+            return
+        }
+        if (s.status.isNotEmpty()) status = s.status
+        // Written by the server: the pair a fallback save (see flush) is checked against.
+        if (s.saved != null && s.hash != null) {
+            ed.hash = s.hash
+            ed.saved = s.saved
+            ed.current = s.saved
+        }
+    }
+
+
     fun readAndSave(w: WebView, then: () -> Unit) {
         val previous = ed.current
         val hash = ed.hash
@@ -465,7 +557,7 @@ fun NoteScreen(
     fun rendererGone(w: WebView) {
         if (web === w) web = null
         (w.parent as? ViewGroup)?.removeView(w)
-        w.destroy()
+        destroyPage(w)
         saveInBackground()
         Toast.makeText(context, "The editor stopped, so the note was closed. Open it again to carry on.", Toast.LENGTH_LONG).show()
         if (!ed.closed) onBack()
@@ -480,11 +572,21 @@ fun NoteScreen(
         if (w == null || !ed.loaded) return then()
         w.evaluateJavascript("document.activeElement && document.activeElement.blur()", null)
         ed.flushing++
+        val done = {
+            if (--ed.flushing == 0 && ed.closed) destroyPage(w)
+            then()
+        }
         // Not w.postDelayed, which waits for the view to be attached: a note popped mid-flush never is again.
         main.postDelayed({
-            readAndSave(w) {
-                if (--ed.flushing == 0 && ed.closed) w.destroy()
-                then()
+            if (!ed.liveMode) readAndSave(w, done)
+            else NoteSaver.scope.launch(Dispatchers.Main.immediate) {
+                val s = liveFlush()
+                // Offline with edits the server hasn't had: they go to the offline queue instead, and live editing
+                // stops on this page so they can't also arrive through it later (twice).
+                if (s.pending && !s.connected) {
+                    exitLive()
+                    readAndSave(w, done)
+                } else done()
             }
         }, 120)
     }
@@ -616,6 +718,9 @@ fun NoteScreen(
         } ?: ed.saved
         ed.current = start
         ed.loaded = true
+        // Edited live (with everyone else who has it open) when the server could be reached just now and nothing is
+        // waiting in the offline queue for it: queued text would otherwise reach the server twice, saved and synced.
+        ed.liveMode = !board && fresh.getOrNull() != null && pending == null
         loadedNote = start
         if (start != ed.saved) scheduleSave()
     }
@@ -635,6 +740,10 @@ fun NoteScreen(
             if (line != null) put("line", line)
             put("plugins", Json.parseToJsonElement(vm.pluginsJson()))
             put("board", board)
+            if (ed.liveMode) putJsonObject("live") {
+                put("saved", ed.saved)
+                ed.hash?.let { put("hash", it) }
+            }
         }
         js("window.sink.load($payload)")
         // Mentions after the text, so a slow or offline server never holds the note up.
@@ -646,7 +755,7 @@ fun NoteScreen(
     // slower poll in case that's down.
     suspend fun refreshOpen() {
         val p = ed.path ?: return
-        if (!ed.loaded || ed.dirty || saveJob?.isActive == true || store.pending(p) != null) return
+        if (ed.liveMode || !ed.loaded || ed.dirty || saveJob?.isActive == true || store.pending(p) != null) return
         val hash = ed.hash
         val n = runCatching { api()?.note(p) }.getOrNull() ?: return
         if (n.hash == hash) return
@@ -752,6 +861,13 @@ fun NoteScreen(
     fun restore(text: String) {
         history = false
         val w = web ?: return
+        if (ed.liveMode) {
+            // An edit like anyone's, so everyone in the note sees it; the text it replaces is kept as a version.
+            js("window.sink.keepVersion()")
+            setEditorText(text)
+            status = "Restored"
+            return
+        }
         readEditorText({ ed.current }, { script, done -> w.evaluateJavascript(script) { done(it) } }) { latest ->
             ed.current = latest
             saveJob?.cancel()
@@ -854,6 +970,19 @@ fun NoteScreen(
         readEditor()
         save()
         val p = ed.path ?: return snackbar.showSnackbar("Write something first").let { }
+        if (ed.liveMode) {
+            // Written first, then the server changes the frontmatter, and that comes back to the page like anyone's edit.
+            liveFlush()
+            runCatching {
+                val api = api()!!
+                api.noteMeta(p, pin, newColor, clearColor)
+                val n = api.note(p)
+                store.saveNote(n)
+                applyMeta(n)
+                vm.refresh()
+            }.onFailure { snackbar.showSnackbar(it.message ?: "Couldn't change it") }
+            return
+        }
         runCatching {
             val api = api()!!
             api.noteMeta(p, pin, newColor, clearColor)
@@ -886,8 +1015,10 @@ fun NoteScreen(
                     onChanged = { text ->
                         if (ed.loaded) {
                             ed.current = text
-                            status = "Editing…"
-                            scheduleSave()
+                            if (!ed.liveMode) {
+                                status = "Editing…"
+                                scheduleSave()
+                            }
                         }
                     },
                     onLink = ::openLink,
@@ -906,6 +1037,17 @@ fun NoteScreen(
                         }
                     },
                     onEmbed = ::sendEmbed,
+                    onLive = ::onLive,
+                    onLiveFlushed = { raw ->
+                        val s = runCatching { json.decodeFromString<LiveState>(raw) }.getOrNull() ?: live.state.copy(pending = true)
+                        live.state = s
+                        live.flushReply?.invoke(s)
+                        live.flushReply = null
+                    },
+                    onLiveOpen = ::liveOpen,
+                    onLiveSend = { live.socket?.send(it) },
+                    onLiveSendBinary = { b64 -> b64.decodeBase64()?.let { live.socket?.send(it) } },
+                    onLiveClose = ::closeLive,
                 ), onRendererGone = ::rendererGone).also { web = it; it.pullDown = pullDown } },
                 modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = pageBottom),
             )
@@ -1015,7 +1157,7 @@ fun NoteScreen(
     DisposableEffect(Unit) {
         onDispose {
             ed.closed = true
-            if (ed.flushing == 0) web?.destroy()
+            if (ed.flushing == 0) web?.let(::destroyPage) ?: closeLive()
         }
     }
 

@@ -82,7 +82,7 @@ database loses nothing a rescan can't rebuild.
   changes aren't undoable, so Ctrl+Z only undoes your own typing), other people's cursors as Yjs relative positions
   drawn on layers, and the socket. Edits made while disconnected stay in the copy and sync on reconnect; on the first
   sync, anything typed before it is diffed and put back on top. `notes.js` hands saving to it while it's connected; the
-  Android and extension editors still save over REST, and their saves are merged into an open room.
+  extension's editor still saves over REST, and its saves are merged into an open room.
 - `dialogs.js` native `<dialog>` helpers (text prompt, folder picker, version history, share, list picker).
 - `util.js` shared `esc`, `folderOf`, `inlineHtml`, `tableCells`. Always `esc()` before putting text in HTML.
 - `board.js` Excalidraw (Obsidian plugin file format). `backlinks.js` (linked and unlinked mentions), `templates.js`, `keep-import.js`
@@ -103,6 +103,11 @@ database loses nothing a rescan can't rebuild.
   in the same page (`sink.load({ board: true })` mounts `board.js`); there's no image tool on the phone yet.
   `shouldInterceptRequest` serves `https://sink.server/` (plugin files only, with the token) and
   `https://sink.attachment/` (cached images). Don't widen that proxy; pass data in through `window.sink.*` instead.
+- Live editing on the phone: the page runs `live.js`, but its socket is `LiveSocket.kt` (OkHttp, the app's token, so
+  it works with a LAN `http://` server and the token stays out of the page), bridged as `SinkBridge.liveOpen/liveSend`
+  and `sink.live.*`. While `Editing.liveMode`, nothing in `NoteScreen` saves over REST (an edit must never reach the
+  server both ways, or it lands twice). It's on only if the note loaded from the server with nothing in the offline
+  queue; leaving or pausing offline with unsynced typing ends it (`exitLive`) and the text goes to the queue as before.
 
 ## Commands
 

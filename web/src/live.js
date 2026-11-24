@@ -118,6 +118,8 @@ export function renderPeople(el, people) {
  *
  * opts:
  * - url(): the socket's path (`/api/live?path=…`)
+ * - socket(url): makes the socket, if not a browser WebSocket (the Android app's goes through its bridge). Something
+ *   WebSocket-like: readyState, send, close, onmessage, onclose; on close, `status` is the HTTP status if it never opened.
  * - base: { text, hash }: what the editor was loaded with, so typing before the socket is up isn't lost
  * - onStatus(text, kind), onPeople(people), onSaved(hash), onGone(), onMoved(path), onReadOnly(), onRefused(message)
  * - onUnavailable(): live editing can't be had here (an older server); the caller saves the old way
@@ -265,7 +267,7 @@ export function liveSession(opts) {
     if (destroyed || unavailable || !view) return;
     clearTimeout(retryTimer);
     let greeted = false;
-    const socket = (ws = new WebSocket(socketUrl()));
+    const socket = (ws = opts.socket ? opts.socket(socketUrl()) : new WebSocket(socketUrl()));
     socket.binaryType = 'arraybuffer';
     socket.onmessage = (e) => {
       if (destroyed || ws !== socket) return;
@@ -288,15 +290,19 @@ export function liveSession(opts) {
       if (destroyed || unavailable) return;
       status();
       if (greeted) return retry();
-      // Never got in: ask over plain HTTP whether live editing is here at all (426: yes, the socket just failed).
+      // Never got in: was it refused, or did the connection fail? Asked over plain HTTP if the socket can't say
+      // (426: live editing is here, the socket just failed).
+      if (socket.status != null) return judge(socket.status);
       fetch(socketUrl().replace(/^ws/, 'http'), { cache: 'no-store' })
-        .then((res) => {
-          if (res.status === 404 && everConnected) return gone();
-          if (res.status >= 400 && res.status < 500 && res.status !== 426 && res.status !== 429) return giveUp(res.status);
-          retry();
-        })
+        .then((res) => judge(res.status))
         .catch(retry);
     };
+  }
+
+  function judge(code) {
+    if (code === 404 && everConnected) return gone();
+    if (code >= 400 && code < 500 && code !== 426 && code !== 429) return giveUp(code);
+    retry();
   }
 
   function retry() {
@@ -476,7 +482,7 @@ export function liveSession(opts) {
     if (started) queueMicrotask(connect);
     return {
       update(u) {
-        if (bound) for (const tr of u.transactions) if (tr.docChanged && !tr.annotation(fromDoc)) editorToDoc(tr);
+        if (bound && !destroyed) for (const tr of u.transactions) if (tr.docChanged && !tr.annotation(fromDoc)) editorToDoc(tr);
         if (u.docChanged || u.selectionSet) schedulePresence();
         // Typed before the first sync (or with no file yet): not in the document, but not saved either.
         if (u.docChanged && !bound) status();
@@ -508,6 +514,10 @@ export function liveSession(opts) {
     },
     get hash() {
       return hash;
+    },
+    /** In step with the server's document (since the first sync), so edits sync from here, not by saving. */
+    get bound() {
+      return bound && !destroyed;
     },
     pending: () => pending() || (!bound && view?.state.doc.toString() !== base),
     /** The next write keeps what it replaces as a version (restoring an old version). */
