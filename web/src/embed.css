@@ -60,10 +60,6 @@ body.board .note-editor {
   font-size: 17px;
 }
 
-.note-editor .cm-embed img {
-  max-height: var(--editor-image-max-height, none);
-}
-
 /* Linked mentions under the note (the web app's look). The editor drops its tall bottom padding when they show. */
 .note-editor:has(+ .note-links:not([hidden])) {
   padding-bottom: 40px;

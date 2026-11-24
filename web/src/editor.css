@@ -241,7 +241,7 @@
 .cm-embed img {
   display: block;
   max-width: 100%;
-  max-height: 70vh;
+  max-height: var(--editor-image-max-height, 70vh);
   border-radius: 12px;
 }
 
