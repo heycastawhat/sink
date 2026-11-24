@@ -3,6 +3,7 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 let plugins;
 let sequence = 0;
 let sink;
+let rootStyles;
 let type;
 let change;
 const create = (options) => {
@@ -19,12 +20,29 @@ mock.module('./backlinks.js', () => ({ backlinksHtml() {}, mentionsHtml() {}, on
 
 beforeEach(async () => {
   plugins = async () => {};
-  const element = { addEventListener() {}, style: { setProperty() {} }, classList: { add() {} } };
+  rootStyles = new Map();
+  const element = { addEventListener() {}, style: { setProperty: (key, value) => rootStyles.set(key, value) }, classList: { add() {} } };
   globalThis.document = { getElementById: () => element, documentElement: { dataset: {}, style: element.style }, body: element };
-  globalThis.window = { SinkBridge: { ready() {}, changed: (text) => change?.(text) } };
+  globalThis.window = Object.assign(new EventTarget(), {
+    innerHeight: 800,
+    SinkBridge: { ready() {}, changed: (text) => change?.(text) },
+  });
   change = null;
   await import(`./embed-editor.js?test=${++sequence}`);
   sink = window.sink;
+});
+
+test('image height follows the measured viewport, ignoring transient zero-height resizes', () => {
+  const cap = '--editor-image-max-height';
+  expect(rootStyles.get(cap)).toBe('560px');
+
+  window.innerHeight = 0;
+  window.dispatchEvent(new Event('resize'));
+  expect(rootStyles.get(cap)).toBe('560px');
+
+  window.innerHeight = 400;
+  window.dispatchEvent(new Event('resize'));
+  expect(rootStyles.get(cap)).toBe('280px');
 });
 
 const original = '---\ncolor: green\n---\nRemember to walk today.\n';

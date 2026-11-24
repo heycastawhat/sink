@@ -195,4 +195,13 @@ document.getElementById('links').addEventListener('click', (e) => {
   bridge.openLink(a.dataset.path);
 });
 
+// Android WebView can resolve vh to zero even when the window has a height.
+function sizeImages() {
+  const height = window.innerHeight;
+  if (height > 0) document.documentElement.style.setProperty('--editor-image-max-height', `${height * 0.7}px`);
+}
+
+window.addEventListener('resize', sizeImages);
+sizeImages();
+
 bridge.ready();
