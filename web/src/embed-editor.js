@@ -132,8 +132,8 @@ window.sink = {
     return editor?.getText() ?? '';
   },
   /** Like getText, but null while the note is still loading (getText's '' would read as the note emptied). */
-  textOrNull() {
-    return editor ? window.sink.getText() : null;
+  textOrNull({ flush = true } = {}) {
+    return editor ? (flush ? window.sink.getText() : editor.getText()) : null;
   },
   focus() {
     editor?.focus(true);

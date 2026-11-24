@@ -1,0 +1,38 @@
+package nz.joshp.sink.ui
+
+import nz.joshp.sink.data.Note
+import nz.joshp.sink.data.QueuedSave
+
+/** What the note screen tracks between saves. Not Compose state: the WebView owns the text. */
+internal class Editing(var path: String?, val draftKey: String, var folder: String) {
+    var hash: String? = null
+    /** Text as last confirmed on the server (or loaded). */
+    var saved: String = ""
+    /** Latest text from the editor. */
+    var current: String = ""
+    /** Text handed to the offline queue, to recognise it once the sync worker has saved it. */
+    var queued: String? = null
+    var loaded = false
+    val key get() = path ?: draftKey
+    val dirty get() = loaded && current != saved
+    /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */
+    var flushing = 0
+    var closed = false
+
+    fun acknowledge(saved: QueuedSave.Saved): Boolean {
+        val edit = saved.edit
+        if (!loaded || path != saved.path || hash != edit.baseHash || queued != edit.text) return false
+        hash = saved.hash
+        this.saved = edit.text
+        queued = null
+        return true
+    }
+
+    fun acceptRemote(note: Note, requestedHash: String?): Boolean {
+        if (!loaded || dirty || path != note.path || hash != requestedHash || note.hash == hash) return false
+        hash = note.hash
+        saved = note.content
+        current = note.content
+        return true
+    }
+}

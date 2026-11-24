@@ -12,6 +12,8 @@ import androidx.work.WorkerParameters
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -519,6 +521,13 @@ sealed interface SaveResult {
     data class Failed(val message: String) : SaveResult
 }
 
+internal sealed interface QueuedSave {
+    val edit: PendingEdit
+
+    data class Saved(override val edit: PendingEdit, val path: String, val hash: String) : QueuedSave
+    data class Conflict(override val edit: PendingEdit, val server: Note?, val copy: NoteMeta?) : QueuedSave
+}
+
 /**
  * Saves the way the web app does: the hash we last saw goes with the text, and a mismatch never overwrites.
  * The other side's version wins the file; ours is kept as "<name> (conflict <time>)" beside it.
@@ -527,6 +536,11 @@ object NoteSaver {
     /** Saves outlive the screen that started them (leaving a note flushes it). */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
+    private val outcomes = mutableMapOf<String, QueuedSave>()
+    private val _completed = MutableSharedFlow<QueuedSave>()
+    internal val completed = _completed.asSharedFlow()
+
+    internal suspend fun lastOutcome(path: String): QueuedSave? = lock.withLock { outcomes[path] }
 
     fun titleFor(text: String): String {
         Regex("""^#\s+(.+)$""", RegexOption.MULTILINE).find(text)?.let { return it.groupValues[1].trim().take(60) }
@@ -539,11 +553,32 @@ object NoteSaver {
     }
 
     /** [requeue] false from the sync worker itself, which retries through WorkManager instead. */
-    suspend fun save(context: Context, api: Api, edit: PendingEdit, requeue: Boolean = true): SaveResult = lock.withLock {
+    suspend fun save(context: Context, api: Api, edit: PendingEdit, requeue: Boolean = true): SaveResult {
+        var outcome: QueuedSave? = null
+        val result = lock.withLock {
+            saveLocked(context, api, edit, requeue).also { result ->
+                if (!requeue) {
+                    val completed = when (result) {
+                        is SaveResult.Saved -> QueuedSave.Saved(edit, result.meta.path, result.meta.hash)
+                        is SaveResult.Conflict -> QueuedSave.Conflict(edit, result.theirs, result.copy)
+                        else -> null
+                    }
+                    if (completed != null) {
+                        outcomes[edit.key] = completed
+                        outcome = completed
+                    }
+                }
+            }
+        }
+        outcome?.let { _completed.emit(it) }
+        return result
+    }
+
+    private suspend fun saveLocked(context: Context, api: Api, edit: PendingEdit, requeue: Boolean): SaveResult {
         val store = NoteStore(context)
-        try {
+        return try {
             val meta = if (edit.path == null) {
-                if (edit.text.isBlank()) return@withLock SaveResult.Saved(NoteMeta("", ""))
+                if (edit.text.isBlank()) return SaveResult.Saved(NoteMeta("", ""))
                 api.createNote(edit.folder, titleFor(edit.text), edit.text)
             } else {
                 api.saveNote(edit.path, edit.text, edit.baseHash)
