@@ -300,3 +300,20 @@ test("diffChanges turns one text into the other", () => {
     expect(diffChanges(a, b).apply(require("@codemirror/state").Text.of(a.split("\n"))).toString()).toBe(b);
   }
 });
+
+test("a client that goes quiet is dropped, cursor and all", async () => {
+  s = makeSetup();
+  await put("Quiet.md", "x\n");
+  const a = await open("Quiet.md", "clientaaa");
+  const b = await open("Quiet.md", "clientbbb");
+  const room = liveFor(s.vault).room("Quiet.md")!;
+  // A keeps talking; B's tab closed without the server noticing.
+  await post("/api/live/presence", { conn: a.hello.conn, version: 0, cursor: { anchor: 0, head: 0 } });
+  room.peers.get(b.hello.conn)!.seen -= 120_000;
+  room.reap();
+  expect([...room.peers.values()].map((p) => p.clientID)).toEqual(["clientaaa"]);
+  // A is told: the newest presence it got lists only A.
+  await Bun.sleep(100);
+  const people = a.st.events.filter((e) => e.event === "presence").at(-1)!.data.people;
+  expect(people.map((p: any) => p.id)).toEqual(["clientaaa"]);
+});

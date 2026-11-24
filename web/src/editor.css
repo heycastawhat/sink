@@ -750,25 +750,43 @@
 }
 
 /* Live co-editing (live.js): other people's cursors, with their name on a tag above, and who's in the note. */
-.cm-remote-caret {
-  position: relative;
-  margin: 0 -1px;
-  border-left: 2px solid;
+.cm-remote-carets,
+.cm-remote-selections {
   pointer-events: none;
 }
 
+.cm-remote-caret {
+  position: absolute;
+  margin-left: -1px;
+  border-left: 2px solid;
+}
+
+.cm-remote-selection {
+  position: absolute;
+}
+
+/* The name, for a moment after the cursor moves (each move draws it afresh, which restarts this). */
 .cm-remote-name {
   position: absolute;
   bottom: 100%;
   left: -2px;
-  z-index: 5;
   padding: 1px 5px;
   border-radius: 4px 4px 4px 0;
   color: #fff;
   font: 500 11px/1.4 'Roboto Flex Variable', system-ui, sans-serif;
   white-space: nowrap;
-  opacity: 0.9;
   user-select: none;
+  animation: cm-remote-name 2.5s ease-in forwards;
+}
+
+@keyframes cm-remote-name {
+  0%,
+  70% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 .live-people {
