@@ -18,7 +18,8 @@ removed along with its data.
 
 ## Non-goals
 
-- Multi-user and real-time co-editing. (Read-only share links for single notes exist; see AGENTS.md.)
+- Shared vaults between accounts. (Share links for single notes exist, read-only or editable, and edited live
+  together; see AGENTS.md.)
 - Notion-style databases (relations, rollups).
 
 ## Architecture

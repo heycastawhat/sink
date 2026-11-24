@@ -39,7 +39,12 @@ database loses nothing a rescan can't rebuild.
 - `routes/publish.ts` public pages: an account's `handle` (users table) and its notes with `publish: true` (indexed
   in `notes.publish`) at `/api/public/pages/<handle>`; `web/public.html` + `public.js` render `/public/…`.
 - `db.ts` migrations (append only; `user_version`). `routes/notes.ts` notes/attachments/trash/versions/backlinks/export
-  routes. `routes/share.ts` share links. `routes/events.ts` live change stream (SSE). `todos.ts` todo parsing and
+  routes. `routes/share.ts` share links. `routes/events.ts` live change stream (SSE). `live.ts` live co-editing: one
+  `Room` per open note holds its text, takes CodeMirror collab changes from every client (signed in at `/api/live`,
+  share links at `/api/public/share/<id>/live`; an SSE stream down, POSTs up), rebases and broadcasts them, and writes
+  the file a second after typing stops with the usual hash check. Outside edits (scan, REST, another device) are
+  diffed against what the room last wrote and moved over its unsaved changes, never a conflict. Share clients see and
+  edit the body only; every change is kept in both forms. `todos.ts` todo parsing and
   routes. `auth.ts` tokens (scopes `full`/`mcp`, optional expiry), cookie + bearer, CSRF origin check. `oidc.ts`
   sign-in (`client=web|android|obsidian|extension`; the apps get a hand-back code redirected to their own scheme, or for the
   browser extension to `/api/auth/extension` on the server, swapped with a PKCE verifier at `/oidc/exchange`; the extension's token has
@@ -71,13 +76,18 @@ database loses nothing a rescan can't rebuild.
   editors via `opts.loadEmbed`: depth 2, never a note above itself; share links get the name only, public pages
   only published notes). Must keep `root: document` (the page lives in
   `<m3e-theme>`'s shadow root; without it the caret desyncs).
+- `live.js` the client side of `live.ts`: a CodeMirror extension (collab, other people's cursors) plus the stream and
+  POSTs; resumes after a dropped connection, and after a server restart sends what was typed back to be merged
+  (`rejoin`). `notes.js` hands saving to it while it's connected; the Android and extension editors still save over
+  REST, and their saves are merged into an open room.
 - `dialogs.js` native `<dialog>` helpers (text prompt, folder picker, version history, share, list picker).
 - `util.js` shared `esc`, `folderOf`, `inlineHtml`, `tableCells`. Always `esc()` before putting text in HTML.
 - `board.js` Excalidraw (Obsidian plugin file format). `backlinks.js` (linked and unlinked mentions), `templates.js`, `keep-import.js`
   (zip read in the browser with `DecompressionStream`), `notion-import.js` (reuses its zip reader), `plugin-api.js` +
   `plugins/`.
 - Extra entry pages: `editor.html` + `embed-editor.js` (the Android WebView editor; talks over `window.SinkBridge`),
-  `share.html` + `share.js` (shared note; editable shares ask a name, autosave, and poll for others' edits).
+  `share.html` + `share.js` (shared note, live through `live.js`; editable shares ask a name; falls back to autosave
+  and polling if live editing isn't available).
 
 ### Android (`android/app/src/main/java/nz/joshp/sink/`)
 
@@ -114,7 +124,8 @@ small script against that data dir to call the API or set the `sink_session` coo
   (card excerpts, Recent row, `#tag` search, folder filtering, history, share).
 - Every server change gets a test in `server/src/*.test.ts` (Hono `app.request` against an in-memory DB and a temp
   vault). Migrations are append-only.
-- Never write to a note without its last-seen hash; a mismatch is a conflict, never an overwrite.
+- Never write to a note without its last-seen hash; a mismatch is a conflict, never an overwrite. A live room is the
+  one exception to "conflict": it merges, because it knows exactly what it changed since its last write.
 - Anything public (share pages, `/api/public`) exposes only that note's text (no frontmatter) and the images it
   embeds; an editable share writes only that note's body (frontmatter kept), with the usual hash check; assistants' `mcp` tokens can't manage tokens, empty the trash, share, or export. Notes with `private: true` are hidden from
   `mcp` and `extension` tokens in the Vault itself (`limited()` in `notes.ts`): any new read path must go through it or
