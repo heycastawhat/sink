@@ -1,5 +1,7 @@
 // Small helpers the web app and the Android editor page share.
 
+export const normalizeLineEndings = (text) => text.replace(/\r\n?/g, '\n');
+
 /** Text made safe to put in HTML, attribute values included. */
 export const esc = (s) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
