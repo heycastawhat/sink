@@ -127,7 +127,7 @@ small script against that data dir to call the API or set the `sink_session` coo
 - Never write to a note without its last-seen hash; a mismatch is a conflict, never an overwrite. A live room is the
   one exception to "conflict": it merges, because it knows exactly what it changed since its last write.
 - Anything public (share pages, `/api/public`) exposes only that note's text (no frontmatter) and the images it
-  embeds; an editable share writes only that note's body (frontmatter kept), with the usual hash check; assistants' `mcp` tokens can't manage tokens, empty the trash, share, or export. Notes with `private: true` are hidden from
+  embeds; an editable share writes only that note's body (frontmatter kept), with the usual hash check, and may add no embeds except images pasted in through the link (`share_uploads`: checked by their bytes, 10 MB, rate-limited); assistants' `mcp` tokens can't manage tokens, empty the trash, share, or export. Notes with `private: true` are hidden from
   `mcp` and `extension` tokens in the Vault itself (`limited()` in `notes.ts`): any new read path must go through it or
   filter on `notes.private`.
 - The repo is public: keep personal details (hosts, domains, NAS paths) out of tracked files. Deployment-specific

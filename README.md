@@ -11,7 +11,7 @@ app, and an MCP server so AI assistants can read and write your notes.
   Syncthing folder and both apps edit the same files. Deleted notes go to `.trash/`, like Obsidian;
   Undo or the Trash page puts them back.
 - **Share a note:** a link anyone can open, no account needed: read-only, or let people with the link edit after
-  giving a name. Stop sharing any time.
+  giving a name (and paste in images). Stop sharing any time.
 - **Edit together, live:** everyone with a note open (your other tabs and devices in the browser, people on its share
   link) sees each other's typing as it happens, with a named cursor for each person and their initials in the top bar.
   Edits made elsewhere meanwhile (Obsidian, the phone) are merged in rather than turned into conflict copies.

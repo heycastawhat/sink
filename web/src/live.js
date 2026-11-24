@@ -418,8 +418,9 @@ export function liveSession(opts) {
     if (!connected || destroyed) return;
     // Positions only make sense to the server once our changes are in; this runs again when they are.
     if (unconfirmed().length) return;
+    // Where they last were, focused or not: with two windows side by side, only one ever has focus.
     const { anchor, head } = view.state.selection.main;
-    const cursor = view.hasFocus ? { anchor, head } : null;
+    const cursor = { anchor, head };
     const key = JSON.stringify([serverVersion(), cursor]);
     if (key === lastPresence) return;
     lastPresence = key;
@@ -470,7 +471,7 @@ export function liveSession(opts) {
       update(u) {
         // Remote changes leave nothing to send, so push() has nothing to do for them.
         if (u.docChanged) schedulePush();
-        if (u.docChanged || u.selectionSet || u.focusChanged) schedulePresence();
+        if (u.docChanged || u.selectionSet) schedulePresence();
         if (u.docChanged) status();
       },
       destroy,

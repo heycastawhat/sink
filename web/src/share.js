@@ -31,6 +31,19 @@ function mount(doc, readOnly, live = null) {
     doc,
     readOnly,
     extensions: live?.extension,
+    // Pasting or dropping an image while editing: it's uploaded through the link and embedded.
+    ...(!readOnly && {
+      uploadFile: async (file) => {
+        status('Adding the image…');
+        const form = new FormData();
+        form.set('file', file);
+        const res = await fetch(`${base}/attachment`, { method: 'POST', body: form });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error ?? 'it could not be uploaded');
+        return body.embed;
+      },
+      onError: (err) => status(`Couldn’t add the image: ${err.message}`),
+    }),
     onChange: () => {
       if (live) return;
       // Someone else's text put in by refresh or a conflict is already saved: no save, and the notice stays.
