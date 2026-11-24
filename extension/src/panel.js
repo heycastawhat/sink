@@ -169,6 +169,10 @@ async function openLink(target, { external } = {}) {
 
 async function openNote(path) {
   await flush();
+  await load(path);
+}
+
+async function load(path) {
   try {
     const n = await api(`/notes/file?path=${encodeURIComponent(path)}`);
     note = { path: n.path, hash: n.hash, saved: n.content };
@@ -191,8 +195,10 @@ async function newNote() {
 
 function save() {
   clearTimeout(timer);
-  saving = (saving ?? Promise.resolve()).then(doSave).finally(() => (saving = null));
-  return saving;
+  const run = (saving ?? Promise.resolve()).then(doSave).finally(() => {
+    if (saving === run) saving = null;
+  });
+  return (saving = run);
 }
 
 const flush = () => (timer || saving ? save() : Promise.resolve());
@@ -221,9 +227,13 @@ async function doSave() {
   } catch (err) {
     // Changed elsewhere since it was opened: never overwrite. Keep this text as its own note and show theirs.
     if (err.status === 409 && note.path) {
-      const copy = await api('/notes', { method: 'POST', body: { folder: folderOf(note.path), title: `${fileName(note.path)} (conflict)`, content: text } });
-      toast(`This note changed elsewhere. Your version is in "${fileName(copy.path)}".`);
-      return openNote(note.path);
+      // load(), not openNote(): openNote flushes, which would queue behind this very save and never finish.
+      // If the copy can't be made, fall through and retry: the retry meets the same conflict and tries again.
+      const copy = await api('/notes', { method: 'POST', body: { folder: folderOf(note.path), title: `${fileName(note.path)} (conflict)`, content: text } }).catch(() => null);
+      if (copy) {
+        toast(`This note changed elsewhere. Your version is in "${fileName(copy.path)}".`);
+        return load(note.path);
+      }
     }
     setStatus(navigator.onLine ? "Can't save, retrying" : 'Offline, will save', 'error');
     timer = setTimeout(save, 5000);
