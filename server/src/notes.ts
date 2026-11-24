@@ -1474,7 +1474,7 @@ export class Vault {
     if (ext === ".md") throw new VaultError(400, "notes can't be uploaded as attachments");
     const stem = fileNameFor(basename(name, extname(name))).slice(0, 80);
     try {
-      await mkdir(await this.abs(folder || "."), { recursive: true });
+      if (folder) await mkdir(await this.abs(folder), { recursive: true });
       for (let n = 0; n < 1000; n++) {
         const path = `${folder ? folder + "/" : ""}${n ? `${stem} ${n}` : stem}${ext}`;
         try {
