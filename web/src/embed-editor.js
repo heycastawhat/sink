@@ -79,12 +79,16 @@ window.sink = {
     for (const [k, v] of Object.entries(colors)) document.documentElement.style.setProperty(k, v);
     links = targets;
     editor?.destroy();
-    editor = createEditor({
+    let sourceText = loadingText.take(text);
+    let editorText;
+    // Android compares the bridge text to the saved file. Don't report CodeMirror's LF normalization as an edit.
+    const preserveUnchangedText = (value) => value === editorText ? sourceText : value;
+    const markdown = createEditor({
       parent: document.getElementById('editor'),
-      doc: loadingText.take(text),
+      doc: sourceText,
       onChange: (t) => {
         clearTimeout(timer);
-        timer = setTimeout(() => bridge.changed(t), 250);
+        timer = setTimeout(() => bridge.changed(preserveUnchangedText(t)), 250);
       },
       onOpenLink: (target) => bridge.openLink(target),
       resolveEmbed: attachment,
@@ -97,6 +101,16 @@ window.sink = {
       // Only when the app can pick one (an older app has no pickTemplate, so the command stays hidden).
       pickTemplate: bridge.pickTemplate ? pickTemplate : undefined,
     });
+    editorText = markdown.getText();
+    editor = {
+      ...markdown,
+      getText: () => preserveUnchangedText(markdown.getText()),
+      setText(text) {
+        markdown.setText(text);
+        sourceText = text;
+        editorText = markdown.getText();
+      },
+    };
     if (line != null) editor.goToLine(line);
     else if (!text.trim()) editor.focus(true);
   },
