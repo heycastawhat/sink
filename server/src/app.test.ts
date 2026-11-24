@@ -312,6 +312,15 @@ describe("auth", () => {
     expect(tokens.find((t: any) => t.name === "Browser extension")?.scope).toBe("extension");
   });
 
+  test("assistant tokens only reach the routes they're allowed, so a new route starts closed to them", async () => {
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    const call = (token: string, method: string, path: string) => setup.app.request(path, { method, headers: { authorization: `Bearer ${token}` } });
+    for (const [method, path] of [["GET", "/api/plugins"], ["POST", "/api/notes/scan"], ["GET", "/api/notes/share?path=a.md"], ["GET", "/api/notes/export"], ["GET", "/api/made-up"]])
+      expect((await call(mcp, method!, path!)).status).toBe(403);
+    expect((await call(mcp, "GET", "/api/notes")).status).toBe(200);
+    expect((await call(await login(), "GET", "/api/plugins")).status).toBe(200);
+  });
+
   test("a QR code signs a phone in once, as the same account", async () => {
     const token = await login();
     const make = async (t: string) => {
@@ -1558,6 +1567,26 @@ describe("notes", () => {
     expect((await get(owner, "/api/notes/thumbnail?path=attachments/scan.pdf")).status).toBe(404);
     expect((await get(owner, "/api/notes/thumbnail?path=Papers/Gone.pdf")).status).toBe(404);
     expect((await get(mcp, "/api/notes/thumbnail?path=Papers/Will.pdf")).status).toBe(404);
+  });
+
+  test("a PDF uploaded to the Notes root is listed and served", async () => {
+    const token = await login();
+    const pdf = "%PDF-1.4";
+    const form = new FormData();
+    form.set("file", new File([pdf], "Lease.pdf", { type: "application/pdf" }));
+    form.set("folder", "");
+    const upload = await setup.app.request("/api/notes/attachments", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
+    expect(upload.status).toBe(201);
+    expect(await upload.json()).toMatchObject({ path: "Lease.pdf" });
+
+    expect(await (await get(token, "/api/notes")).json()).toMatchObject({
+      files: [expect.objectContaining({ path: "Lease.pdf", title: "Lease" })],
+    });
+
+    const served = await get(token, "/api/notes/attachment?path=Lease.pdf");
+    expect(served.status).toBe(200);
+    expect(served.headers.get("content-type")).toBe("application/pdf");
+    expect(await served.text()).toBe(pdf);
   });
 
   test("PDFs filed in folders: upload, list with their text, search, move, trash and restore", async () => {

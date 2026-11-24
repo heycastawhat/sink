@@ -15,7 +15,7 @@ import { EXTRACTABLE, extractText, pdfThumbnail, type Extractor } from "./extrac
 
 export const TRASH = ".trash";
 export const ATTACHMENTS = "attachments";
-const MAX_NOTE_BYTES = 5 * 1024 * 1024;
+export const MAX_NOTE_BYTES = 5 * 1024 * 1024;
 const SKIP_DIRS = new Set(["node_modules"]);
 /**
  * Version history (boards excluded): a new version at most every VERSION_GAP_MS per note, or whenever a write comes
@@ -1474,7 +1474,7 @@ export class Vault {
     if (ext === ".md") throw new VaultError(400, "notes can't be uploaded as attachments");
     const stem = fileNameFor(basename(name, extname(name))).slice(0, 80);
     try {
-      await mkdir(await this.abs(folder || "."), { recursive: true });
+      if (folder) await mkdir(await this.abs(folder), { recursive: true });
       for (let n = 0; n < 1000; n++) {
         const path = `${folder ? folder + "/" : ""}${n ? `${stem} ${n}` : stem}${ext}`;
         try {

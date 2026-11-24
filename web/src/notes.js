@@ -6,6 +6,7 @@ import { decodeLink, esc, folderOf, inlineHtml, tableCells } from './util.js';
 import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
+import { liveSession, renderPeople } from './live.js';
 import { deferredEditorText } from './deferred-editor-text.js';
 import { registry, onRegistryChange } from './plugin-api.js';
 import { buzz } from './haptics.js';
@@ -1126,9 +1127,16 @@ const screen = {
   pinned: false,
   private: false,
   failures: 0,
+  live: null, // the live co-editing session (live.js), while the note is open on the server for it
 };
 
-const dirty = () => screen.editor && screen.editor.getText() !== screen.saved;
+/** The live session, once it's started and unless the server turned it down: then the server saves, not us. */
+const live = () => (screen.live?.started && !screen.live.unavailable ? screen.live : null);
+const dirty = () => {
+  const session = live();
+  if (session) return session.pending();
+  return screen.editor && screen.editor.getText() !== screen.saved;
+};
 let loadingText = deferredEditorText();
 
 function setStatus(text, kind = '') {
@@ -1176,6 +1184,8 @@ function isDark() {
 
 /** Excalidraw and React download only when a board opens. */
 async function mountBoard(text) {
+  screen.live?.destroy();
+  screen.live = null;
   screen.editor?.destroy();
   screen.editor = null;
   const initial = deferredEditorText();
@@ -1214,17 +1224,81 @@ export async function newBoard() {
   }
 }
 
+/**
+ * Live co-editing for the open note: everyone with it open (here, in other tabs and devices, on its share link) types
+ * into the same copy and sees each other's cursors. The server saves; a new note joins once its first save makes a file.
+ */
+function startLive() {
+  const session = liveSession({
+    start: !!screen.path,
+    base: { text: screen.saved, hash: screen.hash },
+    streamUrl: (params) => {
+      params.set('path', screen.path);
+      return `/api/live?${params}`;
+    },
+    actionUrl: (name) => `/api/live/${name}`,
+    onStatus: (text, kind) => {
+      if (screen.live === session) setStatus(text, kind);
+    },
+    onPeople: (people) => {
+      if (screen.live === session) renderPeople($('note-people'), people);
+    },
+    onSaved: (hash) => {
+      if (screen.live !== session) return;
+      screen.hash = hash;
+      if (!session.pending()) {
+        screen.saved = screen.editor.getText();
+        clearUnsaved(screen.path);
+      }
+    },
+    // What was typed while the server was away couldn't be merged (the note changed meanwhile): kept as a copy.
+    onConflict: (text) => {
+      if (screen.live !== session || !screen.path) return;
+      api
+        .createNote({ folder: screen.folder, title: conflictTitle(screen.path), content: text })
+        .then((copy) => {
+          toast(`Changed somewhere else while you were offline. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
+          loadNotes();
+        })
+        .catch((err) => toast(`Couldn't keep your offline changes: ${err.message}`));
+    },
+    onGone: () => {
+      if (screen.live !== session) return;
+      // Deleted elsewhere: carry on the old way, where the next save keeps the text as a new note.
+      screen.live = null;
+      screen.saved = '';
+      renderPeople($('note-people'), []);
+      setStatus('Deleted elsewhere', 'error');
+    },
+    onUnavailable: () => {
+      if (screen.live !== session) return;
+      renderPeople($('note-people'), []);
+      if (dirty()) save();
+    },
+  });
+  return session;
+}
+
 function mountEditor(text) {
   loadingText = deferredEditorText();
+  screen.live?.destroy();
   screen.editor?.destroy();
   $('note-editor').innerHTML = '';
   $('note-screen').classList.remove('board');
+  screen.live = startLive();
+  renderPeople($('note-people'), []);
   screen.editor = createEditor({
     parent: $('note-editor'),
     doc: text,
+    extensions: screen.live.extension,
     onChange: () => {
       showFileName();
       document.dispatchEvent(new CustomEvent('sink:edit'));
+      if (live()) {
+        // The server saves. Offline, the text is kept here too, in case the tab closes before it's back.
+        if (!screen.live.connected) stashUnsaved();
+        return;
+      }
       setStatus('Editing…');
       clearTimeout(screen.timer);
       screen.timer = setTimeout(save, SAVE_DELAY);
@@ -1701,6 +1775,14 @@ const draftTitle = (text) =>
 
 async function doSave() {
   if (!screen.editor) return;
+  const session = live();
+  if (session) {
+    if (await session.flush()) {
+      screen.saved = screen.editor.getText();
+      clearUnsaved(screen.path);
+    }
+    return;
+  }
   const text = screen.editor.getText();
   if (text === screen.saved) return setStatus('Saved');
   // A draft becomes a file only once it has some words.
@@ -1714,6 +1796,8 @@ async function doSave() {
       Object.assign(screen, { path: created.path, hash: created.hash, saved: text });
       if (location.hash === draftHash(screen.folder, screen.draftId)) history.replaceState(history.state, '', noteHash(created.path));
       applyLook();
+      // A file now: open to live editing (anything typed while it was being made is sent along when it connects).
+      screen.live?.start({ text, hash: created.hash });
     } else {
       const saved = await api.saveNote(screen.path, text, screen.hash);
       Object.assign(screen, { hash: saved.hash, saved: text });
@@ -1787,7 +1871,8 @@ async function resolveConflict(mine, current) {
 /** Picks up edits made elsewhere while the note sits open and untouched. */
 /** The open note, fetched again: a newer version from elsewhere replaces it unless there are unsaved edits. */
 async function refreshOpenNote() {
-  if (!screen.path || dirty() || screen.saving || document.hidden) return;
+  // Live, the server sends changes as they happen.
+  if (live() || !screen.path || dirty() || screen.saving || document.hidden) return;
   const { path, hash } = screen;
   try {
     const note = await api.note(path);
@@ -1908,6 +1993,9 @@ async function closeEditor() {
   // A note started here and emptied again before leaving isn't one: don't leave an empty "Untitled" behind.
   else if (screen.fresh && screen.path && blank(screen.editor.getText())) await api.trashNote(screen.path).catch(() => {});
   clearTimeout(screen.timer);
+  screen.live?.destroy();
+  screen.live = null;
+  renderPeople($('note-people'), []);
   screen.editor.destroy();
   screen.editor = null;
   screen.path = null;
@@ -1947,6 +2035,11 @@ async function setMeta(changes) {
   const run = (async () => {
     const meta = await api.noteMeta(screen.path, changes);
     const note = await api.note(meta.path);
+    // Live, the new frontmatter arrives like anyone's change.
+    if (live()) {
+      Object.assign(screen, { pinned: note.pinned, private: note.private, color: note.color });
+      return applyLook();
+    }
     // Typed meanwhile: keep that body under the server's new frontmatter, so the next save doesn't undo the change.
     const current = loadingText.read(screen.editor, screen.saved);
     const text = current !== screen.saved ? frontmatterOf(note.content) + bodyOf(current) : note.content;
@@ -2183,6 +2276,15 @@ function wireScreen() {
       new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     const text = await pickVersion({ versions, current: screen.editor.getText(), load: (id) => api.version(path, id), when });
     if (text == null || screen.path !== path) return;
+    if (live()) {
+      // An edit like any other, so everyone in the note sees it; the text it replaces is kept as a version.
+      screen.live.keepVersion();
+      const { view } = screen.editor;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      await flush();
+      setStatus('Restored');
+      return toast('Restored that version. The text it replaced is in the history too.');
+    }
     try {
       // keep_version: what's here now becomes a version too, so a restore can itself be undone from this list.
       const saved = await api.saveNote(path, text, screen.hash, {}, { keep_version: true });
@@ -2228,6 +2330,10 @@ function wireScreen() {
   // Last chance for unsaved text when the tab closes: a keepalive request outlives the page.
   window.addEventListener('pagehide', () => {
     if (!dirty() || !screen.path) return;
+    if (live()) {
+      if (screen.live.connected) return screen.live.sendNow();
+      return stashUnsaved();
+    }
     stashUnsaved();
     api.saveNote(screen.path, screen.editor.getText(), screen.hash, { keepalive: true }).catch(() => {});
   });

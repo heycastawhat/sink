@@ -9,9 +9,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codemirror/collab": "^6.1.1",
+    "@codemirror/state": "^6.7.6",
     "@modelcontextprotocol/sdk": "1.31.0",
     "@mozilla/readability": "^0.6.0",
     "@simplewebauthn/server": "^14.0.3",
+    "fast-diff": "^1.3.0",
     "hono": "^4.13.13",
     "imapflow": "^2.9.1",
     "linkedom": "^0.18.15",

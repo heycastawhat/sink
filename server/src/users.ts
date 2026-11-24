@@ -59,6 +59,12 @@ export class Users {
       .map(({ dir, ...a }) => ({ ...a, owner: dir === "" }));
   }
 
+  /** What to call someone to the people editing a note with them: their username, else their email's name. */
+  nameOf(subject: string): string {
+    const row = this.db.query<{ email: string | null; username: string | null }, [string]>("SELECT email, username FROM users WHERE subject = ?").get(subject);
+    return row?.username || row?.email?.split("@")[0] || "Owner";
+  }
+
   /** The account's public page name (/public/<handle>), if it has picked one. */
   handleOf(subject: string): string | null {
     return this.db.query<{ handle: string | null }, [string]>("SELECT handle FROM users WHERE subject = ?").get(subject)?.handle ?? null;
