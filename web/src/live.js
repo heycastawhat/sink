@@ -10,6 +10,7 @@
 import { collab, getSyncedVersion, receiveUpdates, sendableUpdates } from '@codemirror/collab';
 import { ChangeSet, Compartment, EditorSelection, EditorState, StateEffect, StateField } from '@codemirror/state';
 import { EditorView, layer, RectangleMarker, ViewPlugin } from '@codemirror/view';
+import { normalizeLineEndings } from './util.js';
 
 const PUSH_DELAY = 40;
 const PRESENCE_DELAY = 150;
@@ -156,6 +157,7 @@ export function renderPeople(el, people) {
  * - start: false to wait for `start(base)` (a new note has no file to edit together until its first save)
  */
 export function liveSession(opts) {
+  opts.base = { ...opts.base, text: normalizeLineEndings(opts.base.text) };
   const clientID = randomId();
   const editable = new Compartment();
   let view = null;
@@ -183,7 +185,8 @@ export function liveSession(opts) {
 
   const serverVersion = () => getSyncedVersion(view.state) + offset;
   const unconfirmed = () => (view ? sendableUpdates(view.state) : []);
-  const pending = () => unconfirmed().length > 0 || serverDirty;
+  // Before joining, the REST create may already have saved queued edits. Only text beyond that snapshot is unsaved.
+  const pending = () => (everConnected ? unconfirmed().length > 0 : !!view && view.state.doc.toString() !== opts.base.text) || serverDirty;
   const wake = () => {
     for (const w of [...waiters]) w();
   };
@@ -313,6 +316,7 @@ export function liveSession(opts) {
     serverDirty = d.dirty;
     const lastHash = hash;
     hash = d.hash;
+    let rejoining = false;
     if (d.type === 'resume') {
       receive(d.updates);
     } else {
@@ -320,7 +324,7 @@ export function liveSession(opts) {
       // first connection, or while the server was away) is sent back afterwards to be merged.
       const local = view.state.doc.toString();
       const mine = unconfirmed();
-      const keep = !discard && (mine.length > 0 || (!everConnected && local !== opts.base.text)) ? local : null;
+      const keep = !discard && (everConnected ? mine.length > 0 : local !== opts.base.text) ? local : null;
       const baseHash = everConnected ? lastHash : opts.base.hash;
       discard = false;
       view.dispatch(
@@ -331,7 +335,10 @@ export function liveSession(opts) {
         ]),
       );
       offset = d.version - getSyncedVersion(view.state);
-      if (keep !== null && keep !== d.text) void rejoin(baseHash, keep);
+      if (keep !== null && keep !== d.text) {
+        rejoining = true;
+        void rejoin(baseHash, keep);
+      }
     }
     epoch = d.epoch;
     clearInterval(heartbeat);
@@ -342,6 +349,7 @@ export function liveSession(opts) {
     connected = true;
     everConnected = true;
     retries = 0;
+    if (!rejoining && !pending()) opts.onSaved?.(hash);
     schedulePush(0);
     schedulePresence();
     status();
@@ -486,7 +494,7 @@ export function liveSession(opts) {
     start(base) {
       if (started) return;
       started = true;
-      opts.base = base;
+      opts.base = { ...base, text: normalizeLineEndings(base.text) };
       hash = base.hash;
       if (view) void connect();
     },

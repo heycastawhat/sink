@@ -19,10 +19,11 @@ jobs:
           bun install --frozen-lockfile
           bunx tsc --noEmit
           bun test
-      - name: Web build
+      - name: Web tests and build
         working-directory: web
         run: |
           bun install --frozen-lockfile
+          bun test
           bun run build
       - name: Browser extension
         working-directory: extension

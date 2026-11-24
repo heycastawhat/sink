@@ -20,7 +20,7 @@ class EditingTest {
         hash = edit.baseHash
         saved = "Original text"
         current = currentText
-        queued = edit.text
+        queued = edit
     }
 
     @Test
