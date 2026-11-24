@@ -601,6 +601,7 @@ export function liveSocketResponse(c: Context, room: Room, init: Omit<PeerInit, 
 
 /** Signed in: `/api/live?path=…`. Full-scope tokens only (see app.ts). */
 export async function signedInSocket(c: Context, vault: Vault, subject: string, name: string, publicUrls: string[]) {
+  if (c.req.header("upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "live editing needs a WebSocket" }, 426);
   // The browser sends the session cookie with a socket from any page, so it must come from Sink's own.
   const origin = c.req.header("origin");
   if (!c.req.header("authorization") && !(origin && publicUrls.includes(origin))) return c.json({ error: "cross-origin request refused" }, 403);

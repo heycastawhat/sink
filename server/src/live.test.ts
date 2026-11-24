@@ -259,7 +259,8 @@ describe("live editing", () => {
     const cookie = `sink_session=${session}`;
     const upgrade = { upgrade: "websocket", connection: "upgrade", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" };
     expect((await fetch(`http://localhost:${s.server.port}/api/live?path=Mine.md`, { headers: { ...upgrade, cookie, origin: "https://evil.test" } })).status).toBe(403);
-    expect((await fetch(`http://localhost:${s.server.port}/api/live?path=Mine.md`, { headers: { cookie, origin: PUBLIC } })).status).toBe(426);
+    // A plain GET (a client asking whether live editing is here, after its socket failed) sends no Origin.
+    expect((await fetch(`http://localhost:${s.server.port}/api/live?path=Mine.md`, { headers: { cookie } })).status).toBe(426);
   });
 
   test("share links: the body only, edits keep the frontmatter, no new properties or images, and editing can be turned off", async () => {
