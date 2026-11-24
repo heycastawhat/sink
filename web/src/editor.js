@@ -1101,6 +1101,8 @@ export function createEditor(opts) {
         autocompletion({ override: [completeLinks, completeCommands], icons: false, addToOptions: [{ render: commandIcon, position: 20 }] }),
         placeholderExt(opts.placeholder ?? (opts.readOnly ? '' : newNoteHint())),
         ...(opts.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
+        // Live co-editing (live.js), when the note is open on the server for that.
+        ...(opts.extensions ?? []),
         // Tab takes the highlighted suggestion ([[link]] or /command); in a table it goes to the next cell; otherwise it
         // indents as usual.
         keymap.of([{ key: 'Tab', run: acceptCompletion }, { key: 'Tab', run: nextCell, shift: prevCell }, { key: 'Enter', run: enterAfterTitle }, { key: 'Enter', run: tableEnter }]),
