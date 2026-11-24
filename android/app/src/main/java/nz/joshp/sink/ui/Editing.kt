@@ -1,7 +1,9 @@
 package nz.joshp.sink.ui
 
 import nz.joshp.sink.data.Note
+import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.QueuedSave
+import nz.joshp.sink.data.SaveResult
 
 /** What the note screen tracks between saves. Not Compose state: the WebView owns the text. */
 internal class Editing(var path: String?, val draftKey: String, var folder: String) {
@@ -10,8 +12,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     var saved: String = ""
     /** Latest text from the editor. */
     var current: String = ""
-    /** Text handed to the offline queue, to recognise it once the sync worker has saved it. */
-    var queued: String? = null
+    var queued: PendingEdit? = null
     var loaded = false
     val key get() = path ?: draftKey
     val dirty get() = loaded && current != saved
@@ -19,9 +20,33 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     var flushing = 0
     var closed = false
 
+    fun pendingEdit(): PendingEdit? =
+        if (dirty && (path != null || current.isNotBlank())) {
+            PendingEdit(key, path, folder, hash, current, at = System.currentTimeMillis())
+        } else null
+
+    fun matchesConflict(outcome: QueuedSave.Conflict): Boolean =
+        loaded && outcome.matches(queued, key, hash)
+
+    /** Follow the copy if it has newer local edits; otherwise continue on the original. */
+    fun adoptConflict(result: SaveResult.Conflict) {
+        queued = null
+        val theirs = result.theirs
+        val copy = result.copy
+        if (copy != null && (theirs == null || current != result.savedText)) {
+            path = copy.path
+            hash = copy.hash
+            saved = result.savedText
+        } else if (theirs != null) {
+            hash = theirs.hash
+            saved = theirs.content
+            if (copy != null) current = theirs.content
+        }
+    }
+
     fun acknowledge(saved: QueuedSave.Saved): Boolean {
         val edit = saved.edit
-        if (!loaded || path != saved.path || hash != edit.baseHash || queued != edit.text) return false
+        if (!loaded || path != saved.path || hash != edit.baseHash || queued != edit) return false
         hash = saved.hash
         this.saved = edit.text
         queued = null

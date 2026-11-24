@@ -430,7 +430,7 @@ data class PendingEdit(
     val folder: String = "",
     @SerialName("base_hash") val baseHash: String?,
     val text: String,
-    val at: Long = System.currentTimeMillis(),
+    val at: Long = 0,
 )
 
 /**
@@ -515,7 +515,7 @@ sealed interface SaveResult {
     /** Written; [meta] is the file now. */
     data class Saved(val meta: NoteMeta) : SaveResult
     /** Changed elsewhere: their version is [theirs]; ours went to [copy] (null if theirs already matched ours). */
-    data class Conflict(val theirs: Note?, val copy: NoteMeta?, val meta: NoteMeta?) : SaveResult
+    data class Conflict(val theirs: Note?, val copy: NoteMeta?, val savedText: String) : SaveResult
     /** No network or the NAS is down: kept on the phone, retried by [NoteSync]. */
     data object Offline : SaveResult
     data class Failed(val message: String) : SaveResult
@@ -525,7 +525,12 @@ internal sealed interface QueuedSave {
     val edit: PendingEdit
 
     data class Saved(override val edit: PendingEdit, val path: String, val hash: String) : QueuedSave
-    data class Conflict(override val edit: PendingEdit, val server: Note?, val copy: NoteMeta?) : QueuedSave
+    data class Conflict(override val edit: PendingEdit, val server: Note?, val copy: NoteMeta?) : QueuedSave {
+        fun matches(queued: PendingEdit?, key: String, baseHash: String?) =
+            edit == queued && edit.key == key && edit.baseHash == baseHash
+
+        fun result() = SaveResult.Conflict(server, copy, edit.text)
+    }
 }
 
 /**
@@ -552,21 +557,27 @@ object NoteSaver {
         return first.replace(Regex("""^[-*+]\s+(\[.]\s+)?|^#+\s+"""), "").take(60)
     }
 
-    /** [requeue] false from the sync worker itself, which retries through WorkManager instead. */
-    suspend fun save(context: Context, api: Api, edit: PendingEdit, requeue: Boolean = true): SaveResult {
+    suspend fun save(context: Context, api: Api, edit: PendingEdit, queued: PendingEdit?): SaveResult = lock.withLock {
+        val outcome = outcomes[edit.key] as? QueuedSave.Conflict
+        if (outcome?.matches(queued, edit.key, edit.baseHash) == true) {
+            return@withLock outcome.result()
+        }
+        saveLocked(context, api, edit, requeue = true)
+    }
+
+    internal suspend fun sync(context: Context, api: Api, edit: PendingEdit): SaveResult? {
         var outcome: QueuedSave? = null
         val result = lock.withLock {
-            saveLocked(context, api, edit, requeue).also { result ->
-                if (!requeue) {
-                    val completed = when (result) {
-                        is SaveResult.Saved -> QueuedSave.Saved(edit, result.meta.path, result.meta.hash)
-                        is SaveResult.Conflict -> QueuedSave.Conflict(edit, result.theirs, result.copy)
-                        else -> null
-                    }
-                    if (completed != null) {
-                        outcomes[edit.key] = completed
-                        outcome = completed
-                    }
+            if (NoteStore(context).pending(edit.key) != edit) return@withLock null
+            saveLocked(context, api, edit, requeue = false).also { result ->
+                val completed = when (result) {
+                    is SaveResult.Saved -> QueuedSave.Saved(edit, result.meta.path, result.meta.hash)
+                    is SaveResult.Conflict -> QueuedSave.Conflict(edit, result.theirs, result.copy)
+                    else -> null
+                }
+                if (completed != null) {
+                    outcomes[edit.key] = completed
+                    outcome = completed
                 }
             }
         }
@@ -619,7 +630,7 @@ object NoteSaver {
         if (theirs != null && theirs.content == edit.text) {
             store.saveNote(theirs)
             store.clearPending(edit.key)
-            return SaveResult.Conflict(theirs, null, NoteMeta(theirs.path, theirs.title, hash = theirs.hash))
+            return SaveResult.Conflict(theirs, null, edit.text)
         }
         val path = edit.path!!
         val name = path.substringAfterLast('/').removeSuffix(".md")
@@ -627,7 +638,7 @@ object NoteSaver {
         val copy = api.createNote(path.substringBeforeLast('/', ""), "$name (conflict $stamp)", edit.text)
         store.clearPending(edit.key)
         if (theirs != null) store.saveNote(theirs) else store.forget(path)
-        return SaveResult.Conflict(theirs, copy, theirs?.let { NoteMeta(it.path, it.title, hash = it.hash) })
+        return SaveResult.Conflict(theirs, copy, edit.text)
     }
 
     fun newDraftKey() = "draft:" + UUID.randomUUID()
@@ -654,7 +665,7 @@ class NoteSyncWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val store = NoteStore(applicationContext)
         var retry = false
         for (edit in store.allPending().sortedBy { it.at }) {
-            when (NoteSaver.save(applicationContext, api, edit, requeue = false)) {
+            when (NoteSaver.sync(applicationContext, api, edit)) {
                 SaveResult.Offline -> retry = true
                 else -> Unit
             }
