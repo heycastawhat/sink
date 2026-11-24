@@ -635,9 +635,12 @@ fun NoteScreen(
      * The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind).
      * Nothing while the page is still loading the note: there's no text of its own yet.
      */
-    suspend fun readEditor() {
+    suspend fun readEditor(flush: Boolean = true) {
         val w = web ?: return
-        val raw = suspendCancellableCoroutine { k -> w.evaluateJavascript("window.sink.textOrNull()") { k.resume(it) } }
+        val options = if (flush) "" else "{ flush: false }"
+        val raw = suspendCancellableCoroutine { k ->
+            w.evaluateJavascript("window.sink.textOrNull($options)") { k.resume(it) }
+        }
         runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
     }
 
@@ -649,7 +652,7 @@ fun NoteScreen(
         val hash = ed.hash
         val n = runCatching { api()?.note(p) }.getOrNull() ?: return
         if (n.hash == hash) return
-        readEditor()
+        readEditor(flush = false)
         if (saveJob?.isActive != true && store.pending(p) == null && ed.acceptRemote(n, hash)) {
             store.saveNote(n)
             applyMeta(n)
@@ -671,7 +674,7 @@ fun NoteScreen(
         NoteSaver.completed.collect { outcome ->
             if (outcome !is QueuedSave.Saved || outcome.path != ed.path) return@collect
             val acknowledged = saveLock.withLock {
-                readEditor()
+                readEditor(flush = false)
                 val applied = ed.acknowledge(outcome)
                 if (applied && !ed.dirty && status == "Offline, will save") status = "Saved"
                 applied
