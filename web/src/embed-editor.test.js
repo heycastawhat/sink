@@ -4,8 +4,11 @@ let plugins;
 let sequence = 0;
 let sink;
 let rootStyles;
+let type;
+let change;
 const create = (options) => {
   let text = options.doc ?? options.text;
+  type = (value) => { text = value; options.onChange(value); };
   return { getText: () => text, setText: (value) => (text = value), destroy() {} };
 };
 mock.module('./editor.js', () => ({ createEditor: create }));
@@ -20,7 +23,11 @@ beforeEach(async () => {
   rootStyles = new Map();
   const element = { addEventListener() {}, style: { setProperty: (key, value) => rootStyles.set(key, value) }, classList: { add() {} } };
   globalThis.document = { getElementById: () => element, documentElement: { dataset: {}, style: element.style }, body: element };
-  globalThis.window = Object.assign(new EventTarget(), { innerHeight: 800, SinkBridge: { ready() {} } });
+  globalThis.window = Object.assign(new EventTarget(), {
+    innerHeight: 800,
+    SinkBridge: { ready() {}, changed: (text) => change?.(text) },
+  });
+  change = null;
   await import(`./embed-editor.js?test=${++sequence}`);
   sink = window.sink;
 });
@@ -94,4 +101,13 @@ test('a failed initialization does not consume the pending replacement', async (
   plugins = async () => {};
   await sink.load({ text: original });
   expect(sink.textOrNull()).toBe(blue);
+});
+
+test('reading without flushing leaves the pending change notification scheduled', async () => {
+  expect(sink.textOrNull({ flush: false })).toBeNull();
+  await sink.load({ text: original });
+  const changed = new Promise((resolve) => { change = resolve; });
+  type(pinned);
+  expect(sink.textOrNull({ flush: false })).toBe(pinned);
+  expect(await changed).toBe(pinned);
 });
