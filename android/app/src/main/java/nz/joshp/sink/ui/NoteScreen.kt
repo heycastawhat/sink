@@ -175,6 +175,7 @@ import java.io.File
 import nz.joshp.sink.capture.SharedFiles
 
 private const val SAVE_DELAY_MS = 700L
+private const val CONFLICT_STATUS = "Conflict"
 // A new note's file is named on its first save, so give the first line time to be written.
 private const val DRAFT_DELAY_MS = 3000L
 private const val POLL_MS = 30_000L
@@ -342,7 +343,7 @@ fun NoteScreen(
         val theirs = result.theirs
         val copy = result.copy
         ed.adoptConflict(result)
-        status = if (ed.dirty) "Editing…" else "Saved"
+        status = CONFLICT_STATUS
         if (!ed.closed && copy != null) {
             haptics.reject()
             val message = if (ed.path == copy.path) {
@@ -378,9 +379,9 @@ fun NoteScreen(
                 shownPath = n.path
             }
         }
-        // The sync worker may have saved our queued text since: carry on from the hash it got.
+        // With nothing to send, there is no save call to return the worker's outcome.
         val p = ed.path
-        if (p != null && ed.queued != null) {
+        if (p != null && ed.queued != null && !ed.dirty) {
             when (val outcome = NoteSaver.lastOutcome(p)) {
                 is QueuedSave.Conflict -> if (ed.matchesConflict(outcome)) {
                     applyConflict(outcome.result())
@@ -392,10 +393,11 @@ fun NoteScreen(
         while (true) {
             val edit = ed.pendingEdit()
             if (edit == null) {
-                if (ed.loaded && !ed.dirty) status = "Saved"
+                if (ed.loaded && !ed.dirty && status != CONFLICT_STATUS) status = "Saved"
                 return
             }
-            status = "Saving…"
+            val followingConflict = status == CONFLICT_STATUS
+            if (!followingConflict) status = "Saving…"
             val api = api() ?: return
             when (val result = NoteSaver.save(saveContext, api, edit, queued = ed.queued)) {
                 is SaveResult.Saved -> {
@@ -406,12 +408,15 @@ fun NoteScreen(
                     ed.hash = result.meta.hash
                     ed.saved = edit.text
                     ed.queued = null
-                    status = if (ed.dirty) "Editing…" else "Saved"
+                    status = if (followingConflict) CONFLICT_STATUS else if (ed.dirty) "Editing…" else "Saved"
                     vm.refresh()
                 }
                 is SaveResult.Conflict -> {
                     applyConflict(result)
                     if (ed.dirty) continue
+                }
+                is SaveResult.Acknowledged -> {
+                    if (ed.acknowledge(result.outcome)) continue
                 }
                 SaveResult.Offline -> {
                     ed.queued = edit
@@ -954,7 +959,7 @@ fun NoteScreen(
                         Text(
                             listOf(where, status).filter { it.isNotEmpty() }.joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (status == CONFLICT_STATUS || status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )

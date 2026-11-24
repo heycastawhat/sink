@@ -46,7 +46,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
 
     fun acknowledge(saved: QueuedSave.Saved): Boolean {
         val edit = saved.edit
-        if (!loaded || path != saved.path || hash != edit.baseHash || queued != edit) return false
+        if (!loaded || path != saved.path || !saved.matches(queued, key, hash)) return false
         hash = saved.hash
         this.saved = edit.text
         queued = null

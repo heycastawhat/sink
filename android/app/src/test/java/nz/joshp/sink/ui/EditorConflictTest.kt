@@ -58,4 +58,12 @@ class EditorConflictTest {
         assertFalse(editor.matchesConflict(staleOutcome))
         assertEquals(original.path, editor.pendingEdit()?.path)
     }
+
+    @Test fun `a foreground edit behind a conflicted worker gets the existing conflict`() {
+        val editor = editor()
+        val outcome = QueuedSave.Conflict(editor.queued!!, original, copy)
+        editor.current = "Android edit and then more"
+
+        assertEquals(outcome.result(), outcome.beforeWrite(editor.pendingEdit()!!, editor.queued))
+    }
 }
