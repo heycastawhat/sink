@@ -180,6 +180,8 @@ export class Room {
     this.reapTimer ??= setInterval(() => this.reap(), PEER_TIMEOUT_MS / 3);
     this.peers.set(full.conn, full);
     this.hub.conns.set(full.conn, this);
+    // Who comes and goes, so "I can't see them" can be answered from the logs. Names only, never the text.
+    console.log(`[live] ${full.name} (${full.view === "full" ? "signed in" : full.editor ? "share link, editing" : "share link, reading"}) joined a note; ${this.peers.size} there`);
     return full;
   }
 
@@ -193,7 +195,9 @@ export class Room {
   }
 
   leave(conn: string) {
+    const peer = this.peers.get(conn);
     if (!this.peers.delete(conn)) return;
+    console.log(`[live] ${peer!.name} left a note; ${this.peers.size} there`);
     this.hub.conns.delete(conn);
     this.sendPresence();
     if (this.peers.size) return;
