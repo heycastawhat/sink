@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from 'bun:test';
-import { ChangeSet, EditorState } from '@codemirror/state';
+import { EditorState } from '@codemirror/state';
+import * as Y from 'yjs';
 
 const realLiveSession = (await import('./live.js')).liveSession;
 let useLive;
@@ -15,7 +16,7 @@ const create = (options) => {
       dispatch(spec) {
         const transaction = this.state.update(spec);
         this.state = transaction.state;
-        livePlugin.update({ docChanged: transaction.docChanged, selectionSet: transaction.selection != null });
+        livePlugin.update({ transactions: [transaction], docChanged: transaction.docChanged, selectionSet: transaction.selection != null });
         if (transaction.docChanged) options.onChange?.(this.state.doc.toString());
       },
     };
@@ -53,11 +54,10 @@ let failCopy;
 let messages;
 let storage;
 const nativeFetch = globalThis.fetch;
-let stream;
+let socket;
+let room;
 let firstCreate;
 let statuses;
-let rejoins;
-let rejoinStatus;
 const path = 'N23 Journal.md';
 const original = '# N23 Journal\n\nOriginal body';
 const pinned = '---\npinned: true\n---\n' + original;
@@ -67,8 +67,7 @@ beforeEach(async () => {
   useLive = false;
   firstCreate = false;
   statuses = [];
-  rejoins = [];
-  rejoinStatus = 200;
+  socket = room = null;
   storage = new Map();
   globalThis.localStorage = {
     getItem: (key) => storage.get(key) ?? null,
@@ -99,7 +98,7 @@ beforeEach(async () => {
   };
   globalThis.ResizeObserver = class { disconnect() {} };
   globalThis.matchMedia = () => ({ matches: true });
-  globalThis.location = { hash: '#/n/N23%20Journal.md' };
+  globalThis.location = { hash: '#/n/N23%20Journal.md', href: 'http://localhost/' };
   current = { path, content: original, hash: 'original', mtime: Date.now() };
   copies = [];
   failCopy = false;
@@ -133,28 +132,51 @@ afterEach(async () => {
 });
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+// The server end of the live socket: a Yjs document made from the note when the socket opens (`hello`).
+class FakeSocket {
+  static OPEN = 1;
+  constructor() {
+    this.readyState = 0;
+    socket = this;
+  }
+  send(data) {
+    if (typeof data === 'string') {
+      const msg = JSON.parse(data);
+      if (msg.t === 'save') toClient({ t: 'saved', hash: current.hash, dirty: false });
+      return;
+    }
+    const payload = data.subarray(1);
+    if (data[0] === 0) toClient(frame(1, Y.encodeStateAsUpdate(room, payload)));
+    else {
+      Y.applyUpdate(room, payload, 'client');
+      toClient({ t: 'ack' });
+    }
+  }
+  close() {
+    this.readyState = 3;
+  }
+}
+const frame = (type, payload) => new Uint8Array([type, ...payload]);
+// Delivered in order, after whatever is running now (as a socket would).
+function toClient(msg) {
+  const data = msg instanceof Uint8Array ? msg.slice().buffer : JSON.stringify(msg);
+  queueMicrotask(() => socket.readyState === 1 && socket.onmessage({ data }));
+}
 function liveStream() {
-  globalThis.fetch = async (url, options = {}) => {
-    if (url.startsWith('/api/live?')) {
-      return new Response(new ReadableStream({
-        start(controller) {
-          stream = controller;
-          options.signal.addEventListener('abort', () => controller.close(), { once: true });
-        },
-      }));
-    }
-    if (url === '/api/live/rejoin') {
-      rejoins.push(JSON.parse(options.body));
-      return new Response(null, { status: rejoinStatus });
-    }
-    return Response.json({ hash: current.hash, dirty: false });
-  };
+  globalThis.WebSocket = FakeSocket;
 }
 function hello() {
-  stream.enqueue(new TextEncoder().encode('event: hello\ndata: ' + JSON.stringify({
-    type: 'init', conn: 'connection', epoch: 'room', version: 0,
-    hash: current.hash, dirty: false, text: current.content.replace(/\r\n?/g, '\n'),
-  }) + '\n\n'));
+  room = new Y.Doc();
+  room.getText('t').insert(0, current.content.replace(/\r\n?/g, '\n'));
+  room.on('update', (update, origin) => origin !== 'client' && toClient(frame(2, update)));
+  socket.readyState = 1;
+  toClient({ t: 'hello', guid: room.guid, hash: current.hash, dirty: false, editor: true });
+  toClient(frame(0, Y.encodeStateVector(room)));
+}
+/** Someone else's edit, through the server. */
+function remoteInsert(at, text) {
+  room.getText('t').insert(at, text);
+  toClient({ t: 'dirty' });
 }
 
 test('connected live updates and saved notifications still replace the note without making a draft', async () => {
@@ -164,14 +186,11 @@ test('connected live updates and saved notifications still replace the note with
   hello();
   await tick();
   const addition = '\nCo-edited';
-  const changes = ChangeSet.of({ from: original.length, insert: addition }, original.length).toJSON();
-  stream.enqueue(new TextEncoder().encode('event: update\ndata: ' + JSON.stringify({
-    version: 1, dirty: true, updates: [{ clientID: 'another-editor', changes }],
-  }) + '\n\n'));
+  remoteInsert(original.length, addition);
   await tick();
   expect(notes.openNoteInfo().text).toBe(original + addition);
   expect(statuses.at(-1)).toBe('Saving…');
-  stream.enqueue(new TextEncoder().encode('event: saved\ndata: ' + JSON.stringify({ hash: 'co-edited', dirty: false }) + '\n\n'));
+  toClient({ t: 'saved', hash: 'co-edited', dirty: false });
   await tick();
   expect(statuses.at(-1)).toBe('Saved');
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
@@ -212,7 +231,7 @@ test('leaving a newly saved live note before the first connection keeps no saved
   expect(notes.openNoteInfo().text).toBe(current.content);
 });
 
-test('a remote edit before the first live hello does not rejoin the already saved creation text', async () => {
+test('a remote edit before the first live hello leaves the already saved creation text alone', async () => {
   useLive = true;
   firstCreate = true;
   liveStream();
@@ -220,15 +239,13 @@ test('a remote edit before the first live hello does not rejoin the already save
   editor.setText(original);
   await notes.saveForReload();
   current = { ...current, content: original + '\nAndroid', hash: 'android' };
-  rejoinStatus = 409;
   hello();
   await tick();
-  expect(rejoins).toEqual([]);
   expect(copies).toHaveLength(0);
   expect(notes.openNoteInfo().text).toBe(current.content);
 });
 
-test('a genuine local edit before the first connection still conflicts with a remote edit', async () => {
+test('a genuine local edit before the first connection is merged with a remote edit', async () => {
   useLive = true;
   liveStream();
   await notes.openNote(path);
@@ -236,13 +253,11 @@ test('a genuine local edit before the first connection still conflicts with a re
   editor.setText(mine);
   expect(JSON.parse(storage.get('sink:unsaved:' + path)).text).toBe(mine);
   current = { ...current, content: original + '\nAndroid', hash: 'android' };
-  rejoinStatus = 409;
   hello();
   await tick();
-  expect(rejoins).toEqual([{ conn: 'connection', base_hash: 'original', text: mine }]);
-  expect(copies).toHaveLength(1);
-  expect(copies[0].content).toBe(mine);
-  expect(notes.openNoteInfo().text).toBe(current.content);
+  expect(copies).toHaveLength(0);
+  expect(notes.openNoteInfo().text).toBe(original + '\nLocal\nAndroid');
+  expect(room.getText('t').toString()).toBe(original + '\nLocal\nAndroid');
 });
 
 test('typing during the first REST save remains an unsaved live draft', async () => {
@@ -257,12 +272,11 @@ test('typing during the first REST save remains an unsaved live draft', async ()
   await saving;
   expect(JSON.parse(storage.get('sink:unsaved:' + path)).text).toBe(mine);
   expect(current.content).toBe(original);
-  rejoinStatus = 409;
   current = { ...current, content: original + '\nAndroid', hash: 'android' };
   hello();
   await tick();
-  expect(rejoins[0].text).toBe(mine);
-  expect(copies[0].content).toBe(mine);
+  expect(room.getText('t').toString()).toBe(mine + '\nAndroid');
+  expect(copies).toHaveLength(0);
 });
 
 test('a clean first hello clears an offline draft that the server already saved', async () => {
@@ -275,7 +289,7 @@ test('a clean first hello clears an offline draft that the server already saved'
   hello();
   await tick();
   expect(statuses.at(-1)).toBe('Saved');
-  expect(rejoins).toEqual([]);
+  expect(room.getText('t').toString()).toBe(mine);
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
@@ -292,7 +306,7 @@ test('a clean live hello and later saved event retain a failed conflict copy for
   await tick();
   expect(notes.openNoteInfo().text).toBe(latest);
   expect(storage.get('sink:unsaved:' + path)).toBe(stash);
-  stream.enqueue(new TextEncoder().encode('event: saved\ndata: ' + JSON.stringify({ hash: current.hash, dirty: false }) + '\n\n'));
+  toClient({ t: 'saved', hash: current.hash, dirty: false });
   await tick();
   expect(storage.get('sink:unsaved:' + path)).toBe(stash);
   await notes.closeNote();
@@ -305,12 +319,6 @@ test('a clean live hello and later saved event retain a failed conflict copy for
 test('saving typing over a live note keeps a failed conflict copy for retry', async () => {
   useLive = true;
   liveStream();
-  const pushes = [];
-  const liveFetch = globalThis.fetch;
-  globalThis.fetch = async (url, options) => {
-    if (url === '/api/live/push') pushes.push(JSON.parse(options.body));
-    return liveFetch(url, options);
-  };
   const stash = JSON.stringify({ base: 'original', text: original + '\nUnsaved offline edit' });
   storage.set('sink:unsaved:' + path, stash);
   current = { ...current, content: latest, hash: 'android' };
@@ -319,9 +327,8 @@ test('saving typing over a live note keeps a failed conflict copy for retry', as
   hello();
   await tick();
   editor.setText(latest + '\nTyped live');
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  stream.enqueue(new TextEncoder().encode('event: update\ndata: ' + JSON.stringify({ version: 1, dirty: true, updates: pushes[0].updates }) + '\n\n'));
   await tick();
+  expect(room.getText('t').toString()).toBe(latest + '\nTyped live');
   expect(await notes.saveForReload()).toBe(true);
   expect(storage.get('sink:unsaved:' + path)).toBe(stash);
 });
@@ -337,7 +344,7 @@ test('a stash written over a failed conflict copy is cleared once live editing s
   await tick();
   // What typing offline here stashes in its place.
   storage.set('sink:unsaved:' + path, JSON.stringify({ base: 'android', text: latest + '\nOffline here' }));
-  stream.enqueue(new TextEncoder().encode('event: saved\ndata: ' + JSON.stringify({ hash: 'merged', dirty: false }) + '\n\n'));
+  toClient({ t: 'saved', hash: 'merged', dirty: false });
   await tick();
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
@@ -355,16 +362,15 @@ test('an untouched CRLF note closed before hello leaves no draft or later confli
   expect(copies).toHaveLength(0);
 });
 
-test('an untouched CRLF note does not rejoin over a remote change before hello', async () => {
+test('an untouched CRLF note takes a remote change made before hello as it is', async () => {
   useLive = true;
   liveStream();
   current = { ...current, content: original.replace(/\n/g, '\r\n') };
   await notes.openNote(path);
   current = { ...current, content: original + '\nAndroid', hash: 'android' };
-  rejoinStatus = 409;
   hello();
   await tick();
-  expect(rejoins).toEqual([]);
+  expect(room.getText('t').toString()).toBe(current.content);
   expect(copies).toHaveLength(0);
   expect(notes.openNoteInfo().text).toBe(current.content);
 });

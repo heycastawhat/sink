@@ -2,14 +2,14 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChangeSet } from "@codemirror/state";
+import * as Y from "yjs";
 import { openDb } from "./db";
 import { Auth } from "./auth";
 import { Oidc } from "./oidc";
 import { createApp } from "./app";
 import { Users } from "./users";
 import { Vault } from "./notes";
-import { diffChanges, liveFor } from "./live";
+import { diffDelta, liveFor, liveSocket, SYNC_STEP1, SYNC_STEP2, UPDATE } from "./live";
 
 const PUBLIC = "https://sink.test";
 
@@ -23,64 +23,101 @@ function makeSetup() {
   users.seen({ sub: "abc123", username: "sam" });
   const app = createApp({ db, vault, users, auth, oidc, config: { secureCookies: false, maxUploadBytes: 5 * 1024 * 1024, webDir: undefined, publicUrls: [PUBLIC] } });
   const token = auth.issueToken("test", "abc123");
-  return { db, vault, vaultDir, app, auth, token };
+  const server = Bun.serve({ port: 0, fetch: app.fetch, websocket: liveSocket });
+  return { db, vault, vaultDir, app, auth, token, server, ws: `ws://localhost:${server.port}` };
 }
 
 let s: ReturnType<typeof makeSetup>;
-const streams: Stream[] = [];
+const clients: Client[] = [];
 beforeEach(() => {
   s = makeSetup();
 });
-afterEach(async () => {
-  for (const st of streams.splice(0)) await st.close();
+afterEach(() => {
+  for (const c of clients.splice(0)) c.close();
+  s.server.stop(true);
 });
 
-type Event = { event: string; data: any };
+const frame = (type: number, payload: Uint8Array) => new Uint8Array([type, ...payload]);
+const until = async (ok: () => boolean, what: string, ms = 2000) => {
+  const end = Date.now() + ms;
+  while (!ok()) {
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(10);
+  }
+};
 
-/** A live client's stream: events in order, waited for by name. */
-class Stream {
-  events: Event[] = [];
-  private waiters: (() => void)[] = [];
-  private reader: { read(): Promise<{ value?: Uint8Array; done: boolean }>; cancel(): Promise<void> };
-  constructor(res: Response) {
-    this.reader = res.body!.getReader();
-    void this.pump();
+/** A live client as the web app runs one: its own Yjs copy, synced over the socket. */
+class Client {
+  ws!: WebSocket;
+  messages: any[] = [];
+  acks = 0;
+  synced = false;
+  closed = false;
+  constructor(public doc = new Y.Doc()) {
+    this.doc.on("update", (update: Uint8Array, origin: unknown) => {
+      if (origin !== "remote" && this.ws?.readyState === WebSocket.OPEN) this.ws.send(frame(UPDATE, update));
+    });
   }
-  private async pump() {
-    const decoder = new TextDecoder();
-    let buf = "";
-    try {
-      for (;;) {
-        const { value, done } = await this.reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf("\n\n")) >= 0) {
-          const block = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          const event = /^event: (.*)$/m.exec(block)?.[1];
-          const data = /^data: (.*)$/m.exec(block)?.[1];
-          if (event) this.events.push({ event, data: data ? JSON.parse(data) : null });
-          for (const w of this.waiters.splice(0)) w();
+  connect(url: string, headers: Record<string, string> = {}) {
+    this.synced = false;
+    this.closed = false;
+    this.ws = new WebSocket(url, { headers } as any);
+    this.ws.binaryType = "arraybuffer";
+    this.ws.onclose = () => (this.closed = true);
+    this.ws.onmessage = (e) => {
+      if (typeof e.data === "string") {
+        const msg = JSON.parse(e.data);
+        if (msg.t === "ack") this.acks++;
+        else this.messages.push(msg);
+        if (msg.t === "hello") {
+          // Someone else's document (a fresh client, or after the server lost track of it): start from the server's.
+          if (msg.guid !== this.doc.guid) {
+            const old = this.doc;
+            this.doc = new Y.Doc({ guid: msg.guid });
+            this.doc.on("update", (update: Uint8Array, origin: unknown) => {
+              if (origin !== "remote" && this.ws.readyState === WebSocket.OPEN) this.ws.send(frame(UPDATE, update));
+            });
+            old.destroy();
+          }
+          this.ws.send(frame(SYNC_STEP1, Y.encodeStateVector(this.doc)));
         }
+        return;
       }
-    } catch {}
+      const data = new Uint8Array(e.data);
+      if (data[0] === SYNC_STEP1) this.ws.send(frame(SYNC_STEP2, Y.encodeStateAsUpdate(this.doc, data.subarray(1))));
+      else {
+        Y.applyUpdate(this.doc, data.subarray(1), "remote");
+        if (data[0] === SYNC_STEP2) this.synced = true;
+      }
+    };
+    return this;
   }
-  /** The next event called `name` not taken yet (earlier ones of other names are skipped over, not removed). */
-  async next(name: string, timeoutMs = 2000): Promise<any> {
-    const end = Date.now() + timeoutMs;
-    for (;;) {
-      const i = this.events.findIndex((e) => e.event === name);
-      if (i >= 0) return this.events.splice(i, 1)[0]!.data;
-      if (Date.now() > end) throw new Error(`no ${name} event; got ${this.events.map((e) => e.event).join(", ")}`);
-      await new Promise<void>((r) => {
-        this.waiters.push(r);
-        setTimeout(r, 50);
-      });
-    }
+  get text() {
+    return this.doc.getText("t").toString();
   }
-  async close() {
-    await this.reader.cancel().catch(() => {});
+  insert(at: number, text: string) {
+    this.doc.getText("t").insert(at, text);
+  }
+  delete(at: number, length: number) {
+    this.doc.getText("t").delete(at, length);
+  }
+  send(msg: unknown) {
+    this.ws.send(JSON.stringify(msg));
+  }
+  cursor(at: number) {
+    const rel = Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(this.doc.getText("t"), at));
+    this.send({ t: "cursor", anchor: rel, head: rel });
+  }
+  /** The next message of type `t` not taken yet. */
+  async next(t: string, ms = 2000) {
+    await until(() => this.messages.some((m) => m.t === t), `${t}; got ${this.messages.map((m) => m.t).join(", ")}`, ms);
+    return this.messages.splice(
+      this.messages.findIndex((m) => m.t === t),
+      1,
+    )[0];
+  }
+  close() {
+    this.ws?.close();
   }
 }
 
@@ -94,70 +131,73 @@ async function put(path: string, content: string) {
   return (await res.json()) as { path: string; hash: string };
 }
 
-async function open(path: string, client: string, extra = "") {
-  const res = await s.app.request(`/api/live?path=${encodeURIComponent(path)}&client=${client}${extra}`, { headers: { authorization: `Bearer ${s.token}` } });
-  expect(res.status).toBe(200);
-  const st = new Stream(res);
-  streams.push(st);
-  return { st, hello: await st.next("hello") };
+async function open(path: string, doc?: Y.Doc) {
+  const c = new Client(doc).connect(`${s.ws}/api/live?path=${encodeURIComponent(path)}`, { authorization: `Bearer ${s.token}` });
+  clients.push(c);
+  await until(() => c.synced, "sync");
+  return c;
 }
 
-async function openShare(id: string, client: string, name = "", extra = "") {
-  const res = await s.app.request(`/api/public/share/${id}/live?client=${client}&name=${encodeURIComponent(name)}${extra}`);
-  expect(res.status).toBe(200);
-  const st = new Stream(res);
-  streams.push(st);
-  return { st, hello: await st.next("hello") };
+async function openShare(id: string, name = "") {
+  const c = new Client().connect(`${s.ws}/api/public/share/${id}/live?name=${encodeURIComponent(name)}`);
+  clients.push(c);
+  await until(() => c.synced, "sync");
+  return c;
 }
 
-const post = (path: string, body: unknown, auth = true) =>
-  s.app.request(path, {
-    method: "POST",
-    headers: { ...(auth && { authorization: `Bearer ${s.token}` }), "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+const post = (path: string, body: unknown) =>
+  s.app.request(path, { method: "POST", headers: { authorization: `Bearer ${s.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
 
-/** One client's change: `insert` at `at` in a document of `length`. */
-const insert = (length: number, at: number, text: string, del = 0) => ChangeSet.of([{ from: at, to: at + del, insert: text }], length).toJSON();
+/** "Save now", as the editor asks before leaving a note. */
+async function save(c: Client) {
+  await Bun.sleep(20);
+  c.messages = c.messages.filter((m) => m.t !== "saved");
+  c.send({ t: "save" });
+  return c.next("saved");
+}
 
 const file = (path: string) => readFileSync(join(s.vaultDir, path), "utf8");
 
 describe("live editing", () => {
-  test("two people: each sees the other's change, concurrent edits both go in, and the file is written", async () => {
+  test("two people: each sees the other's typing, concurrent edits both go in, and the file is written", async () => {
     await put("Plan.md", "Hello world\n");
-    const a = await open("Plan.md", "clientaaa");
-    const b = await open("Plan.md", "clientbbb");
-    expect(a.hello.type).toBe("init");
-    expect(a.hello.text).toBe("Hello world\n");
-    expect(b.hello.version).toBe(0);
-    // Both see two people.
-    const people = (await a.st.next("presence")).people;
-    expect(people.length).toBeGreaterThanOrEqual(1);
-    expect((await b.st.next("presence")).people.map((p: any) => p.name)).toEqual(["sam", "sam"]);
+    const a = await open("Plan.md");
+    const b = await open("Plan.md");
+    expect(a.text).toBe("Hello world\n");
+    await until(() => b.messages.some((m) => m.t === "presence" && m.people.length === 2), "two people");
+    expect(b.messages.findLast((m) => m.t === "presence").people.map((p: any) => p.name)).toEqual(["sam", "sam"]);
 
-    // Both type at version 0: A at the start, B at the end. B's goes in after A's, moved over it.
-    expect((await post("/api/live/push", { conn: a.hello.conn, version: 0, updates: [{ clientID: "clientaaa", changes: insert(12, 0, "Oh, ") }] })).status).toBe(200);
-    expect((await post("/api/live/push", { conn: b.hello.conn, version: 0, updates: [{ clientID: "clientbbb", changes: insert(12, 11, "!") }] })).status).toBe(200);
-    const first = await b.st.next("update");
-    expect(first.updates[0].clientID).toBe("clientaaa");
-    const second = await a.st.next("update");
-    expect(second.updates[0].clientID).toBe("clientaaa");
-    expect((await a.st.next("update")).updates[0].clientID).toBe("clientbbb");
+    // Both type at once, neither having seen the other's change.
+    a.insert(0, "Oh, ");
+    b.insert(11, "!");
+    await until(() => a.text === "Oh, Hello world!\n" && b.text === a.text, "both changes everywhere");
 
     // Not on disk yet (a moment after typing stops); "save now" writes it.
     expect(file("Plan.md")).toBe("Hello world\n");
-    const saved = await post("/api/live/save", { conn: a.hello.conn });
-    expect(((await saved.json()) as any).dirty).toBe(false);
+    expect((await save(a)).dirty).toBe(false);
     expect(file("Plan.md")).toBe("Oh, Hello world!\n");
-    expect((await b.st.next("saved")).dirty).toBe(false);
+
+    // Cursors reach the others, as positions in their own copy.
+    a.cursor(4);
+    await until(() => b.messages.some((m) => m.t === "presence" && m.people.some((p: any) => !p.me && p.cursor)), "a's cursor");
+    const cursor = b.messages.findLast((m) => m.t === "presence").people.find((p: any) => !p.me).cursor;
+    expect(Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(cursor.head), b.doc)!.index).toBe(4);
+  });
+
+  test("typing is written by itself a moment after it stops", async () => {
+    await put("Auto.md", "a\n");
+    const c = await open("Auto.md");
+    c.insert(1, "b");
+    await until(() => file("Auto.md") === "ab\n", "the write", 3000);
+    expect((await c.next("saved")).dirty).toBe(false);
   });
 
   test("a change made elsewhere is merged in, even over unsaved typing", async () => {
     const note = await put("Merge.md", "one\ntwo\nthree\n");
-    const a = await open("Merge.md", "clientaaa");
+    const a = await open("Merge.md");
     // Typing at the end, not saved yet.
-    await post("/api/live/push", { conn: a.hello.conn, version: 0, updates: [{ clientID: "clientaaa", changes: insert(14, 14, "four\n") }] });
-    await a.st.next("update");
+    a.insert(14, "four\n");
+    await until(() => a.acks > 0, "ack");
     // Another device saves an edit to the first line, against the file as it was.
     const res = await s.app.request(`/api/notes/file?path=Merge.md`, {
       method: "PUT",
@@ -165,184 +205,173 @@ describe("live editing", () => {
       body: JSON.stringify({ content: "ONE\ntwo\nthree\n", base_hash: note.hash }),
     });
     expect(res.status).toBe(200);
-    const merged = await a.st.next("update");
-    expect(merged.updates[0].clientID).toBe("server");
-    await post("/api/live/save", { conn: a.hello.conn });
+    await until(() => a.text === "ONE\ntwo\nthree\nfour\n", "the outside edit");
+    await save(a);
     expect(file("Merge.md")).toBe("ONE\ntwo\nthree\nfour\n");
 
-    // An edit straight to the file (Obsidian, Syncthing), found by a scan.
+    // An edit straight to the file (Obsidian, Syncthing), found by a scan, while someone types at the start.
+    a.insert(0, "# ");
     writeFileSync(join(s.vaultDir, "Merge.md"), "ONE\ntwo\nthree\nfour\nfive\n");
     await s.vault.scan();
-    expect((await a.st.next("update")).updates[0].changes).toEqual(insert(19, 19, "five\n"));
-    await post("/api/live/save", { conn: a.hello.conn });
-    expect(file("Merge.md")).toBe("ONE\ntwo\nthree\nfour\nfive\n");
+    await until(() => a.text === "# ONE\ntwo\nthree\nfour\nfive\n", "the scanned edit");
+    await save(a);
+    expect(file("Merge.md")).toBe("# ONE\ntwo\nthree\nfour\nfive\n");
   });
 
-  test("a reconnecting client gets what it missed, or the whole text after a restart, and can merge its own text back", async () => {
+  test("offline typing syncs on reconnect, also after the server restarts, without doubling anything", async () => {
     await put("Back.md", "abc\n");
-    const a = await open("Back.md", "clientaaa");
-    const b = await open("Back.md", "clientbbb");
-    await b.st.close();
-    await post("/api/live/push", { conn: a.hello.conn, version: 0, updates: [{ clientID: "clientaaa", changes: insert(4, 3, "d") }] });
-    const again = await open("Back.md", "clientbbb", `&epoch=${b.hello.epoch}&version=0`);
-    expect(again.hello.type).toBe("resume");
-    expect(again.hello.updates).toHaveLength(1);
-    // A different room (the server restarted): the whole text, and a rejoin on the hash it last saw merges it.
-    const old = await open("Back.md", "clientccc", `&epoch=stale&version=0`);
-    expect(old.hello.type).toBe("init");
-    expect(old.hello.text).toBe("abcd\n");
-    const rejoin = await post("/api/live/rejoin", { conn: old.hello.conn, base_hash: a.hello.hash, text: "abc\nxyz\n" });
-    expect(rejoin.status).toBe(200);
-    await post("/api/live/save", { conn: a.hello.conn });
-    expect(file("Back.md")).toBe("abcd\nxyz\n");
-    // A hash the note has moved on from: nothing safe to merge onto.
-    expect((await post("/api/live/rejoin", { conn: old.hello.conn, base_hash: a.hello.hash, text: "zzz" })).status).toBe(409);
+    const a = await open("Back.md");
+    const b = await open("Back.md");
+    // B goes offline and types; A types meanwhile.
+    b.close();
+    await until(() => b.closed, "b closed");
+    b.insert(4, "from b\n");
+    a.insert(0, "A: ");
+    await until(() => a.acks > 0, "ack");
+    // B comes back with the same copy: each gets the other's change.
+    await open("Back.md", b.doc);
+    await until(() => a.text === "A: abc\nfrom b\n" && clients.at(-1)!.text === a.text, "merged");
+    await save(a);
+
+    // The server restarts (the room is gone), while C, offline, holds a copy with typing the room never saw.
+    const c = await open("Back.md");
+    c.close();
+    await until(() => c.closed, "c closed");
+    c.insert(0, ">> ");
+    for (const cl of clients) cl.close();
+    await liveFor(s.vault).flush();
+    await until(() => [...liveFor(s.vault).room("Back.md")!.peers.keys()].length === 0, "everyone gone");
+    (liveFor(s.vault).room("Back.md") as any).close();
+    expect(liveFor(s.vault).room("Back.md")).toBeUndefined();
+    // The new room picks up the stored document, so C's copy syncs into it rather than beside it.
+    const again = await open("Back.md", c.doc);
+    await until(() => again.text === ">> A: abc\nfrom b\n", "c's typing merged once");
+    await save(again);
+    expect(file("Back.md")).toBe(">> A: abc\nfrom b\n");
   });
 
-  test("someone else's connection or client id can't be used", async () => {
+  test("assistants and other sites' pages don't get live editing", async () => {
     await put("Mine.md", "x\n");
-    const a = await open("Mine.md", "clientaaa");
-    expect((await post("/api/live/push", { conn: a.hello.conn, version: 0, updates: [{ clientID: "clientzzz", changes: insert(2, 0, "y") }] })).status).toBe(400);
-    expect((await post("/api/live/push", { conn: "nope", version: 0, updates: [] })).status).toBe(409);
-    // Changes that don't fit the text.
-    expect((await post("/api/live/push", { conn: a.hello.conn, version: 0, updates: [{ clientID: "clientaaa", changes: insert(50, 0, "y") }] })).status).toBe(400);
-    // Another account's token can't use the connection.
-    const other = s.auth.issueToken("other", "someone-else");
-    const res = await s.app.request("/api/live/push", {
-      method: "POST",
-      headers: { authorization: `Bearer ${other}`, "content-type": "application/json" },
-      body: JSON.stringify({ conn: a.hello.conn, version: 0, updates: [] }),
-    });
-    expect(res.status).toBe(409);
-    // Assistants don't get live editing.
     const mcp = s.auth.issueToken("assistant", "abc123", "mcp");
-    expect((await s.app.request(`/api/live?path=Mine.md&client=clientmcp`, { headers: { authorization: `Bearer ${mcp}` } })).status).toBe(403);
-    // A share link's visitor can't take a signed-in client's id.
-    const share = (await (await post("/api/notes/share", { path: "Mine.md", editable: true })).json()) as any;
-    const taken = new Stream(await s.app.request(`/api/public/share/${share.id}/live?client=clientaaa&name=Kim`));
-    streams.push(taken);
-    expect((await taken.next("refused")).status).toBe(409);
+    expect((await s.app.request(`/api/live?path=Mine.md`, { headers: { authorization: `Bearer ${mcp}` } })).status).toBe(403);
+    // A socket carries the session cookie from any page: only Sink's own may open one with it.
+    const session = s.auth.issueToken("web", "abc123");
+    const cookie = `sink_session=${session}`;
+    const upgrade = { upgrade: "websocket", connection: "upgrade", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" };
+    expect((await fetch(`http://localhost:${s.server.port}/api/live?path=Mine.md`, { headers: { ...upgrade, cookie, origin: "https://evil.test" } })).status).toBe(403);
+    expect((await fetch(`http://localhost:${s.server.port}/api/live?path=Mine.md`, { headers: { cookie, origin: PUBLIC } })).status).toBe(426);
   });
 
   test("share links: the body only, edits keep the frontmatter, no new properties or images, and editing can be turned off", async () => {
     await put("Trip.md", "---\ntags: [travel]\n---\n# Trip\n![[map.png]]\n");
     const share = (await (await post("/api/notes/share", { path: "Trip.md", editable: true })).json()) as any;
-    const owner = await open("Trip.md", "clientown");
-    const viewer = await openShare(share.id, "clientview");
-    const kim = await openShare(share.id, "clientkim", "Kim");
-    expect(kim.hello.text).toBe("# Trip\n![[map.png]]\n");
-    // Without a name, a visitor only watches.
-    expect((await post(`/api/public/share/${share.id}/live/push`, { conn: viewer.hello.conn, version: 0, updates: [{ clientID: "clientview", changes: insert(20, 0, "x") }] }, false)).status).toBe(403);
+    const owner = await open("Trip.md");
+    const viewer = await openShare(share.id);
+    const kim = await openShare(share.id, "Kim");
+    expect(kim.text).toBe("# Trip\n![[map.png]]\n");
+    // Without a name, a visitor only watches: what they type goes nowhere.
+    viewer.insert(0, "x");
+    await until(() => viewer.acks > 0, "viewer ack");
 
-    // Kim types at the end of the body; the owner sees it after the frontmatter.
-    expect((await post(`/api/public/share/${share.id}/live/push`, { conn: kim.hello.conn, version: 0, updates: [{ clientID: "clientkim", changes: insert(20, 20, "Bring snacks\n") }] }, false)).status).toBe(200);
-    const seen = await owner.st.next("update");
-    expect(seen.updates[0].changes).toEqual(insert(43, 43, "Bring snacks\n"));
-    expect((await viewer.st.next("update")).updates[0].changes).toEqual(insert(20, 20, "Bring snacks\n"));
-    expect((await kim.st.next("update")).updates[0].clientID).toBe("clientkim");
+    // Kim types at the end of the body; the owner sees it after the frontmatter, the viewer too.
+    kim.insert(20, "Bring snacks\n");
+    await until(() => owner.text === "---\ntags: [travel]\n---\n# Trip\n![[map.png]]\nBring snacks\n", "kim's edit for the owner");
+    // The viewer's own stray "x" stays with them alone.
+    await until(() => viewer.text === "x# Trip\n![[map.png]]\nBring snacks\n", "kim's edit for the viewer");
 
-    // The owner edits the frontmatter: share links see no change (an empty one, to keep versions in step).
-    await post("/api/live/push", { conn: owner.hello.conn, version: 1, updates: [{ clientID: "clientown", changes: insert(56, 4, "x", 1) }] });
-    const hidden = (await kim.st.next("update")).updates[0].changes;
-    expect(ChangeSet.fromJSON(hidden).empty).toBe(true);
+    // The owner edits the frontmatter and the body: share links see only the body change.
+    owner.delete(4, 1);
+    owner.insert(3 + 19, "## ");
+    await until(() => kim.text === "## # Trip\n![[map.png]]\nBring snacks\n", "the owner's body edit");
+    owner.delete(22, 3);
+    await until(() => kim.text === "# Trip\n![[map.png]]\nBring snacks\n", "undone");
 
-    // No new image, no properties.
-    const refused = await post(`/api/public/share/${share.id}/live/push`, { conn: kim.hello.conn, version: 2, updates: [{ clientID: "clientkim", changes: insert(33, 0, "![[secret.png]]\n") }] }, false);
-    expect(refused.status).toBe(400);
-    await post("/api/live/save", { conn: owner.hello.conn });
-    expect(file("Trip.md")).toBe("---\nxags: [travel]\n---\n# Trip\n![[map.png]]\nBring snacks\n");
+    // No new image, no properties: refused, and undone for everyone.
+    kim.insert(0, "![[secret.png]]\n");
+    expect((await kim.next("refused")).error).toMatch(/images/);
+    await until(() => kim.text === "# Trip\n![[map.png]]\nBring snacks\n", "the image undone");
+    await save(owner);
+    expect(file("Trip.md")).toBe("---\nags: [travel]\n---\n# Trip\n![[map.png]]\nBring snacks\n");
     // Recorded as the last to edit through the link.
     expect(((await (await s.app.request("/api/notes/share?path=Trip.md", { headers: { authorization: `Bearer ${s.token}` } })).json()) as any).edited_by).toBe("Kim");
 
-    // Editing turned off: Kim is told, and can't push.
+    // Editing turned off: Kim is told, and what she types goes nowhere.
     await post("/api/notes/share", { path: "Trip.md", editable: false });
-    await kim.st.next("readonly");
-    expect((await post(`/api/public/share/${share.id}/live/push`, { conn: kim.hello.conn, version: 2, updates: [] }, false)).status).toBe(409);
-    // Sharing stopped: the stream ends.
+    await kim.next("readonly");
+    kim.insert(0, "zzz");
+    await until(() => kim.acks > 2, "kim ack");
+    await save(owner);
+    expect(file("Trip.md")).not.toContain("zzz");
+    // Sharing stopped: the socket closes.
     await s.app.request("/api/notes/share?path=Trip.md", { method: "DELETE", headers: { authorization: `Bearer ${s.token}` } });
-    await viewer.st.next("gone");
+    await viewer.next("gone");
+    await until(() => viewer.closed, "viewer closed");
   });
 
   test("a share without frontmatter can't be given some by typing it", async () => {
     await put("Bare.md", "text\n");
     const share = (await (await post("/api/notes/share", { path: "Bare.md", editable: true })).json()) as any;
-    const kim = await openShare(share.id, "clientkim", "Kim");
-    const res = await post(`/api/public/share/${share.id}/live/push`, { conn: kim.hello.conn, version: 0, updates: [{ clientID: "clientkim", changes: insert(5, 0, "---\npublish: true\n---\n") }] }, false);
-    expect(res.status).toBe(400);
+    const kim = await openShare(share.id, "Kim");
+    kim.insert(0, "---\npublish: true\n---\n");
+    expect((await kim.next("refused")).error).toMatch(/properties/);
+    await until(() => kim.text === "text\n", "undone");
   });
 
-  test("moved and deleted notes", async () => {
+  test("moved and deleted notes, and their stored documents", async () => {
     await put("Old.md", "x\n");
-    const a = await open("Old.md", "clientaaa");
-    await s.app.request("/api/notes/move", {
-      method: "POST",
-      headers: { authorization: `Bearer ${s.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ from: "Old.md", to: "New.md" }),
-    });
-    expect((await a.st.next("moved")).path).toBe("New.md");
-    await post("/api/live/push", { conn: a.hello.conn, version: 0, updates: [{ clientID: "clientaaa", changes: insert(2, 0, "y") }] });
-    await post("/api/live/save", { conn: a.hello.conn });
+    const a = await open("Old.md");
+    await post("/api/notes/move", { from: "Old.md", to: "New.md" });
+    expect((await a.next("moved")).path).toBe("New.md");
+    expect(s.db.query("SELECT path FROM live_docs").all()).toEqual([{ path: "New.md" }]);
+    a.insert(0, "y");
+    await save(a);
     expect(file("New.md")).toBe("yx\n");
     const del = await s.app.request("/api/notes/file?path=New.md", { method: "DELETE", headers: { authorization: `Bearer ${s.token}` } });
     expect(del.status).toBe(200);
-    await a.st.next("gone");
+    await a.next("gone");
     expect(liveFor(s.vault).room("New.md")).toBeUndefined();
+    expect(s.db.query("SELECT path FROM live_docs").all()).toEqual([]);
+  });
+
+  test("an editable share link's visitor can paste an image in, and only an image", async () => {
+    await put("Pics.md", "text\n");
+    const share = (await (await post("/api/notes/share", { path: "Pics.md", editable: true })).json()) as any;
+    const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (ch) => ch.charCodeAt(0));
+    const upload = (bytes: Uint8Array, name: string, id = share.id) => {
+      const form = new FormData();
+      form.set("file", new File([bytes], name));
+      return s.app.request(`/api/public/share/${id}/attachment`, { method: "POST", body: form });
+    };
+    // Not an image, whatever it's called.
+    expect((await upload(new TextEncoder().encode("<script>"), "x.png")).status).toBe(400);
+    const res = await upload(png, "whatever.html");
+    expect(res.status).toBe(201);
+    const { embed } = (await res.json()) as { embed: string };
+    expect(embed).toMatch(/^!\[\[Pasted image \d{14} [\w-]{6}\.png\]\]$/);
+    const name = embed.slice(3, -2);
+    // Served at once (a live edit can show it before the note is written), and the visitor's edit may embed it.
+    expect((await s.app.request(`/api/public/share/${share.id}/attachment?name=${encodeURIComponent(name)}`)).status).toBe(200);
+    const kim = await openShare(share.id, "Kim");
+    kim.insert(5, embed + "\n");
+    await save(kim);
+    expect(file("Pics.md")).toBe(`text\n${embed}\n`);
+    expect(kim.messages.some((m) => m.t === "refused")).toBe(false);
+    // A read-only link takes no uploads.
+    await post("/api/notes/share", { path: "Pics.md", editable: false });
+    expect((await upload(png, "a.png")).status).toBe(404);
   });
 });
 
-test("diffChanges turns one text into the other", () => {
+test("diffDelta turns one text into the other", () => {
   for (const [a, b] of [
     ["", "abc"],
     ["abc", ""],
     ["one two three", "one 2 three four"],
     ["😀 emoji", "😃 emoji"],
   ] as const) {
-    expect(diffChanges(a, b).apply(require("@codemirror/state").Text.of(a.split("\n"))).toString()).toBe(b);
+    const doc = new Y.Doc();
+    doc.getText("t").insert(0, a);
+    doc.getText("t").applyDelta(diffDelta(a, b));
+    expect(doc.getText("t").toString()).toBe(b);
   }
-});
-
-test("a client that goes quiet is dropped, cursor and all", async () => {
-  s = makeSetup();
-  await put("Quiet.md", "x\n");
-  const a = await open("Quiet.md", "clientaaa");
-  const b = await open("Quiet.md", "clientbbb");
-  const room = liveFor(s.vault).room("Quiet.md")!;
-  // A keeps talking; B's tab closed without the server noticing.
-  await post("/api/live/presence", { conn: a.hello.conn, version: 0, cursor: { anchor: 0, head: 0 } });
-  room.peers.get(b.hello.conn)!.seen -= 120_000;
-  room.reap();
-  expect([...room.peers.values()].map((p) => p.clientID)).toEqual(["clientaaa"]);
-  // A is told: the newest presence it got lists only A.
-  await Bun.sleep(100);
-  const people = a.st.events.filter((e) => e.event === "presence").at(-1)!.data.people;
-  expect(people.map((p: any) => p.id)).toEqual(["clientaaa"]);
-});
-
-test("an editable share link's visitor can paste an image in, and only an image", async () => {
-  s = makeSetup();
-  await put("Pics.md", "text\n");
-  const share = (await (await post("/api/notes/share", { path: "Pics.md", editable: true })).json()) as any;
-  const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (ch) => ch.charCodeAt(0));
-  const upload = (bytes: Uint8Array, name: string, id = share.id) => {
-    const form = new FormData();
-    form.set("file", new File([bytes], name));
-    return s.app.request(`/api/public/share/${id}/attachment`, { method: "POST", body: form });
-  };
-  // Not an image, whatever it's called.
-  expect((await upload(new TextEncoder().encode("<script>"), "x.png")).status).toBe(400);
-  const res = await upload(png, "whatever.html");
-  expect(res.status).toBe(201);
-  const { embed } = (await res.json()) as { embed: string };
-  expect(embed).toMatch(/^!\[\[Pasted image \d{14} [\w-]{6}\.png\]\]$/);
-  const name = embed.slice(3, -2);
-  // Served at once (a live edit can show it before the note is written), and the visitor's edit may embed it.
-  expect((await s.app.request(`/api/public/share/${share.id}/attachment?name=${encodeURIComponent(name)}`)).status).toBe(200);
-  const kim = await openShare(share.id, "clientkim", "Kim");
-  const ok = await post(`/api/public/share/${share.id}/live/push`, { conn: kim.hello.conn, version: 0, updates: [{ clientID: "clientkim", changes: insert(5, 5, embed + "\n") }] }, false);
-  expect(ok.status).toBe(200);
-  await post(`/api/public/share/${share.id}/live/save`, { conn: kim.hello.conn }, false);
-  expect(file("Pics.md")).toBe(`text\n${embed}\n`);
-  // A read-only link takes no uploads.
-  await post("/api/notes/share", { path: "Pics.md", editable: false });
-  expect((await upload(png, "a.png")).status).toBe(404);
 });
