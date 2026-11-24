@@ -1128,6 +1128,7 @@ const screen = {
   private: false,
   failures: 0,
   live: null, // the live co-editing session (live.js), while the note is open on the server for it
+  retainedDraft: null, // the stash of a conflict copy that failed on opening, kept while live saves clear the rest
 };
 
 /** The live session, once it's started and unless the server turned it down: then the server saves, not us. */
@@ -1230,8 +1231,9 @@ export async function newBoard() {
  */
 function startLive() {
   const stash = screen.path && readUnsaved(screen.path);
-  // A failed conflict copy belongs to another version, not to the editor joining this session.
-  const retainedDraft = stash && stash.base !== screen.hash && normalizeLineEndings(stash.text) !== screen.saved;
+  // A failed conflict copy belongs to another version, not to the editor joining this session: it stays for the next
+  // open to retry, until typing here stashes over it.
+  screen.retainedDraft = stash && stash.base !== screen.hash && normalizeLineEndings(stash.text) !== screen.saved ? rawUnsaved(screen.path) : null;
   const session = liveSession({
     start: !!screen.path,
     base: { text: screen.saved, hash: screen.hash },
@@ -1251,7 +1253,7 @@ function startLive() {
       screen.hash = hash;
       if (!session.pending()) {
         screen.saved = screen.editor.getText();
-        if (!retainedDraft) clearUnsaved(screen.path);
+        clearLiveDraft();
       }
     },
     // What was typed while the server was away couldn't be merged (the note changed meanwhile): kept as a copy.
@@ -1373,10 +1375,20 @@ function clearUnsaved(path) {
 }
 function readUnsaved(path) {
   try {
-    return JSON.parse(localStorage.getItem(draftKey(path)));
+    return JSON.parse(rawUnsaved(path));
   } catch {
     return null;
   }
+}
+function rawUnsaved(path) {
+  try {
+    return localStorage.getItem(draftKey(path));
+  } catch {
+    return null;
+  }
+}
+function clearLiveDraft() {
+  if (!screen.retainedDraft || rawUnsaved(screen.path) !== screen.retainedDraft) clearUnsaved(screen.path);
 }
 
 function applyLook() {
@@ -1783,7 +1795,7 @@ async function doSave() {
   if (session) {
     if (await session.flush()) {
       screen.saved = screen.editor.getText();
-      clearUnsaved(screen.path);
+      clearLiveDraft();
     }
     return;
   }

@@ -302,6 +302,46 @@ test('a clean live hello and later saved event retain a failed conflict copy for
   expect(copies[0].content).toBe(JSON.parse(stash).text);
 });
 
+test('saving typing over a live note keeps a failed conflict copy for retry', async () => {
+  useLive = true;
+  liveStream();
+  const pushes = [];
+  const liveFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/live/push') pushes.push(JSON.parse(options.body));
+    return liveFetch(url, options);
+  };
+  const stash = JSON.stringify({ base: 'original', text: original + '\nUnsaved offline edit' });
+  storage.set('sink:unsaved:' + path, stash);
+  current = { ...current, content: latest, hash: 'android' };
+  failCopy = true;
+  await notes.openNote(path);
+  hello();
+  await tick();
+  editor.setText(latest + '\nTyped live');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  stream.enqueue(new TextEncoder().encode('event: update\ndata: ' + JSON.stringify({ version: 1, dirty: true, updates: pushes[0].updates }) + '\n\n'));
+  await tick();
+  expect(await notes.saveForReload()).toBe(true);
+  expect(storage.get('sink:unsaved:' + path)).toBe(stash);
+});
+
+test('a stash written over a failed conflict copy is cleared once live editing saves it', async () => {
+  useLive = true;
+  liveStream();
+  storage.set('sink:unsaved:' + path, JSON.stringify({ base: 'original', text: original + '\nUnsaved offline edit' }));
+  current = { ...current, content: latest, hash: 'android' };
+  failCopy = true;
+  await notes.openNote(path);
+  hello();
+  await tick();
+  // What typing offline here stashes in its place.
+  storage.set('sink:unsaved:' + path, JSON.stringify({ base: 'android', text: latest + '\nOffline here' }));
+  stream.enqueue(new TextEncoder().encode('event: saved\ndata: ' + JSON.stringify({ hash: 'merged', dirty: false }) + '\n\n'));
+  await tick();
+  expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
 test('an untouched CRLF note closed before hello leaves no draft or later conflict copy', async () => {
   useLive = true;
   liveStream();
