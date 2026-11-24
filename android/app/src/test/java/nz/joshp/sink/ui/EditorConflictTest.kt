@@ -36,6 +36,17 @@ class EditorConflictTest {
         assertNull(editor.queued)
     }
 
+    @Test fun `the original still shows Conflict after a flush finds nothing left to save`() {
+        val editor = editor()
+        assertEquals("Saved", editor.toolbarStatus("Saved"))
+
+        editor.adoptConflict(QueuedSave.Conflict(editor.queued!!, original, copy).result())
+
+        assertEquals(original.path, editor.path)
+        assertNull(editor.pendingEdit())
+        assertEquals("Conflict", editor.toolbarStatus("Saved"))
+    }
+
     @Test fun `text typed after the worker edit is saved against the conflict copy`() {
         val editor = editor()
         val outcome = QueuedSave.Conflict(editor.queued!!, original, copy)

@@ -14,6 +14,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     var current: String = ""
     var queued: PendingEdit? = null
     var loaded = false
+    private var madeConflictCopy = false
     /** The page is editing live (web/src/live.js) and syncs every edit itself: nothing here saves it. */
     var liveMode = false
     val key get() = path ?: draftKey
@@ -30,11 +31,15 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     fun matchesConflict(outcome: QueuedSave.Conflict): Boolean =
         loaded && outcome.matches(queued, key, hash)
 
+    fun toolbarStatus(status: String): String =
+        if (madeConflictCopy && status == "Saved") "Conflict" else status
+
     /** Follow the copy if it has newer local edits; otherwise continue on the original. */
     fun adoptConflict(result: SaveResult.Conflict) {
         queued = null
         val theirs = result.theirs
         val copy = result.copy
+        if (copy != null) madeConflictCopy = true
         if (copy != null && (theirs == null || current != result.savedText)) {
             path = copy.path
             hash = copy.hash
