@@ -486,7 +486,7 @@ class NoteStore internal constructor(filesDir: File) {
         if (hash == cached.hash) return
         // On reconnect, the room can announce its hash before the new text reaches the editor.
         if (content.encodeUtf8().sha256().hex() != hash) return
-        saveNote(cached.copy(hash = hash, content = content))
+        runCatching { saveNote(cached.copy(hash = hash, content = content)) }
     }
 
     fun forget(path: String) {
