@@ -220,6 +220,7 @@ export function liveSession(opts) {
       if (res.status === 404 && everConnected) return gone();
       // Before ever connecting, a refusal means live editing isn't on offer here; after, it's a blip.
       if (!everConnected && res.status >= 400 && res.status < 500) {
+        console.warn(`[live] not available here (${res.status}); saving the usual way`);
         unavailable = true;
         return opts.onUnavailable?.(res.status);
       }
@@ -301,6 +302,7 @@ export function liveSession(opts) {
     else if (event === 'readonly') readOnly();
     else if (event === 'gone') gone();
     else if (event === 'refused') {
+      console.warn(`[live] refused: ${d.error}; saving the usual way`);
       unavailable = true;
       opts.onUnavailable?.(d.status);
     }
