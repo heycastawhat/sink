@@ -71,19 +71,9 @@ function startLive(note, editing) {
   session?.destroy();
   const live = liveSession({
     base: { text: note.content, hash: note.hash ?? '' },
-    streamUrl: (params) => {
-      if (editing) params.set('name', shareName());
-      return `${base}/live?${params}`;
-    },
-    actionUrl: (name) => `${base}/live/${name}`,
+    url: () => `${base}/live${editing ? `?name=${encodeURIComponent(shareName())}` : ''}`,
     onStatus: (text) => editing && status(text),
     onPeople: (people) => renderPeople($('share-people'), people),
-    // Typed while away and the note changed meanwhile: nothing safe to merge it onto, so it stays copyable.
-    onConflict: (text) => {
-      state.mine = text;
-      $('share-copy').hidden = false;
-      status('The note changed while you were away, so your last edits weren’t saved');
-    },
     onRefused: (message) => status(`${message[0].toUpperCase()}${message.slice(1)}`),
     onReadOnly: () => status('Editing was turned off'),
     onGone: () => {

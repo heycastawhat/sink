@@ -8,7 +8,7 @@ import { clipRoutes } from "./routes/clip";
 import { noteRoutes } from "./routes/notes";
 import { publicShareRoutes, shareRoutes } from "./routes/share";
 import { eventRoutes } from "./routes/events";
-import { liveRoutes } from "./live";
+import { signedInSocket } from "./live";
 import { prefRoutes } from "./prefs";
 import { adminRoutes } from "./routes/admin";
 import { calendarRoutes } from "./routes/calendar";
@@ -98,7 +98,6 @@ export function createApp(deps: {
     api.route("/", todoRoutes(space.db, space.vault, config.timeZone ?? "UTC"));
     api.route("/", shareRoutes(space.db, space.vault));
     api.route("/", eventRoutes(space.vault));
-    api.route("/", liveRoutes(space.vault, (subject) => users?.nameOf(subject) ?? "You"));
     api.route("/", pushRoutes(space.db, vapid.publicKey));
     api.route("/", prefRoutes(space.db));
     api.notFound((c) => c.json({ error: "not found" }, 404));
@@ -142,6 +141,11 @@ export function createApp(deps: {
     api.use("/plugins/*", async (c, next) => (isOwner(c.get("subject")) ? next() : c.json({ error: "not found" }, 404)));
     api.route("/plugins", plugins.routes);
   }
+  // Live editing's socket needs the Bun server (the request's env), which the per-account API below doesn't get.
+  api.get("/live", (c) => {
+    const subject = c.get("subject");
+    return signedInSocket(c, spaceOf(subject).vault, subject, users?.nameOf(subject) ?? "You", config.publicUrls);
+  });
   api.all("*", (c) =>
     spaceApi(spaceOf(c.get("subject"))).fetch(c.req.raw, { tokenId: c.get("tokenId"), scope: c.get("scope"), subject: c.get("subject") }),
   );
@@ -149,14 +153,11 @@ export function createApp(deps: {
   // app's own origins. Bearer only: no credentials, so a page on one of these can't ride a session cookie.
   // Bun closes a request that sends nothing for 10s (its default idleTimeout), long before the stream's 25s keep-alive,
   // and anything that changes while the client reconnects is missed. The stream is meant to stay open: no idle limit.
-  // The same for live editing's streams (signed in, and share links').
   const noIdleLimit: MiddlewareHandler = async (c, next) => {
     (c.env as { timeout?: (req: Request, seconds: number) => void } | undefined)?.timeout?.(c.req.raw, 0);
     await next();
   };
   app.use("/api/events", noIdleLimit);
-  app.get("/api/live", noIdleLimit);
-  app.get("/api/public/share/:id/live", noIdleLimit);
   app.use("/api/events", cors({ origin: ["app://obsidian.md", "capacitor://localhost", "http://localhost", "https://localhost"], allowHeaders: ["authorization"] }));
   // Shared notes, readable without signing in. Before the signed-in API, which would answer 401.
   app.route("/api/public", publicShareRoutes(() => users?.all() ?? [owner]));

@@ -437,6 +437,10 @@ export const migrations: string[] = [
   `
   CREATE TABLE share_uploads (share_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (share_id, name));
   `,
+  // Live editing's Yjs document for each note that has been open, as of the file with the hash (see live.ts).
+  `
+  CREATE TABLE live_docs (path TEXT PRIMARY KEY, guid TEXT NOT NULL, state BLOB NOT NULL, hash TEXT NOT NULL, updated_at INTEGER NOT NULL);
+  `,
 ];
 
 export function openDb(path: string): Database {

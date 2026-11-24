@@ -17,6 +17,8 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     var queued: PendingEdit? = null
     var loaded = false
     private var followsConflictCopy = false
+    /** The page is editing live (web/src/live.js) and syncs every edit itself: nothing here saves it. */
+    var liveMode = false
     val key get() = path ?: draftKey
     val dirty get() = loaded && current != saved
     /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */

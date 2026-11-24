@@ -422,7 +422,7 @@ export class Vault {
   }
 
   constructor(
-    private db: Database,
+    readonly db: Database,
     dir: string,
     private timeZone = "UTC",
   ) {

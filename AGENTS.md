@@ -40,11 +40,13 @@ database loses nothing a rescan can't rebuild.
   in `notes.publish`) at `/api/public/pages/<handle>`; `web/public.html` + `public.js` render `/public/…`.
 - `db.ts` migrations (append only; `user_version`). `routes/notes.ts` notes/attachments/trash/versions/backlinks/export
   routes. `routes/share.ts` share links. `routes/events.ts` live change stream (SSE). `live.ts` live co-editing: one
-  `Room` per open note holds its text, takes CodeMirror collab changes from every client (signed in at `/api/live`,
-  share links at `/api/public/share/<id>/live`; an SSE stream down, POSTs up), rebases and broadcasts them, and writes
-  the file a second after typing stops with the usual hash check. Outside edits (scan, REST, another device) are
-  diffed against what the room last wrote and moved over its unsaved changes, never a conflict. Share clients see and
-  edit the body only; every change is kept in both forms. `todos.ts` todo parsing and
+  `Room` per open note holds a Yjs document; clients sync theirs with it over a WebSocket (signed in at `/api/live`,
+  share links at `/api/public/share/<id>/live`; Bun.serve's `websocket` handlers are `liveSocket`), and it writes the
+  file a second after typing stops with the usual hash check. The document's state is kept in `live_docs` with the hash
+  of the file it matches, so after a restart clients sync into the same document instead of duplicating text. Outside
+  edits (scan, REST, another device) are made as an edit on the document as of the room's last write and merged in,
+  never a conflict. Share clients get a body-only document bridged to the full one both ways; their changes are checked
+  and undone if refused. `todos.ts` todo parsing and
   routes. `auth.ts` tokens (scopes `full`/`mcp`, optional expiry), cookie + bearer, CSRF origin check. `oidc.ts`
   sign-in (`client=web|android|obsidian|extension`; the apps get a hand-back code redirected to their own scheme, or for the
   browser extension to `/api/auth/extension` on the server, swapped with a PKCE verifier at `/oidc/exchange`; the extension's token has
@@ -76,10 +78,11 @@ database loses nothing a rescan can't rebuild.
   editors via `opts.loadEmbed`: depth 2, never a note above itself; share links get the name only, public pages
   only published notes). Must keep `root: document` (the page lives in
   `<m3e-theme>`'s shadow root; without it the caret desyncs).
-- `live.js` the client side of `live.ts`: a CodeMirror extension (collab, other people's cursors) plus the stream and
-  POSTs; resumes after a dropped connection, and after a server restart sends what was typed back to be merged
-  (`rejoin`). `notes.js` hands saving to it while it's connected; the Android and extension editors still save over
-  REST, and their saves are merged into an open room.
+- `live.js` the client side of `live.ts`: a Yjs copy kept in step with the editor (its own small binding: remote
+  changes aren't undoable, so Ctrl+Z only undoes your own typing), other people's cursors as Yjs relative positions
+  drawn on layers, and the socket. Edits made while disconnected stay in the copy and sync on reconnect; on the first
+  sync, anything typed before it is diffed and put back on top. `notes.js` hands saving to it while it's connected; the
+  extension's editor still saves over REST, and its saves are merged into an open room.
 - `dialogs.js` native `<dialog>` helpers (text prompt, folder picker, version history, share, list picker).
 - `util.js` shared `esc`, `folderOf`, `inlineHtml`, `tableCells`. Always `esc()` before putting text in HTML.
 - `board.js` Excalidraw (Obsidian plugin file format). `backlinks.js` (linked and unlinked mentions), `templates.js`, `keep-import.js`
@@ -100,6 +103,11 @@ database loses nothing a rescan can't rebuild.
   in the same page (`sink.load({ board: true })` mounts `board.js`); there's no image tool on the phone yet.
   `shouldInterceptRequest` serves `https://sink.server/` (plugin files only, with the token) and
   `https://sink.attachment/` (cached images). Don't widen that proxy; pass data in through `window.sink.*` instead.
+- Live editing on the phone: the page runs `live.js`, but its socket is `LiveSocket.kt` (OkHttp, the app's token, so
+  it works with a LAN `http://` server and the token stays out of the page), bridged as `SinkBridge.liveOpen/liveSend`
+  and `sink.live.*`. While `Editing.liveMode`, nothing in `NoteScreen` saves over REST (an edit must never reach the
+  server both ways, or it lands twice). It's on only if the note loaded from the server with nothing in the offline
+  queue; leaving or pausing offline with unsynced typing ends it (`exitLive`) and the text goes to the queue as before.
 
 ## Commands
 

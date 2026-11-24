@@ -8,8 +8,16 @@
 //   SinkBridge.pickTemplate()               /template: user wants a template; reply with sink.template(text or null)
 //   SinkBridge.haptic(kind)                 tick, confirm, reject or toggle (haptics.js; the WebView can't vibrate)
 //   SinkBridge.embed(target)                ![[Note]] needs that note; reply with sink.embed(target, note or null)
+//   SinkBridge.live(state)                  live editing's state, JSON: { status, kind, bound, pending, unavailable,
+//                                           hash, saved }: while `bound`, edits sync live and the app doesn't save them;
+//                                           `saved` is the text the server has written (when nothing is pending)
+//   SinkBridge.liveOpen(path)  liveSend(text)  liveSendBinary(base64)  liveClose()
+//                                           the live socket, which the app opens to the server with its token; it
+//                                           answers with sink.live.opened(), .text(t), .binary(base64), .closed(status)
+//   SinkBridge.liveFlushed(state)           sink.liveFlush()'s answer, the same JSON as live(state)
 // The app drives it with:
-//   sink.load({ text, path, dark, colors, links, line, plugins, board })   colors: { '--md-sys-color-primary': '#...', ... }
+//   sink.load({ text, path, dark, colors, links, line, plugins, board, live })   colors: { '--md-sys-color-primary': '#...', ... }
+//     live: { saved, hash }: edit live (live.js); `saved` and `hash` are the file as the app last had it.
 //     board: the text is an Excalidraw board (.excalidraw.md); it opens in Excalidraw instead of the text editor.
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
@@ -20,11 +28,15 @@
 //   sink.backlinks(items)   GET /api/notes/backlinks' items, shown under the note; tapping one calls openLink(path)
 //   sink.mentions(items)   GET /api/notes/mentions' items: unlinked mentions, a collapsed section after the backlinks
 //   sink.inset(px)      how much of the page's bottom the app's floating toolbar covers; the cursor stays above it
+//   sink.keepVersion()  live: the next write keeps what it replaces as a version (restoring an old one)
+//   sink.liveFlush()    leaving or pausing: send what's typed and have the server write it; answers with liveFlushed
+//   sink.retireLive()   stop live editing here (the app saves the text itself from now on)
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
 
 import { EditorView } from '@codemirror/view';
 import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { createEditor } from './editor.js';
+import { liveSession } from './live.js';
 import { loadPlugins } from './plugin-api.js';
 import { bundledPlugins } from './plugins/index.js';
 import { decodeLink } from './util.js';
@@ -56,6 +68,8 @@ const loadEmbed = (target) =>
   });
 
 let editor = null;
+let session = null;
+let liveSocket = null;
 const loadingText = deferredEditorText();
 let links = [];
 let timer = null;
@@ -64,7 +78,7 @@ let inset = 0;
 const attachment = (ref) => `https://sink.attachment/${ref.split('/').map(encodeURIComponent).join('/')}`;
 
 window.sink = {
-  async load({ text = '', path = null, dark = false, colors = {}, links: targets = [], line = null, plugins = [], board = false } = {}) {
+  async load({ text = '', path = null, dark = false, colors = {}, links: targets = [], line = null, plugins = [], board = false, live = null } = {}) {
     if (board) return loadBoard(text, dark, colors);
     await loadPlugins(
       {
@@ -79,12 +93,20 @@ window.sink = {
     for (const [k, v] of Object.entries(colors)) document.documentElement.style.setProperty(k, v);
     links = targets;
     editor?.destroy();
-    editor = createEditor({
+    session?.destroy();
+    liveGone = false;
+    session = live && path && bridge.liveOpen ? startLive(path, live) : null;
+    let sourceText = loadingText.take(text);
+    let editorText;
+    // Android compares the bridge text to the saved file. Don't report CodeMirror's LF normalization as an edit.
+    const preserveUnchangedText = (value) => value === editorText ? sourceText : value;
+    const markdown = createEditor({
       parent: document.getElementById('editor'),
-      doc: loadingText.take(text),
+      doc: sourceText,
+      extensions: session?.extension,
       onChange: (t) => {
         clearTimeout(timer);
-        timer = setTimeout(() => bridge.changed(t), 250);
+        timer = setTimeout(() => bridge.changed(preserveUnchangedText(t)), 250);
       },
       onOpenLink: (target) => bridge.openLink(target),
       resolveEmbed: attachment,
@@ -97,10 +119,32 @@ window.sink = {
       // Only when the app can pick one (an older app has no pickTemplate, so the command stays hidden).
       pickTemplate: bridge.pickTemplate ? pickTemplate : undefined,
     });
+    editorText = markdown.getText();
+    editor = {
+      ...markdown,
+      getText: () => preserveUnchangedText(markdown.getText()),
+      setText(text) {
+        markdown.setText(text);
+        sourceText = text;
+        editorText = markdown.getText();
+      },
+    };
     if (line != null) editor.goToLine(line);
     else if (!text.trim()) editor.focus(true);
   },
   setText(text) {
+    // Live, only what differs: replacing the whole text would wipe out what others type meanwhile.
+    if (session?.bound) {
+      const view = editor.view;
+      const old = view.state.doc.toString();
+      let start = 0;
+      while (start < old.length && start < text.length && old[start] === text[start]) start++;
+      let endOld = old.length;
+      let endNew = text.length;
+      while (endOld > start && endNew > start && old[endOld - 1] === text[endNew - 1]) endOld--, endNew--;
+      if (start < endOld || start < endNew) view.dispatch({ changes: { from: start, to: endOld, insert: text.slice(start, endNew) } });
+      return;
+    }
     loadingText.replace(editor, text);
   },
   insert(text) {
@@ -142,6 +186,40 @@ window.sink = {
     if (!view?.hasFocus) return;
     requestAnimationFrame(() => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest' }) }));
   },
+  liveFlush() {
+    if (!session) return bridge.liveFlushed?.(JSON.stringify(liveState()));
+    clearTimeout(timer);
+    session.flush(2000).then(() => bridge.liveFlushed(JSON.stringify(liveState())));
+  },
+  keepVersion() {
+    session?.keepVersion();
+  },
+  retireLive() {
+    session?.destroy();
+    session = null;
+    report();
+  },
+  // The app's live socket, coming back in.
+  live: {
+    opened() {
+      if (liveSocket) liveSocket.readyState = 1;
+    },
+    text(data) {
+      liveSocket?.onmessage?.({ data });
+    },
+    binary(base64) {
+      liveSocket?.onmessage?.({ data: Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)).buffer });
+    },
+    closed(status) {
+      const socket = liveSocket;
+      if (!socket) return;
+      liveSocket = null;
+      socket.readyState = 3;
+      // 0: the connection failed (retried); the page can't ask the server itself (its fetches stay in the app).
+      socket.status = status ?? 0;
+      socket.onclose?.();
+    },
+  },
   embed(target, note) {
     for (const resolve of embeds.get(target) ?? []) resolve(note);
     embeds.delete(target);
@@ -155,6 +233,66 @@ window.sink = {
     drawLinks();
   },
 };
+
+/** Live editing for the note (live.js), over a socket the app keeps to the server. */
+function startLive(path, { saved, hash }) {
+  return liveSession({
+    base: { text: saved, hash },
+    url: () => `/api/live?path=${encodeURIComponent(path)}`,
+    // Renamed or moved (here or elsewhere): reconnect to it where it is now.
+    onMoved: (to) => (path = to),
+    socket(url) {
+      liveSocket?.close();
+      const socket = {
+        readyState: 0,
+        send(data) {
+          if (typeof data === 'string') return bridge.liveSend(data);
+          let binary = '';
+          for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i, i + 0x8000));
+          bridge.liveSendBinary(btoa(binary));
+        },
+        close() {
+          if (liveSocket !== socket) return;
+          liveSocket = null;
+          socket.readyState = 3;
+          bridge.liveClose();
+        },
+      };
+      liveSocket = socket;
+      const { pathname, search } = new URL(url);
+      bridge.liveOpen(pathname + search);
+      return socket;
+    },
+    onStatus: report,
+    onSaved: () => report(),
+    onUnavailable: () => report(),
+    onGone: () => {
+      liveGone = true;
+      report();
+    },
+  });
+}
+
+let lastStatus = { text: '', kind: '' };
+let liveGone = false;
+function liveState() {
+  const pending = !session || session.pending();
+  return {
+    status: lastStatus.text,
+    kind: lastStatus.kind,
+    bound: !!session?.bound,
+    connected: !!session?.connected,
+    pending,
+    gone: liveGone,
+    unavailable: !session || session.unavailable,
+    hash: session?.hash ?? null,
+    saved: !pending && session?.bound && editor ? editor.getText() : null,
+  };
+}
+function report(text = lastStatus.text, kind = '') {
+  lastStatus = { text, kind };
+  bridge.live?.(JSON.stringify(liveState()));
+}
 
 let linked = [];
 let unlinked = [];
@@ -194,5 +332,14 @@ document.getElementById('links').addEventListener('click', (e) => {
   e.preventDefault();
   bridge.openLink(a.dataset.path);
 });
+
+// Android WebView can resolve vh to zero even when the window has a height.
+function sizeImages() {
+  const height = window.innerHeight;
+  if (height > 0) document.documentElement.style.setProperty('--editor-image-max-height', `${height * 0.7}px`);
+}
+
+window.addEventListener('resize', sizeImages);
+sizeImages();
 
 bridge.ready();

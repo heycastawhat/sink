@@ -1237,11 +1237,7 @@ function startLive() {
   const session = liveSession({
     start: !!screen.path,
     base: { text: screen.saved, hash: screen.hash },
-    streamUrl: (params) => {
-      params.set('path', screen.path);
-      return `/api/live?${params}`;
-    },
-    actionUrl: (name) => `/api/live/${name}`,
+    url: () => `/api/live?path=${encodeURIComponent(screen.path)}`,
     onStatus: (text, kind) => {
       if (screen.live === session) setStatus(text, kind);
     },
@@ -1255,17 +1251,6 @@ function startLive() {
         screen.saved = screen.editor.getText();
         clearLiveDraft();
       }
-    },
-    // What was typed while the server was away couldn't be merged (the note changed meanwhile): kept as a copy.
-    onConflict: (text) => {
-      if (screen.live !== session || !screen.path) return;
-      api
-        .createNote({ folder: screen.folder, title: conflictTitle(screen.path), content: text })
-        .then((copy) => {
-          toast(`Changed somewhere else while you were offline. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
-          loadNotes();
-        })
-        .catch((err) => toast(`Couldn't keep your offline changes: ${err.message}`));
     },
     onGone: () => {
       if (screen.live !== session) return;

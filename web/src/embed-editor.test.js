@@ -1,14 +1,20 @@
 import { beforeEach, expect, mock, test } from 'bun:test';
+import { EditorState } from '@codemirror/state';
 
 let plugins;
 let sequence = 0;
 let sink;
+let rootStyles;
 let type;
 let change;
 const create = (options) => {
-  let text = options.doc ?? options.text;
-  type = (value) => { text = value; options.onChange(value); };
-  return { getText: () => text, setText: (value) => (text = value), destroy() {} };
+  const asEditorText = (text) => options.doc == null ? text : EditorState.create({ doc: text }).doc.toString();
+  let text = asEditorText(options.doc ?? options.text);
+  type = (value) => {
+    text = asEditorText(value);
+    options.onChange?.(text);
+  };
+  return { getText: () => text, setText: type, destroy() {} };
 };
 mock.module('./editor.js', () => ({ createEditor: create }));
 mock.module('./board.js', () => ({ createBoard: create }));
@@ -19,12 +25,29 @@ mock.module('./backlinks.js', () => ({ backlinksHtml() {}, mentionsHtml() {}, on
 
 beforeEach(async () => {
   plugins = async () => {};
-  const element = { addEventListener() {}, style: { setProperty() {} }, classList: { add() {} } };
+  rootStyles = new Map();
+  const element = { addEventListener() {}, style: { setProperty: (key, value) => rootStyles.set(key, value) }, classList: { add() {} } };
   globalThis.document = { getElementById: () => element, documentElement: { dataset: {}, style: element.style }, body: element };
-  globalThis.window = { SinkBridge: { ready() {}, changed: (text) => change?.(text) } };
+  globalThis.window = Object.assign(new EventTarget(), {
+    innerHeight: 800,
+    SinkBridge: { ready() {}, changed: (text) => change?.(text) },
+  });
   change = null;
   await import(`./embed-editor.js?test=${++sequence}`);
   sink = window.sink;
+});
+
+test('image height follows the measured viewport, ignoring transient zero-height resizes', () => {
+  const cap = '--editor-image-max-height';
+  expect(rootStyles.get(cap)).toBe('560px');
+
+  window.innerHeight = 0;
+  window.dispatchEvent(new Event('resize'));
+  expect(rootStyles.get(cap)).toBe('560px');
+
+  window.innerHeight = 400;
+  window.dispatchEvent(new Event('resize'));
+  expect(rootStyles.get(cap)).toBe('280px');
 });
 
 const original = '---\ncolor: green\n---\nRemember to walk today.\n';
@@ -83,6 +106,24 @@ test('a failed initialization does not consume the pending replacement', async (
   plugins = async () => {};
   await sink.load({ text: original });
   expect(sink.textOrNull()).toBe(blue);
+});
+
+test('back without edits reads the original CRLF bytes, but a real edit is returned', async () => {
+  const crlf = original.replaceAll('\n', '\r\n');
+  await sink.load({ text: crlf });
+  expect(sink.textOrNull({ flush: false })).toBe(crlf);
+  expect(sink.textOrNull()).toBe(crlf);
+  type(original + 'Another line.\n');
+  expect(sink.textOrNull()).toBe(original + 'Another line.\n');
+});
+
+test('replacing an open note with CRLF text does not report a line-ending-only edit', async () => {
+  await sink.load({ text: original });
+  const crlf = pinned.replaceAll('\n', '\r\n');
+  const sent = new Promise((resolve) => { change = resolve; });
+  sink.setText(crlf);
+  expect(await sent).toBe(crlf);
+  expect(sink.textOrNull()).toBe(crlf);
 });
 
 test('reading without flushing leaves the pending change notification scheduled', async () => {

@@ -9,8 +9,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@codemirror/collab": "^6.1.1",
-    "@codemirror/state": "^6.7.6",
     "@modelcontextprotocol/sdk": "1.31.0",
     "@mozilla/readability": "^0.6.0",
     "@simplewebauthn/server": "^14.0.3",
@@ -19,6 +17,7 @@
     "imapflow": "^2.9.1",
     "linkedom": "^0.18.15",
     "mailparser": "^3.12.4",
+    "yjs": "^13.6.33",
     "zod": "^4.6.7"
   },
   "devDependencies": {

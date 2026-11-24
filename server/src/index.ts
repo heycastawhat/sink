@@ -11,7 +11,7 @@ import { builtinPlugins } from "./builtin";
 import { Users } from "./users";
 import { sendReminders, vapidKeys, webPush } from "./push";
 import { extractTools } from "./extract";
-import { liveFor } from "./live";
+import { liveFor, liveSocket } from "./live";
 
 const db = openDb(config.dbPath);
 const vault = new Vault(db, config.notesDir, config.timeZone);
@@ -73,6 +73,7 @@ const remindTimer = setInterval(remind, 30 * 1000);
 const server = Bun.serve({
   port: config.port,
   fetch: app.fetch,
+  websocket: liveSocket,
   maxRequestBodySize: config.maxUploadBytes + 1024 * 1024,
 });
 
