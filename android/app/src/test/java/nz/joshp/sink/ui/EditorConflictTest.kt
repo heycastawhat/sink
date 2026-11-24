@@ -59,6 +59,23 @@ class EditorConflictTest {
         assertEquals(original.path, editor.pendingEdit()?.path)
     }
 
+    @Test fun `only the editor that follows a conflict copy keeps the badge across later saves`() {
+        val originalEditor = editor()
+        val outcome = QueuedSave.Conflict(originalEditor.queued!!, original, copy)
+        originalEditor.adoptConflict(outcome.result())
+        assertEquals("Saved", originalEditor.toolbarStatus("Saved", isError = false))
+
+        val copyEditor = editor()
+        copyEditor.current = "Android v2"
+        copyEditor.adoptConflict(outcome.result())
+        assertEquals(copy.path, copyEditor.path)
+        for (status in listOf("Editing…", "Saving…", "Saved")) {
+            assertEquals("Conflict", copyEditor.toolbarStatus(status, isError = false))
+        }
+        assertEquals("Conflict · Offline, will save", copyEditor.toolbarStatus("Offline, will save", isError = true))
+        assertEquals("Saved", Editing(copy.path, "draft", "").toolbarStatus("Saved", isError = false))
+    }
+
     @Test fun `a foreground edit behind a conflicted worker gets the existing conflict`() {
         val editor = editor()
         val outcome = QueuedSave.Conflict(editor.queued!!, original, copy)

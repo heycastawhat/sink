@@ -175,7 +175,6 @@ import java.io.File
 import nz.joshp.sink.capture.SharedFiles
 
 private const val SAVE_DELAY_MS = 700L
-private const val CONFLICT_STATUS = "Conflict"
 // A new note's file is named on its first save, so give the first line time to be written.
 private const val DRAFT_DELAY_MS = 3000L
 private const val POLL_MS = 30_000L
@@ -954,12 +953,14 @@ fun NoteScreen(
                     val sp = shownPath
                     val name = sp?.substringAfterLast('/')?.removeSuffix(".md")?.removeSuffix(".excalidraw") ?: "New note"
                     val where = (sp?.substringBeforeLast('/', "") ?: ed.folder).substringAfterLast('/').ifEmpty { "Notes" }
+                    val saveError = status.startsWith("Offline") || status.startsWith("Can't")
+                    val toolbarStatus = ed.toolbarStatus(status, saveError)
                     Column(Modifier.weight(1f).padding(start = 4.dp)) {
                         Text(name, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            listOf(where, status).filter { it.isNotEmpty() }.joinToString(" · "),
+                            listOf(where, toolbarStatus).filter { it.isNotEmpty() }.joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (status == CONFLICT_STATUS || status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (saveError || toolbarStatus == CONFLICT_STATUS) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )

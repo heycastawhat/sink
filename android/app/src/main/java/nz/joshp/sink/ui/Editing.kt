@@ -5,6 +5,8 @@ import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.QueuedSave
 import nz.joshp.sink.data.SaveResult
 
+internal const val CONFLICT_STATUS = "Conflict"
+
 /** What the note screen tracks between saves. Not Compose state: the WebView owns the text. */
 internal class Editing(var path: String?, val draftKey: String, var folder: String) {
     var hash: String? = null
@@ -14,6 +16,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     var current: String = ""
     var queued: PendingEdit? = null
     var loaded = false
+    private var followsConflictCopy = false
     val key get() = path ?: draftKey
     val dirty get() = loaded && current != saved
     /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */
@@ -28,12 +31,19 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     fun matchesConflict(outcome: QueuedSave.Conflict): Boolean =
         loaded && outcome.matches(queued, key, hash)
 
+    fun toolbarStatus(status: String, isError: Boolean): String = when {
+        !followsConflictCopy -> status
+        isError && status != CONFLICT_STATUS -> "$CONFLICT_STATUS · $status"
+        else -> CONFLICT_STATUS
+    }
+
     /** Follow the copy if it has newer local edits; otherwise continue on the original. */
     fun adoptConflict(result: SaveResult.Conflict) {
         queued = null
         val theirs = result.theirs
         val copy = result.copy
         if (copy != null && (theirs == null || current != result.savedText)) {
+            followsConflictCopy = true
             path = copy.path
             hash = copy.hash
             saved = result.savedText
