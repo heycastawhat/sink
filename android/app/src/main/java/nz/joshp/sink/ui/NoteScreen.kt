@@ -163,6 +163,7 @@ import nz.joshp.sink.data.NoteSaver
 import nz.joshp.sink.data.NoteStore
 import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.SaveResult
+import nz.joshp.sink.data.QueuedSave
 import nz.joshp.sink.data.attach
 import nz.joshp.sink.data.cachedAttachment
 import nz.joshp.sink.data.json
@@ -225,23 +226,6 @@ private fun ColorScheme.css() = mapOf(
     "--md-sys-color-shadow" to scrim,
     "--md-sys-color-outline-variant" to outlineVariant,
 ).mapValues { (_, c) -> "#%06X".format(c.toArgb() and 0xFFFFFF) }
-
-/** What the note screen tracks between saves. Not Compose state: the WebView owns the text. */
-private class Editing(var path: String?, val draftKey: String, var folder: String) {
-    var hash: String? = null
-    /** Text as last confirmed on the server (or loaded). */
-    var saved: String = ""
-    /** Latest text from the editor. */
-    var current: String = ""
-    /** Text handed to the offline queue, to recognise it once the sync worker has saved it. */
-    var queued: String? = null
-    var loaded = false
-    val key get() = path ?: draftKey
-    val dirty get() = loaded && current != saved
-    /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */
-    var flushing = 0
-    var closed = false
-}
 
 /**
  * One note, fullscreen. The text editor is the web app's CodeMirror page in a WebView (bundled in the APK, so it
@@ -647,17 +631,27 @@ fun NoteScreen(
         showLinks(p)
     }
 
+    /**
+     * The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind).
+     * Nothing while the page is still loading the note: there's no text of its own yet.
+     */
+    suspend fun readEditor() {
+        val w = web ?: return
+        val raw = suspendCancellableCoroutine { k -> w.evaluateJavascript("window.sink.textOrNull()") { k.resume(it) } }
+        runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
+    }
+
     // Edits made elsewhere show up while the note sits open and untouched: at once from the live stream, and by a
     // slower poll in case that's down.
     suspend fun refreshOpen() {
         val p = ed.path ?: return
-        if (ed.dirty || saveJob?.isActive == true || store.pending(p) != null) return
+        if (!ed.loaded || ed.dirty || saveJob?.isActive == true || store.pending(p) != null) return
+        val hash = ed.hash
         val n = runCatching { api()?.note(p) }.getOrNull() ?: return
-        if (n.hash != ed.hash && !ed.dirty) {
+        if (n.hash == hash) return
+        readEditor()
+        if (saveJob?.isActive != true && store.pending(p) == null && ed.acceptRemote(n, hash)) {
             store.saveNote(n)
-            ed.hash = n.hash
-            ed.saved = n.content
-            ed.current = n.content
             applyMeta(n)
             setEditorText(n.content)
             status = "Updated ${relativeTime(n.mtime)}"
@@ -672,6 +666,18 @@ fun NoteScreen(
     LaunchedEffect(pageReady) {
         if (!pageReady) return@LaunchedEffect
         vm.changes.collect { c -> if (c.path == ed.path || c.from == ed.path) refreshOpen() }
+    }
+    LaunchedEffect(ed) {
+        NoteSaver.completed.collect { outcome ->
+            if (outcome !is QueuedSave.Saved || outcome.path != ed.path) return@collect
+            val acknowledged = saveLock.withLock {
+                readEditor()
+                val applied = ed.acknowledge(outcome)
+                if (applied && !ed.dirty && status == "Offline, will save") status = "Saved"
+                applied
+            }
+            if (acknowledged) refreshOpen()
+        }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -836,16 +842,6 @@ fun NoteScreen(
                     .onFailure { snackbar.showSnackbar(it.message ?: "Couldn't delete") }
             }
         }
-    }
-
-    /**
-     * The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind).
-     * Nothing while the page is still loading the note: there's no text of its own yet.
-     */
-    suspend fun readEditor() {
-        val w = web ?: return
-        val raw = suspendCancellableCoroutine { k -> w.evaluateJavascript("window.sink.textOrNull()") { k.resume(it) } }
-        runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
     }
 
     suspend fun setMeta(pin: Boolean? = null, newColor: String? = null, clearColor: Boolean = false) {
