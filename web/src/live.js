@@ -10,6 +10,7 @@
 import { collab, getSyncedVersion, receiveUpdates, sendableUpdates } from '@codemirror/collab';
 import { ChangeSet, Compartment, EditorSelection, EditorState, StateEffect, StateField } from '@codemirror/state';
 import { EditorView, layer, RectangleMarker, ViewPlugin } from '@codemirror/view';
+import { normalizeLineEndings } from './util.js';
 
 const PUSH_DELAY = 40;
 const PRESENCE_DELAY = 150;
@@ -156,6 +157,7 @@ export function renderPeople(el, people) {
  * - start: false to wait for `start(base)` (a new note has no file to edit together until its first save)
  */
 export function liveSession(opts) {
+  opts.base = { ...opts.base, text: normalizeLineEndings(opts.base.text) };
   const clientID = randomId();
   const editable = new Compartment();
   let view = null;
@@ -492,7 +494,7 @@ export function liveSession(opts) {
     start(base) {
       if (started) return;
       started = true;
-      opts.base = base;
+      opts.base = { ...base, text: normalizeLineEndings(base.text) };
       hash = base.hash;
       if (view) void connect();
     },

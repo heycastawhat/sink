@@ -2,7 +2,7 @@
 // Notes are files in the vault on the NAS; saves carry the hash we last saw, so edits made elsewhere
 // (Obsidian, the phone) are never silently overwritten.
 
-import { decodeLink, esc, folderOf, inlineHtml, tableCells } from './util.js';
+import { decodeLink, esc, folderOf, inlineHtml, normalizeLineEndings, tableCells } from './util.js';
 import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
@@ -1231,7 +1231,7 @@ export async function newBoard() {
 function startLive() {
   const stash = screen.path && readUnsaved(screen.path);
   // A failed conflict copy belongs to another version, not to the editor joining this session.
-  const retainedDraft = stash && stash.base !== screen.hash && stash.text !== screen.saved;
+  const retainedDraft = stash && stash.base !== screen.hash && normalizeLineEndings(stash.text) !== screen.saved;
   const session = liveSession({
     start: !!screen.path,
     base: { text: screen.saved, hash: screen.hash },
@@ -1460,14 +1460,15 @@ export async function openNote(path, { line } = {}) {
   try {
     const note = await api.note(path);
     if (seq !== openSeq) return;
+    note.content = normalizeLineEndings(note.content);
     Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color, fresh: false });
     opened.touch(note.path);
     let text = note.content;
     // Unsaved edits from last time, made on this exact version: bring them back.
     const stash = readUnsaved(note.path);
-    if (stash && stash.text !== note.content) {
+    if (stash && normalizeLineEndings(stash.text) !== note.content) {
       if (stash.base === note.hash) {
-        text = stash.text;
+        text = normalizeLineEndings(stash.text);
         toast('Restored unsaved changes');
       } else {
         // The note changed elsewhere since: keep them as a sibling note, like a conflict.
@@ -1841,6 +1842,7 @@ function conflictTitle(path) {
  * so nothing is lost and nothing is merged wrongly.
  */
 async function resolveConflict(mine, current) {
+  if (current) current.content = normalizeLineEndings(current.content);
   if (current && current.content === mine) {
     Object.assign(screen, { hash: current.hash, saved: mine });
     return afterSave();
@@ -1879,6 +1881,7 @@ async function refreshOpenNote() {
   const { path, hash } = screen;
   try {
     const note = await api.note(path);
+    note.content = normalizeLineEndings(note.content);
     // Only if nothing happened meanwhile: another note opened, a save landed, or typing started.
     if (note.hash !== hash && screen.path === path && screen.hash === hash && !screen.saving && !dirty()) {
       Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color });
@@ -2038,6 +2041,7 @@ async function setMeta(changes) {
   const run = (async () => {
     const meta = await api.noteMeta(screen.path, changes);
     const note = await api.note(meta.path);
+    note.content = normalizeLineEndings(note.content);
     // Live, the new frontmatter arrives like anyone's change.
     if (live()) {
       Object.assign(screen, { pinned: note.pinned, private: note.private, color: note.color });

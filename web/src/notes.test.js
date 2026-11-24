@@ -8,7 +8,7 @@ let liveView;
 
 let editor;
 const create = (options) => {
-  let text = options.doc;
+  let text = EditorState.create({ doc: options.doc }).doc.toString();
   if (useLive) {
     liveView = {
       state: EditorState.create({ doc: text, extensions: options.extensions }),
@@ -25,7 +25,7 @@ const create = (options) => {
     getText: () => useLive ? liveView.state.doc.toString() : text,
     setText(value) {
       if (useLive) return liveView.dispatch({ changes: { from: 0, to: liveView.state.doc.length, insert: value } });
-      text = value;
+      text = EditorState.create({ doc: value }).doc.toString();
       options.onChange?.(value);
     },
     focus() {},
@@ -153,7 +153,7 @@ function liveStream() {
 function hello() {
   stream.enqueue(new TextEncoder().encode('event: hello\ndata: ' + JSON.stringify({
     type: 'init', conn: 'connection', epoch: 'room', version: 0,
-    hash: current.hash, dirty: false, text: current.content,
+    hash: current.hash, dirty: false, text: current.content.replace(/\r\n?/g, '\n'),
   }) + '\n\n'));
 }
 
@@ -300,6 +300,57 @@ test('a clean live hello and later saved event retain a failed conflict copy for
   await notes.openNote(path);
   expect(copies).toHaveLength(1);
   expect(copies[0].content).toBe(JSON.parse(stash).text);
+});
+
+test('an untouched CRLF note closed before hello leaves no draft or later conflict copy', async () => {
+  useLive = true;
+  liveStream();
+  current = { ...current, content: original.replace(/\n/g, '\r\n') };
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(original);
+  await notes.closeNote();
+  expect(storage.has('sink:unsaved:' + path)).toBe(false);
+  current = { ...current, content: original + '\nAndroid', hash: 'android' };
+  await notes.openNote(path);
+  expect(copies).toHaveLength(0);
+});
+
+test('an untouched CRLF note does not rejoin over a remote change before hello', async () => {
+  useLive = true;
+  liveStream();
+  current = { ...current, content: original.replace(/\n/g, '\r\n') };
+  await notes.openNote(path);
+  current = { ...current, content: original + '\nAndroid', hash: 'android' };
+  rejoinStatus = 409;
+  hello();
+  await tick();
+  expect(rejoins).toEqual([]);
+  expect(copies).toHaveLength(0);
+  expect(notes.openNoteInfo().text).toBe(current.content);
+});
+
+test('fallback saving also treats an untouched CRLF note as clean', async () => {
+  current = { ...current, content: original.replace(/\n/g, '\r\n') };
+  const writes = [];
+  const { api } = await import('./api.js');
+  api.saveNote = async (_path, text) => {
+    writes.push(text);
+    return { hash: 'written' };
+  };
+  await notes.openNote(path);
+  await notes.closeNote();
+  expect(writes).toEqual([]);
+  expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
+test('a saved LF stash equal to a CRLF server note is not a conflict', async () => {
+  useLive = true;
+  liveStream();
+  current = { ...current, content: original.replace(/\n/g, '\r\n'), hash: 'crlf' };
+  storage.set('sink:unsaved:' + path, JSON.stringify({ base: 'original', text: original }));
+  await notes.openNote(path);
+  expect(copies).toHaveLength(0);
+  expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
 test('pin then leave and reopen after an Android edit does not resurrect a saved body', async () => {
