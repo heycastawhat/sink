@@ -537,8 +537,8 @@ fun NoteScreen(
         if (s.status.isNotEmpty()) status = s.status
         // Written by the server: the pair a fallback save (see flush) is checked against.
         if (s.saved != null && s.hash != null) {
-            if (s.hash != ed.hash || s.saved != ed.saved) {
-                ed.path?.let { store.saveLiveRevision(it, s.hash, s.saved) }
+            if (s.path != null && s.path == ed.path && (s.hash != ed.hash || s.saved != ed.saved)) {
+                store.saveLiveRevision(s.path, s.hash, s.saved)
             }
             ed.hash = s.hash
             ed.saved = s.saved
