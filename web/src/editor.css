@@ -748,3 +748,74 @@
   background: color-mix(in srgb, var(--md-sys-color-primary) 22%, transparent);
   color: inherit;
 }
+
+/* Live co-editing (live.js): other people's cursors, with their name on a tag above, and who's in the note. */
+.cm-remote-carets,
+.cm-remote-selections {
+  pointer-events: none;
+}
+
+.cm-remote-caret {
+  position: absolute;
+  margin-left: -1px;
+  border-left: 2px solid;
+}
+
+.cm-remote-selection {
+  position: absolute;
+}
+
+/* The name, for a moment after the cursor moves (each move draws it afresh, which restarts this). */
+.cm-remote-name {
+  position: absolute;
+  bottom: 100%;
+  left: -2px;
+  padding: 1px 5px;
+  border-radius: 4px 4px 4px 0;
+  color: #fff;
+  font: 500 11px/1.4 'Roboto Flex Variable', system-ui, sans-serif;
+  white-space: nowrap;
+  user-select: none;
+  animation: cm-remote-name 2.5s ease-in forwards;
+}
+
+@keyframes cm-remote-name {
+  0%,
+  70% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.live-people {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.live-people[hidden] {
+  display: none;
+}
+
+.live-person {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: -6px;
+  border: 2px solid var(--md-sys-color-surface-container-lowest, #fff);
+  border-radius: 50%;
+  color: #fff;
+  font: 600 12px/1 'Roboto Flex Variable', system-ui, sans-serif;
+}
+
+.live-person:first-child {
+  margin-left: 0;
+}
+
+.live-person.more {
+  background: var(--md-sys-color-secondary-container, #e8def8);
+  color: var(--md-sys-color-on-secondary-container, #1d192b);
+}

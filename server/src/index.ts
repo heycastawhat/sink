@@ -11,6 +11,7 @@ import { builtinPlugins } from "./builtin";
 import { Users } from "./users";
 import { sendReminders, vapidKeys, webPush } from "./push";
 import { extractTools } from "./extract";
+import { liveFor } from "./live";
 
 const db = openDb(config.dbPath);
 const vault = new Vault(db, config.notesDir, config.timeZone);
@@ -81,7 +82,9 @@ console.log(
 );
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
+  process.on(signal, async () => {
+    // Notes being edited live are written a moment after typing stops: write them now (a few seconds at most).
+    await Promise.race([Promise.all(users.all().map((s) => liveFor(s.vault).flush())).catch(() => {}), Bun.sleep(3000)]);
     vault.stop();
     users.stop();
     plugins.stop();
