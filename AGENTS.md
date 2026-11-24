@@ -27,7 +27,8 @@ database loses nothing a rescan can't rebuild.
 
 - `index.ts` startup and config checks (fail closed: no sign-in allowlist, no public URL, email without
   `SINK_IMAP_AUTHSERV_ID` all refuse to start). `config.ts` env vars.
-- `app.ts` wires everything: security headers (CORP same-origin except the logo files), `/api` (auth required),
+- `app.ts` wires everything: security headers (CORP same-origin except the logo files), `/api` (auth required;
+  assistant and extension tokens only reach the routes in `LIMITED_ROUTES`, so add a new route there if they need it),
   `/api/public` (share links), `/mcp`, OAuth, static web app with SPA fallback and cache headers (pages `no-cache`,
   hashed `/assets` immutable).
 - `notes.ts` **the vault**: path cleaning and realpath containment (`cleanPath`, `Vault.abs`), scan/index, write with
