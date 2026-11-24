@@ -33,6 +33,11 @@ const SAVE_DELAY_MS = 1000;
 /** How long a room with nobody in it stays open, so a quick reload picks up where it was. */
 const IDLE_CLOSE_MS = 30_000;
 const MAX_PEERS = 50;
+/**
+ * Clients say something at least every 25s (a presence heartbeat). One silent for longer has gone: behind a proxy
+ * (Cloudflare) a closed tab's stream can stay open at our end indefinitely, leaving its cursor behind.
+ */
+const PEER_TIMEOUT_MS = 90_000;
 /** Cursor colours, in the order people join. Readable on light and dark backgrounds. */
 const COLORS = ["#e8710a", "#1a73e8", "#d01884", "#188038", "#9334e6", "#c5221f", "#007b83", "#b06000"];
 
@@ -50,6 +55,8 @@ type Peer = {
   view: LiveView;
   editor: boolean;
   cursor: Cursor | null;
+  /** When the client last sent anything. */
+  seen: number;
   /** Checks a share client's change: an error message, or null if it may go in. */
   allow?: (before: string, after: string) => string | null;
   shareId?: string;
@@ -157,7 +164,7 @@ export class Room {
     return view === "full" ? this.str : this.str.slice(frontmatterLength(this.str));
   }
 
-  join(peer: Omit<Peer, "color" | "cursor" | "conn">): Peer {
+  join(peer: Omit<Peer, "color" | "cursor" | "conn" | "seen">): Peer {
     if (this.peers.size >= MAX_PEERS) throw new LiveError(503, "too many people in this note");
     // The same client reconnecting before its old stream noticed it was gone. Someone else's id is refused, so
     // nobody can push someone else off.
@@ -169,7 +176,8 @@ export class Room {
     }
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
-    const full: Peer = { ...peer, conn: random(), color: COLORS[this.colorIndex++ % COLORS.length]!, cursor: null };
+    const full: Peer = { ...peer, conn: random(), color: COLORS[this.colorIndex++ % COLORS.length]!, cursor: null, seen: Date.now() };
+    this.reapTimer ??= setInterval(() => this.reap(), PEER_TIMEOUT_MS / 3);
     this.peers.set(full.conn, full);
     this.hub.conns.set(full.conn, this);
     return full;
@@ -191,6 +199,22 @@ export class Room {
     if (this.peers.size) return;
     void this.save();
     this.idleTimer = setTimeout(() => void this.closeIfIdle(), IDLE_CLOSE_MS);
+  }
+
+  private reapTimer: ReturnType<typeof setInterval> | null = null;
+  /** Drops clients that have gone quiet (see PEER_TIMEOUT_MS); a live one that was only slow reconnects by itself. */
+  reap(at = Date.now()) {
+    for (const peer of [...this.peers.values()]) {
+      if (at - peer.seen < PEER_TIMEOUT_MS) continue;
+      peer.close();
+      this.leave(peer.conn);
+    }
+  }
+
+  /** A client sent something: it's still there. */
+  touch(conn: string) {
+    const peer = this.peers.get(conn);
+    if (peer) peer.seen = Date.now();
   }
 
   private async closeIfIdle() {
@@ -473,6 +497,7 @@ export class Room {
     this.closed = true;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.reapTimer) clearInterval(this.reapTimer);
     for (const conn of this.peers.keys()) this.hub.conns.delete(conn);
     this.peers.clear();
     this.hub.forget(this);
@@ -569,7 +594,7 @@ const rejoinBody = z.object({ conn: z.string().max(64), base_hash: z.string().ma
 const connBody = z.object({ conn: z.string().max(64) });
 
 /** Opens the stream: the first event is `init` or `resume` (see Room.hello), then updates, presence and saves. */
-export function liveStream(c: Context, room: Room, peer: Omit<Peer, "color" | "cursor" | "conn" | "send" | "close">, q: z.infer<typeof streamQuery>, keepAliveMs = 25_000) {
+export function liveStream(c: Context, room: Room, peer: Omit<Peer, "color" | "cursor" | "conn" | "seen" | "send" | "close">, q: z.infer<typeof streamQuery>, keepAliveMs = 25_000) {
   c.header("cache-control", "no-store");
   c.header("x-accel-buffering", "no");
   return streamSSE(c, async (stream) => {
@@ -622,6 +647,7 @@ export function liveActions(who: (c: Context, conn: string) => Room | null | Pro
     if (!body.success) return c.json({ error: "invalid body" }, 400);
     const room = await who(c, (body.data as { conn: string }).conn);
     if (!room || room.closed) return c.json({ error: "not connected" }, 409);
+    room.touch((body.data as { conn: string }).conn);
     try {
       const result = await act(room, body.data);
       return c.json(result ?? { ok: true });

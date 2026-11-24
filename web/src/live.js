@@ -8,8 +8,8 @@
 // (it restarted), the editor takes the server's text and anything typed meanwhile is sent back to be merged.
 
 import { collab, getSyncedVersion, receiveUpdates, sendableUpdates } from '@codemirror/collab';
-import { ChangeSet, Compartment, EditorState, StateEffect, StateField } from '@codemirror/state';
-import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
+import { ChangeSet, Compartment, EditorSelection, EditorState, StateEffect, StateField } from '@codemirror/state';
+import { EditorView, layer, RectangleMarker, ViewPlugin } from '@codemirror/view';
 
 const PUSH_DELAY = 40;
 const PRESENCE_DELAY = 150;
@@ -37,28 +37,45 @@ function replaceDiff(a, b) {
 
 const setPeople = StateEffect.define();
 
-class Caret extends WidgetType {
-  constructor(name, color) {
-    super();
-    this.name = name;
-    this.color = color;
+/**
+ * Someone's caret, drawn on a layer over the text (like CodeMirror's own cursor) rather than inside it: a widget in
+ * the line would push the text about, and vanish in markup that live preview hides. Their name shows for a moment
+ * after it moves, then fades, so it doesn't sit over what's written.
+ */
+class CaretMarker {
+  constructor(name, color, left, top, height) {
+    Object.assign(this, { name, color, left, top, height });
   }
   eq(other) {
-    return other.name === this.name && other.color === this.color;
+    return other.name === this.name && other.color === this.color && other.left === this.left && other.top === this.top && other.height === this.height;
   }
-  toDOM() {
-    const caret = document.createElement('span');
+  draw() {
+    const caret = document.createElement('div');
     caret.className = 'cm-remote-caret';
-    caret.style.borderColor = this.color;
-    const label = document.createElement('span');
+    Object.assign(caret.style, { left: `${this.left}px`, top: `${this.top}px`, height: `${this.height}px`, borderColor: this.color });
+    const label = document.createElement('div');
     label.className = 'cm-remote-name';
     label.style.backgroundColor = this.color;
     label.textContent = this.name;
     caret.append(label);
     return caret;
   }
-  ignoreEvent() {
-    return true;
+}
+
+/** A highlighted stretch of someone's selection, in their colour. */
+class SelectionMarker {
+  constructor(color, rect) {
+    Object.assign(this, { color, left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+  }
+  eq(other) {
+    return other.color === this.color && other.left === this.left && other.top === this.top && other.width === this.width && other.height === this.height;
+  }
+  draw() {
+    const el = document.createElement('div');
+    el.className = 'cm-remote-selection';
+    Object.assign(el.style, { left: `${this.left}px`, top: `${this.top}px`, height: `${this.height}px`, backgroundColor: `${this.color}33` });
+    if (this.width != null) el.style.width = `${this.width}px`;
+    return el;
   }
 }
 
@@ -69,18 +86,40 @@ const peopleField = StateField.define({
     if (!tr.docChanged) return people;
     return people.map((p) => ({ ...p, cursor: p.cursor && { anchor: tr.changes.mapPos(p.cursor.anchor), head: tr.changes.mapPos(p.cursor.head, 1) } }));
   },
-  provide: (field) =>
-    EditorView.decorations.from(field, (people) => {
-      const ranges = [];
-      for (const p of people) {
-        if (!p.cursor) continue;
-        const from = Math.min(p.cursor.anchor, p.cursor.head);
-        const to = Math.max(p.cursor.anchor, p.cursor.head);
-        if (from < to) ranges.push(Decoration.mark({ attributes: { style: `background-color: ${p.color}33` } }).range(from, to));
-        ranges.push(Decoration.widget({ widget: new Caret(p.name, p.color), side: 1 }).range(p.cursor.head));
-      }
-      return Decoration.set(ranges, true);
-    }),
+});
+
+const remoteSelections = layer({
+  above: false,
+  class: 'cm-remote-selections',
+  update: (u) => u.docChanged || u.viewportChanged || u.geometryChanged || u.startState.field(peopleField) !== u.state.field(peopleField),
+  markers(view) {
+    const out = [];
+    const len = view.state.doc.length;
+    for (const p of view.state.field(peopleField)) {
+      if (!p.cursor) continue;
+      const anchor = Math.min(p.cursor.anchor, len);
+      const head = Math.min(p.cursor.head, len);
+      if (anchor === head) continue;
+      for (const rect of RectangleMarker.forRange(view, '', EditorSelection.range(anchor, head))) out.push(new SelectionMarker(p.color, rect));
+    }
+    return out;
+  },
+});
+
+const remoteCarets = layer({
+  above: true,
+  class: 'cm-remote-carets',
+  update: (u) => u.docChanged || u.viewportChanged || u.geometryChanged || u.startState.field(peopleField) !== u.state.field(peopleField),
+  markers(view) {
+    const out = [];
+    const len = view.state.doc.length;
+    for (const p of view.state.field(peopleField)) {
+      if (!p.cursor) continue;
+      const [rect] = RectangleMarker.forRange(view, '', EditorSelection.cursor(Math.min(p.cursor.head, len)));
+      if (rect) out.push(new CaretMarker(p.name, p.color, rect.left, rect.top, rect.height));
+    }
+    return out;
+  },
 });
 
 /** Avatars for who else is in the note: a coloured initial each, the name on hover. */
@@ -139,6 +178,8 @@ export function liveSession(opts) {
   /** Throw away what's typed but unconfirmed on the next start (the server refused it). */
   let discard = false;
   const waiters = new Set();
+  // Now and then even when nothing moves, so the server can tell an open tab from one that closed without a word.
+  let heartbeat = null;
 
   const serverVersion = () => getSyncedVersion(view.state) + offset;
   const unconfirmed = () => (view ? sendableUpdates(view.state) : []);
@@ -147,6 +188,7 @@ export function liveSession(opts) {
     for (const w of [...waiters]) w();
   };
 
+  let lastPresence = '';
   // A refusal's message stays up a while before "Saved" replaces it.
   let holdStatus = 0;
   function status() {
@@ -290,6 +332,11 @@ export function liveSession(opts) {
       if (keep !== null && keep !== d.text) void rejoin(baseHash, keep);
     }
     epoch = d.epoch;
+    clearInterval(heartbeat);
+    heartbeat = setInterval(() => {
+      lastPresence = '';
+      void sendPresence();
+    }, 25_000);
     connected = true;
     everConnected = true;
     retries = 0;
@@ -359,7 +406,6 @@ export function liveSession(opts) {
     pushing = null;
   }
 
-  let lastPresence = '';
   function schedulePresence() {
     if (presenceTimer) return;
     presenceTimer = setTimeout(() => {
@@ -411,6 +457,7 @@ export function liveSession(opts) {
     clearTimeout(retryTimer);
     clearTimeout(pushTimer);
     clearTimeout(presenceTimer);
+    clearInterval(heartbeat);
     controller?.abort();
     wake();
   }
@@ -431,7 +478,7 @@ export function liveSession(opts) {
   });
 
   return {
-    extension: [collab({ clientID, startVersion: 0 }), peopleField, editable.of([]), plugin],
+    extension: [collab({ clientID, startVersion: 0 }), peopleField, remoteSelections, remoteCarets, editable.of([]), plugin],
     /** Connects now (with `start: false`): `base` is the file as it was just saved. */
     start(base) {
       if (started) return;
