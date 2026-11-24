@@ -183,7 +183,8 @@ export function liveSession(opts) {
 
   const serverVersion = () => getSyncedVersion(view.state) + offset;
   const unconfirmed = () => (view ? sendableUpdates(view.state) : []);
-  const pending = () => unconfirmed().length > 0 || serverDirty;
+  // Before joining, the REST create may already have saved queued edits. Only text beyond that snapshot is unsaved.
+  const pending = () => (everConnected ? unconfirmed().length > 0 : !!view && view.state.doc.toString() !== opts.base.text) || serverDirty;
   const wake = () => {
     for (const w of [...waiters]) w();
   };
@@ -313,6 +314,7 @@ export function liveSession(opts) {
     serverDirty = d.dirty;
     const lastHash = hash;
     hash = d.hash;
+    let rejoining = false;
     if (d.type === 'resume') {
       receive(d.updates);
     } else {
@@ -320,7 +322,7 @@ export function liveSession(opts) {
       // first connection, or while the server was away) is sent back afterwards to be merged.
       const local = view.state.doc.toString();
       const mine = unconfirmed();
-      const keep = !discard && (mine.length > 0 || (!everConnected && local !== opts.base.text)) ? local : null;
+      const keep = !discard && (everConnected ? mine.length > 0 : local !== opts.base.text) ? local : null;
       const baseHash = everConnected ? lastHash : opts.base.hash;
       discard = false;
       view.dispatch(
@@ -331,7 +333,10 @@ export function liveSession(opts) {
         ]),
       );
       offset = d.version - getSyncedVersion(view.state);
-      if (keep !== null && keep !== d.text) void rejoin(baseHash, keep);
+      if (keep !== null && keep !== d.text) {
+        rejoining = true;
+        void rejoin(baseHash, keep);
+      }
     }
     epoch = d.epoch;
     clearInterval(heartbeat);
@@ -342,6 +347,7 @@ export function liveSession(opts) {
     connected = true;
     everConnected = true;
     retries = 0;
+    if (!rejoining && !pending()) opts.onSaved?.(hash);
     schedulePush(0);
     schedulePresence();
     status();
