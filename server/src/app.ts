@@ -8,6 +8,7 @@ import { clipRoutes } from "./routes/clip";
 import { noteRoutes } from "./routes/notes";
 import { publicShareRoutes, shareRoutes } from "./routes/share";
 import { eventRoutes } from "./routes/events";
+import { liveRoutes } from "./live";
 import { prefRoutes } from "./prefs";
 import { adminRoutes } from "./routes/admin";
 import { calendarRoutes } from "./routes/calendar";
@@ -48,6 +49,18 @@ const appShellCsp: MiddlewareHandler = async (c, next) => {
   }
 };
 
+/**
+ * All an assistant (MCP) or extension token may call under /api. Anything else is refused, so a new route stays closed
+ * to them until it's added here. Routes still refuse what depends on the content (publishing, private notes).
+ */
+const LIMITED_ROUTES: [string, RegExp][] = [
+  ["GET", /^\/api\/(notes|notes\/(file|backlinks|mentions|versions|versions\/[^/]+|trash|attachment|attachments|thumbnail)|todos|todos\/count|events)$/],
+  ["POST", /^\/api\/(notes|notes\/(move|folders|attachments|trash\/restore)|clip|todos|todos\/(toggle|edit))$/],
+  ["PUT", /^\/api\/notes\/file$/],
+  ["PATCH", /^\/api\/notes\/meta$/],
+  ["DELETE", /^\/api\/notes\/file$/],
+];
+
 export function createApp(deps: {
   db: Database;
   vault: Vault;
@@ -85,6 +98,7 @@ export function createApp(deps: {
     api.route("/", todoRoutes(space.db, space.vault, config.timeZone ?? "UTC"));
     api.route("/", shareRoutes(space.db, space.vault));
     api.route("/", eventRoutes(space.vault));
+    api.route("/", liveRoutes(space.vault, (subject) => users?.nameOf(subject) ?? "You"));
     api.route("/", pushRoutes(space.db, vapid.publicKey));
     api.route("/", prefRoutes(space.db));
     api.notFound((c) => c.json({ error: "not found" }, 404));
@@ -113,7 +127,12 @@ export function createApp(deps: {
 
   const api = new Hono<AuthEnv>();
   api.use("*", requireAuth(auth, config.publicUrls));
-  api.use("*", (c, next) => (c.get("scope") === "full" ? next() : assistantWrites.run(true, next)));
+  api.use("*", async (c, next) => {
+    if (c.get("scope") === "full") return next();
+    if (!LIMITED_ROUTES.some(([method, path]) => method === c.req.method && path.test(c.req.path)))
+      return c.json({ error: "not allowed with this token" }, 403);
+    return assistantWrites.run(true, next);
+  });
   if (users) api.route("/", publishRoutes(users));
   if (users && passkeys) api.route("/admin", adminRoutes(users, auth, oidc, passkeys, config.publicUrls));
   // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/. Plugins work on
@@ -130,10 +149,14 @@ export function createApp(deps: {
   // app's own origins. Bearer only: no credentials, so a page on one of these can't ride a session cookie.
   // Bun closes a request that sends nothing for 10s (its default idleTimeout), long before the stream's 25s keep-alive,
   // and anything that changes while the client reconnects is missed. The stream is meant to stay open: no idle limit.
-  app.use("/api/events", async (c, next) => {
+  // The same for live editing's streams (signed in, and share links').
+  const noIdleLimit: MiddlewareHandler = async (c, next) => {
     (c.env as { timeout?: (req: Request, seconds: number) => void } | undefined)?.timeout?.(c.req.raw, 0);
     await next();
-  });
+  };
+  app.use("/api/events", noIdleLimit);
+  app.get("/api/live", noIdleLimit);
+  app.get("/api/public/share/:id/live", noIdleLimit);
   app.use("/api/events", cors({ origin: ["app://obsidian.md", "capacitor://localhost", "http://localhost", "https://localhost"], allowHeaders: ["authorization"] }));
   // Shared notes, readable without signing in. Before the signed-in API, which would answer 401.
   app.route("/api/public", publicShareRoutes(() => users?.all() ?? [owner]));

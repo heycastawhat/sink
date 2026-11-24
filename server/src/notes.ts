@@ -15,7 +15,7 @@ import { EXTRACTABLE, extractText, pdfThumbnail, type Extractor } from "./extrac
 
 export const TRASH = ".trash";
 export const ATTACHMENTS = "attachments";
-const MAX_NOTE_BYTES = 5 * 1024 * 1024;
+export const MAX_NOTE_BYTES = 5 * 1024 * 1024;
 const SKIP_DIRS = new Set(["node_modules"]);
 /**
  * Version history (boards excluded): a new version at most every VERSION_GAP_MS per note, or whenever a write comes

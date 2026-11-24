@@ -559,10 +559,10 @@ object NoteSaver {
                 // retry meets the same conflict and tries again) rather than lose it.
                 e.code == 409 && edit.path != null -> try {
                     resolveConflict(context, api, edit, e.body)
-                } catch (_: IOException) {
-                    offline(context, edit, requeue)
                 } catch (e2: ApiException) {
                     if (e2.code == 401 || e2.code >= 500) offline(context, edit, requeue) else SaveResult.Failed(e2.message ?: "Couldn't save")
+                } catch (_: IOException) {
+                    offline(context, edit, requeue)
                 }
                 e.code == 401 || e.code >= 500 -> offline(context, edit, requeue)
                 else -> SaveResult.Failed(e.message ?: "Couldn't save")
