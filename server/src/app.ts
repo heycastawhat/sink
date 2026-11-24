@@ -48,6 +48,18 @@ const appShellCsp: MiddlewareHandler = async (c, next) => {
   }
 };
 
+/**
+ * All an assistant (MCP) or extension token may call under /api. Anything else is refused, so a new route stays closed
+ * to them until it's added here. Routes still refuse what depends on the content (publishing, private notes).
+ */
+const LIMITED_ROUTES: [string, RegExp][] = [
+  ["GET", /^\/api\/(notes|notes\/(file|backlinks|mentions|versions|versions\/[^/]+|trash|attachment|attachments|thumbnail)|todos|todos\/count|events)$/],
+  ["POST", /^\/api\/(notes|notes\/(move|folders|attachments|trash\/restore)|clip|todos|todos\/(toggle|edit))$/],
+  ["PUT", /^\/api\/notes\/file$/],
+  ["PATCH", /^\/api\/notes\/meta$/],
+  ["DELETE", /^\/api\/notes\/file$/],
+];
+
 export function createApp(deps: {
   db: Database;
   vault: Vault;
@@ -113,7 +125,12 @@ export function createApp(deps: {
 
   const api = new Hono<AuthEnv>();
   api.use("*", requireAuth(auth, config.publicUrls));
-  api.use("*", (c, next) => (c.get("scope") === "full" ? next() : assistantWrites.run(true, next)));
+  api.use("*", async (c, next) => {
+    if (c.get("scope") === "full") return next();
+    if (!LIMITED_ROUTES.some(([method, path]) => method === c.req.method && path.test(c.req.path)))
+      return c.json({ error: "not allowed with this token" }, 403);
+    return assistantWrites.run(true, next);
+  });
   if (users) api.route("/", publishRoutes(users));
   if (users && passkeys) api.route("/admin", adminRoutes(users, auth, oidc, passkeys, config.publicUrls));
   // Installed plugins (for clients to load) and each plugin's own routes under /api/plugins/<id>/. Plugins work on
