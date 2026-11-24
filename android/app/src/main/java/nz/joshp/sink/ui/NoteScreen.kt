@@ -161,7 +161,6 @@ import nz.joshp.sink.data.NOTE_COLORS
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.NoteSaver
 import nz.joshp.sink.data.NoteStore
-import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.SaveResult
 import nz.joshp.sink.data.QueuedSave
 import nz.joshp.sink.data.attach
@@ -321,10 +320,54 @@ fun NoteScreen(
     }
 
     /**
+     * The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind).
+     * Nothing while the page is still loading the note: there's no text of its own yet.
+     */
+    suspend fun readEditor(flush: Boolean = true) {
+        val w = web?.takeUnless { ed.closed } ?: return
+        val options = if (flush) "" else "{ flush: false }"
+        ed.flushing++
+        try {
+            val raw = suspendCancellableCoroutine { k ->
+                w.evaluateJavascript("window.sink.textOrNull($options)") { k.resume(it) }
+            }
+            runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
+        } finally {
+            if (--ed.flushing == 0 && ed.closed) w.destroy()
+        }
+    }
+
+    suspend fun applyConflict(result: SaveResult.Conflict) {
+        readEditor()
+        val theirs = result.theirs
+        val copy = result.copy
+        ed.adoptConflict(result)
+        status = if (ed.dirty) "Editing…" else "Saved"
+        if (!ed.closed && copy != null) {
+            haptics.reject()
+            val message = if (ed.path == copy.path) {
+                shownPath = copy.path
+                pinned = copy.pinned
+                color = copy.color
+                if (theirs == null) "That note was deleted elsewhere. Kept yours as “${copy.fileName}”."
+                else "Changed somewhere else. You’re editing “${copy.fileName}”."
+            } else {
+                if (theirs != null) {
+                    applyMeta(theirs)
+                    setEditorText(theirs.content)
+                }
+                "Changed somewhere else. Your version was saved as “${copy.fileName}”."
+            }
+            scope.launch { snackbar.showSnackbar(message) }
+        }
+        vm.refresh()
+    }
+
+    /**
      * One save of the editor's current text; mirrors web/src/notes.js doSave. One at a time, and never cancelled
      * half way: a save cut off after the server wrote would lose the new hash and make the next save a false conflict.
      */
-    suspend fun saveNow() {
+    suspend fun saveNow(saveContext: Context = context) {
         // A new note queued offline that the sync worker has since created: carry on in that file, not a second one.
         if (ed.path == null && ed.queued != null) {
             store.takeCreated(ed.key)?.let(store::note)?.let { n ->
@@ -335,75 +378,51 @@ fun NoteScreen(
                 shownPath = n.path
             }
         }
-        val text = ed.current
-        if (!ed.loaded || text == ed.saved) {
-            if (ed.loaded) status = "Saved"
-            return
-        }
-        val p = ed.path
-        if (p == null && text.isBlank()) return
         // The sync worker may have saved our queued text since: carry on from the hash it got.
+        val p = ed.path
         if (p != null && ed.queued != null) {
-            store.note(p)?.let { if (it.content == ed.queued) ed.hash = it.hash }
-            if (store.pending(p) == null) ed.queued = null
+            when (val outcome = NoteSaver.lastOutcome(p)) {
+                is QueuedSave.Conflict -> if (ed.matchesConflict(outcome)) {
+                    applyConflict(outcome.result())
+                }
+                is QueuedSave.Saved -> ed.acknowledge(outcome)
+                null -> Unit
+            }
         }
-        status = "Saving…"
-        val api = api() ?: return
-        val result = NoteSaver.save(context, api, PendingEdit(ed.key, p, ed.folder, ed.hash, text))
-        when (result) {
-            is SaveResult.Saved -> {
-                if (ed.path == null) {
-                    ed.path = result.meta.path
-                    shownPath = result.meta.path
-                }
-                ed.hash = result.meta.hash
-                ed.saved = text
-                status = if (ed.current == text) "Saved" else "Editing…"
-                vm.refresh()
+        while (true) {
+            val edit = ed.pendingEdit()
+            if (edit == null) {
+                if (ed.loaded && !ed.dirty) status = "Saved"
+                return
             }
-            is SaveResult.Conflict -> {
-                val theirs = result.theirs
-                val copy = result.copy
-                ed.queued = null
-                if (copy != null && (theirs == null || ed.current != text)) {
-                    haptics.reject()
-                    ed.path = copy.path
-                    ed.hash = copy.hash
-                    ed.saved = text
-                    shownPath = copy.path
-                    pinned = copy.pinned
-                    color = copy.color
-                    status = if (ed.current == text) "Saved" else "Editing…"
-                    scope.launch {
-                        snackbar.showSnackbar(
-                            if (theirs == null) "That note was deleted elsewhere. Kept yours as “${copy.fileName}”."
-                            else "Changed somewhere else. You’re editing “${copy.fileName}”."
-                        )
+            status = "Saving…"
+            val api = api() ?: return
+            when (val result = NoteSaver.save(saveContext, api, edit, queued = ed.queued)) {
+                is SaveResult.Saved -> {
+                    if (ed.path == null) {
+                        ed.path = result.meta.path
+                        shownPath = result.meta.path
                     }
-                } else if (copy == null && theirs != null) {
-                    ed.hash = theirs.hash
-                    ed.saved = text
-                    status = if (ed.current == text) "Saved" else "Editing…"
-                } else if (theirs != null) {
-                    haptics.reject()
-                    ed.hash = theirs.hash
-                    ed.saved = theirs.content
-                    ed.current = theirs.content
-                    applyMeta(theirs)
-                    setEditorText(theirs.content)
-                    status = "Saved"
-                    snackbar.showSnackbar("Changed somewhere else. Your version was saved as “${copy?.fileName}”.")
+                    ed.hash = result.meta.hash
+                    ed.saved = edit.text
+                    ed.queued = null
+                    status = if (ed.dirty) "Editing…" else "Saved"
+                    vm.refresh()
                 }
-                vm.refresh()
+                is SaveResult.Conflict -> {
+                    applyConflict(result)
+                    if (ed.dirty) continue
+                }
+                SaveResult.Offline -> {
+                    ed.queued = edit.text
+                    status = "Offline, will save"
+                }
+                is SaveResult.Failed -> {
+                    status = "Can't save"
+                    if (!ed.closed) scope.launch { snackbar.showSnackbar(result.message) }
+                }
             }
-            SaveResult.Offline -> {
-                ed.queued = text
-                status = "Offline, will save"
-            }
-            is SaveResult.Failed -> {
-                status = "Can't save"
-                snackbar.showSnackbar(result.message)
-            }
+            return
         }
     }
 
@@ -420,28 +439,20 @@ fun NoteScreen(
     /** Saves the latest text outside this screen's scope, so it finishes even if the screen goes. */
     fun saveInBackground() {
         saveJob?.cancel()
-        if (ed.dirty && !(ed.path == null && ed.current.isBlank())) {
+        if (ed.dirty || ed.queued != null) {
             val app = context.applicationContext
-            NoteSaver.scope.launch {
+            NoteSaver.scope.launch(Dispatchers.Main.immediate) {
                 // After any save still in flight, so the hash is the one it got back.
-                saveLock.withLock {
-                    if (!ed.dirty) return@withLock
-                    val edit = PendingEdit(ed.key, ed.path, ed.folder, ed.hash, ed.current)
-                    val result = vm.api()?.let { NoteSaver.save(app, it, edit) }
-                    // The screen may still be open (saved on pause): carry on from this file and hash.
-                    if (result is SaveResult.Saved) {
-                        ed.path = ed.path ?: result.meta.path
-                        ed.hash = result.meta.hash
-                        ed.saved = edit.text
-                    }
-                }
+                saveLock.withLock { saveNow(app) }
             }
         }
     }
 
     fun readAndSave(w: WebView, then: () -> Unit) {
+        val previous = ed.current
+        val hash = ed.hash
         readEditorText({ ed.current }, { script, done -> w.evaluateJavascript(script) { done(it) } }) { latest ->
-            ed.current = latest
+            if (ed.hash == hash || latest != previous) ed.current = latest
             saveInBackground()
             then()
         }
@@ -631,19 +642,6 @@ fun NoteScreen(
         showLinks(p)
     }
 
-    /**
-     * The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind).
-     * Nothing while the page is still loading the note: there's no text of its own yet.
-     */
-    suspend fun readEditor(flush: Boolean = true) {
-        val w = web ?: return
-        val options = if (flush) "" else "{ flush: false }"
-        val raw = suspendCancellableCoroutine { k ->
-            w.evaluateJavascript("window.sink.textOrNull($options)") { k.resume(it) }
-        }
-        runCatching { json.decodeFromString<String>(raw) }.getOrNull()?.let { ed.current = it }
-    }
-
     // Edits made elsewhere show up while the note sits open and untouched: at once from the live stream, and by a
     // slower poll in case that's down.
     suspend fun refreshOpen() {
@@ -672,12 +670,22 @@ fun NoteScreen(
     }
     LaunchedEffect(ed) {
         NoteSaver.completed.collect { outcome ->
-            if (outcome !is QueuedSave.Saved || outcome.path != ed.path) return@collect
+            if (outcome.edit.key != ed.key) return@collect
             val acknowledged = saveLock.withLock {
-                readEditor(flush = false)
-                val applied = ed.acknowledge(outcome)
-                if (applied && !ed.dirty && status == "Offline, will save") status = "Saved"
-                applied
+                when (outcome) {
+                    is QueuedSave.Saved -> {
+                        readEditor(flush = false)
+                        val applied = ed.acknowledge(outcome)
+                        if (applied && !ed.dirty && status == "Offline, will save") status = "Saved"
+                        applied
+                    }
+                    is QueuedSave.Conflict -> {
+                        if (!ed.matchesConflict(outcome)) return@withLock false
+                        applyConflict(outcome.result())
+                        if (ed.dirty) scheduleSave()
+                        true
+                    }
+                }
             }
             if (acknowledged) refreshOpen()
         }
@@ -751,14 +759,8 @@ fun NoteScreen(
                 saveLock.withLock {
                     val p = ed.path ?: return@withLock
                     val api = api() ?: return@withLock
-                    if (ed.dirty) {
-                        val r = NoteSaver.save(context, api, PendingEdit(ed.key, p, ed.folder, ed.hash, ed.current))
-                        if (r is SaveResult.Saved) {
-                            ed.hash = r.meta.hash
-                            ed.saved = ed.current
-                        }
-                    }
-                    if (ed.queued != null || store.pending(ed.key) != null || ed.dirty) {
+                    if (ed.dirty || ed.queued != null) saveNow()
+                    if (ed.path != p || ed.queued != null || store.pending(ed.key) != null || ed.dirty) {
                         snackbar.showSnackbar("Your latest edits haven't reached the server yet. Try again once they have.")
                         return@withLock
                     }
