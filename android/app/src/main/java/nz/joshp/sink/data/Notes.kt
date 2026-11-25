@@ -149,15 +149,29 @@ suspend fun Api.searchNotes(q: String): List<NoteMeta> {
 
 suspend fun Api.note(path: String): Note = call(authed(pathUrl("/api/notes/file", path)).build()) { json.decodeFromString(it) }
 
+private const val MAX_LIVE_UPDATE_LENGTH = 16 * 1024 * 1024
+
 /** [keepVersion]: keep the text being replaced as a version even mid-sitting (restoring an old version). */
 suspend fun Api.saveNote(path: String, content: String, baseHash: String?, keepVersion: Boolean = false, live: LiveHandoff? = null): NoteMeta {
-    val body = buildJsonObject {
-        put("content", content)
-        if (baseHash == null) put("base_hash", JsonNull) else put("base_hash", baseHash)
-        if (keepVersion) put("keep_version", true)
-        if (live != null) put("live", json.encodeToJsonElement(LiveHandoff.serializer(), live))
+    suspend fun putNote(handoff: LiveHandoff?): NoteMeta {
+        val body = buildJsonObject {
+            put("content", content)
+            if (baseHash == null) put("base_hash", JsonNull) else put("base_hash", baseHash)
+            if (keepVersion) put("keep_version", true)
+            if (handoff != null) put("live", json.encodeToJsonElement(LiveHandoff.serializer(), handoff))
+        }
+        return call(authed(pathUrl("/api/notes/file", path)).put(jsonBody(body)).build()) { json.decodeFromString(it) }
     }
-    return call(authed(pathUrl("/api/notes/file", path)).put(jsonBody(body)).build()) { json.decodeFromString(it) }
+
+    if (live == null) return putNote(null)
+    if (baseHash.isNullOrEmpty()) throw ApiException(400, "invalid live save")
+    if (live.update.length > MAX_LIVE_UPDATE_LENGTH) return putNote(null)
+    return try {
+        putNote(live)
+    } catch (e: ApiException) {
+        if (e.code != 413) throw e
+        putNote(null)
+    }
 }
 
 /** An earlier version of a note (version history): when, how big, and how it starts. */
