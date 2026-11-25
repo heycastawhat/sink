@@ -227,6 +227,7 @@ private class LiveLink {
     @Volatile var socket: LiveSocket? = null
     var connection = 0
     var canResume = false
+    var restoreSnapshot: Note? = null
     var state = LiveState()
     var flushReply: ((LiveState) -> Unit)? = null
 }
@@ -544,6 +545,7 @@ fun NoteScreen(
                 hash?.let { put("hash", it) }
             }
             ed.liveMode = true
+            live.restoreSnapshot = n
             js("window.sink.resumeLive($args)")
             return
         }
@@ -565,6 +567,7 @@ fun NoteScreen(
             val firstGone = !ed.deletedLiveNote
             ed.deletedLiveNote = true
             live.canResume = s.canResume
+            live.restoreSnapshot = null
             status = DELETED_ELSEWHERE
             exitLive()
             scope.launch {
@@ -583,6 +586,15 @@ fun NoteScreen(
         if (!ed.deletedLiveNote && s.status.isNotEmpty()) status = s.status
         // Written by the server: the pair a fallback save (see flush) is checked against.
         if (s.saved != null && s.hash != null) {
+            // The path probe is not trusted until the original document has bound and reports saved text.
+            val restored = live.restoreSnapshot
+            if (s.bound && restored != null && restored.path == ed.path) {
+                live.restoreSnapshot = null
+                val matching = restored.takeIf { it.hash == s.hash }
+                val meta = matching ?: store.note(restored.path)
+                store.saveNote(meta?.copy(hash = s.hash, content = s.saved) ?: Note(restored.path, hash = s.hash, content = s.saved))
+                if (matching != null) applyMeta(matching)
+            }
             ed.hash = s.hash
             ed.saved = s.saved
             ed.current = s.saved
