@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from 'bun:test';
 import { EditorState, Facet } from '@codemirror/state';
 import * as Y from 'yjs';
 
-const realLiveSession = (await import('./live.js')).liveSession;
+const realLiveSession = (await import('./live.js?notes-test')).liveSession;
 let useLive;
 let livePlugin;
 let liveView;
@@ -41,9 +41,8 @@ const create = (options) => {
   };
   return editor;
 };
-mock.module('./editor.js', () => ({ createEditor: create }));
 // Most tests cover fallback saving; live tests drive the real session with a headless CodeMirror view.
-mock.module('./live.js', () => ({
+const mockLive = () => ({
   liveSession: (options) => {
     if (!useLive) return { extension: [], started: false, unavailable: false, start() {}, destroy() {} };
     const session = realLiveSession({
@@ -57,7 +56,7 @@ mock.module('./live.js', () => ({
     return session;
   },
   renderPeople() {},
-}));
+});
 
 let notes;
 let current;
@@ -77,6 +76,8 @@ const pinned = '---\npinned: true\n---\n' + original;
 const latest = pinned + '\nLATESTFROMANDROID';
 
 beforeEach(async () => {
+  mock.module('./editor.js', () => ({ createEditor: create }));
+  mock.module('./live.js', mockLive);
   useLive = false;
   firstCreate = false;
   statuses = [];

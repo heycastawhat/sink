@@ -1,5 +1,10 @@
-import { beforeEach, expect, mock, test } from 'bun:test';
-import { EditorState } from '@codemirror/state';
+import { afterEach, beforeEach, expect, mock, test } from 'bun:test';
+import { EditorState, Facet } from '@codemirror/state';
+import * as Y from 'yjs';
+
+const liveModule = await import('./live.js?android-test');
+const livePlugin = Facet.define({ combine: (plugins) => plugins[0] });
+let useLive = false;
 
 let plugins;
 let sequence = 0;
@@ -8,6 +13,25 @@ let rootStyles;
 let type;
 let change;
 const create = (options) => {
+  if (useLive) {
+    const view = {
+      state: EditorState.create({ doc: options.doc, extensions: options.extensions }),
+      dispatch(spec) {
+        const previous = this.state.facet(livePlugin);
+        const tr = this.state.update(spec);
+        this.state = tr.state;
+        const next = this.state.facet(livePlugin);
+        if (previous !== next) {
+          plugin?.destroy();
+          plugin = next?.create(this);
+        } else plugin?.update({ transactions: [tr], docChanged: tr.docChanged, selectionSet: tr.selection != null });
+      },
+    };
+    let plugin = view.state.facet(livePlugin)?.create(view);
+    const getText = () => view.state.doc.toString();
+    type = (insert) => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert } });
+    return { view, getText, setText: type, destroy: () => plugin?.destroy() };
+  }
   const asEditorText = (text) => options.doc == null ? text : EditorState.create({ doc: text }).doc.toString();
   let text = asEditorText(options.doc ?? options.text);
   type = (value) => {
@@ -16,7 +40,6 @@ const create = (options) => {
   };
   return { getText: () => text, setText: type, destroy() {} };
 };
-mock.module('./editor.js', () => ({ createEditor: create }));
 mock.module('./board.js', () => ({ createBoard: create }));
 const pluginApi = await import('./plugin-api.js');
 mock.module('./plugin-api.js', () => ({ ...pluginApi, loadPlugins: () => plugins() }));
@@ -24,6 +47,8 @@ mock.module('./plugins/index.js', () => ({ bundledPlugins: {} }));
 mock.module('./backlinks.js', () => ({ backlinksHtml() {}, mentionsHtml() {}, onLinkMention() {} }));
 
 beforeEach(async () => {
+  mock.module('./editor.js', () => ({ createEditor: create }));
+  useLive = false;
   plugins = async () => {};
   rootStyles = new Map();
   const element = { addEventListener() {}, style: { setProperty: (key, value) => rootStyles.set(key, value) }, classList: { add() {} } };
@@ -35,6 +60,10 @@ beforeEach(async () => {
   change = null;
   await import(`./embed-editor.js?test=${++sequence}`);
   sink = window.sink;
+});
+
+afterEach(() => {
+  if (useLive) sink.retireLive();
 });
 
 test('image height follows the measured viewport, ignoring transient zero-height resizes', () => {
@@ -133,4 +162,84 @@ test('reading without flushing leaves the pending change notification scheduled'
   type(pinned);
   expect(sink.textOrNull({ flush: false })).toBe(pinned);
   expect(await changed).toBe(pinned);
+});
+
+const path = 'Scratch note.md';
+const args = { path, saved: original, hash: 'before-trash' };
+async function openLive() {
+  useLive = true;
+  mock.module('./live.js', () => ({
+    ...liveModule,
+    liveSession(options) {
+      const session = liveModule.liveSession(options);
+      session.extension.push(livePlugin.of(session.extension.at(-1)));
+      return session;
+    },
+  }));
+  globalThis.location = { href: 'https://sink.editor/editor.html' };
+  globalThis.WebSocket = { OPEN: 1 };
+  const states = [];
+  const urls = [];
+  const frames = [];
+  Object.assign(window.SinkBridge, {
+    live: (raw) => states.push(JSON.parse(raw)),
+    liveOpen: (url) => urls.push(url),
+    liveClose() {},
+    liveSend() {},
+    liveSendBinary: (b64) => frames.push(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))),
+  });
+  await sink.load({ path, text: original, live: args });
+  const room = new Y.Doc({ guid: 'original-note' });
+  room.getText('t').insert(0, original);
+  const hello = (guid, hash = args.hash) => {
+    sink.live.opened();
+    sink.live.text(JSON.stringify({ t: 'hello', guid, hash, dirty: false, editor: true }));
+  };
+  const receive = (tag, payload) => sink.live.binary(btoa(String.fromCharCode(tag, ...payload)));
+  hello(room.guid);
+  receive(1, Y.encodeStateAsUpdate(room));
+  expect(states.at(-1)).toMatchObject({ bound: true, status: 'Saved' });
+  return { room, hello, receive, states, urls, frames };
+}
+
+test('an open Android editor is deleted while in Trash and rejoins the same live document after restore', async () => {
+  const { room, hello, receive, states, urls, frames } = await openLive();
+  sink.live.text('{"t":"gone"}');
+  expect(states.at(-1)).toMatchObject({ gone: true, canResume: true, status: 'Deleted elsewhere' });
+  sink.retireLive();
+  expect(sink.getText()).toBe(original);
+  sink.resumeLive(args);
+  await Promise.resolve();
+  expect(urls).toEqual(Array(2).fill('/api/live?path=Scratch%20note.md'));
+  const restored = original + 'Changed before rejoining\n';
+  room.getText('t').insert(original.length, 'Changed before rejoining\n');
+  hello(room.guid, 'restored');
+  receive(1, Y.encodeStateAsUpdate(room));
+  expect(states.at(-1)).toMatchObject({ gone: false, bound: true, status: 'Saved', hash: 'restored', saved: restored });
+
+  const vector = Y.encodeStateVector(room);
+  room.getText('t').insert(restored.length, 'From the web\n');
+  receive(2, Y.encodeStateAsUpdate(room, vector));
+  expect(sink.getText()).toBe(restored + 'From the web\n');
+  type(sink.getText() + 'From Android\n');
+  Y.applyUpdate(room, frames.at(-1).subarray(1));
+  expect(room.getText('t').toString()).toBe(restored + 'From the web\nFrom Android\n');
+});
+
+test('the Android editor does not sync with a replacement, or probe after typing has already resumed', async () => {
+  const { hello, states, urls, frames } = await openLive();
+  sink.live.text('{"t":"gone"}');
+  sink.retireLive();
+  sink.resumeLive(args);
+  await Promise.resolve();
+  const sent = frames.length;
+  hello('replacement-note');
+  expect(states.at(-1)).toMatchObject({ gone: true, status: 'Deleted elsewhere' });
+  expect(frames).toHaveLength(sent);
+  sink.retireLive();
+  type(original + 'New typing');
+  sink.resumeLive(args);
+  expect(states.at(-1).gone).toBe(true);
+  expect(sink.getText()).toBe(original + 'New typing');
+  expect(urls).toHaveLength(2);
 });

@@ -431,6 +431,7 @@ data class PendingEdit(
     @SerialName("base_hash") val baseHash: String?,
     val text: String,
     val at: Long = 0,
+    val conflictCopy: Boolean = false,
 )
 
 /**
@@ -588,6 +589,7 @@ object NoteSaver {
     private suspend fun saveLocked(context: Context, api: Api, edit: PendingEdit, requeue: Boolean): SaveResult {
         val store = NoteStore(context)
         return try {
+            if (edit.conflictCopy && edit.path != null) return resolveConflict(context, api, edit, null)
             val meta = if (edit.path == null) {
                 if (edit.text.isBlank()) return SaveResult.Saved(NoteMeta("", ""))
                 api.createNote(edit.folder, titleFor(edit.text), edit.text)
@@ -637,7 +639,7 @@ object NoteSaver {
         val stamp = SimpleDateFormat("yyyy-MM-dd HH-mm", Locale.US).format(Date())
         val copy = api.createNote(path.substringBeforeLast('/', ""), "$name (conflict $stamp)", edit.text)
         store.clearPending(edit.key)
-        if (theirs != null) store.saveNote(theirs) else store.forget(path)
+        if (theirs != null) store.saveNote(theirs) else if (!edit.conflictCopy) store.forget(path)
         return SaveResult.Conflict(theirs, copy, edit.text)
     }
 
