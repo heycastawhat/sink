@@ -161,6 +161,7 @@ import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.NOTE_COLORS
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.NoteSaver
+import nz.joshp.sink.data.frontmatterMeta
 import nz.joshp.sink.data.LiveSocket
 import nz.joshp.sink.data.LiveState
 import okio.ByteString
@@ -364,6 +365,12 @@ fun NoteScreen(
         shownPath = n.path
     }
 
+    fun applyTextMeta(text: String) {
+        val meta = frontmatterMeta(text)
+        pinned = meta.pinned
+        color = meta.color
+    }
+
     /**
      * The editor's text now, not the debounced copy in `ed.current` (a board's last stroke is up to 500ms behind).
      * Nothing while the page is still loading the note: there's no text of its own yet.
@@ -536,6 +543,7 @@ fun NoteScreen(
             ed.hash = s.hash
             ed.saved = s.saved
             ed.current = s.saved
+            applyTextMeta(s.saved)
         }
     }
 
@@ -1015,6 +1023,7 @@ fun NoteScreen(
                     onChanged = { text ->
                         if (ed.loaded) {
                             ed.current = text
+                            applyTextMeta(text)
                             if (!ed.liveMode) {
                                 status = "Editing…"
                                 scheduleSave()

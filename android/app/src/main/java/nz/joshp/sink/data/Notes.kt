@@ -193,6 +193,30 @@ suspend fun Api.clipUrl(url: String): NoteMeta {
 }
 
 private val NOTE_FRONTMATTER = Regex("""^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)""")
+private val FRONTMATTER_YAML = Regex("""^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)""")
+private val FRONTMATTER_LINE = Regex("""^(\w[\w-]*):\s*(.*)$""")
+private val FRONTMATTER_TRUE = Regex("""^(true|yes|1)$""", RegexOption.IGNORE_CASE)
+
+/** Pin and colour read from a note's YAML frontmatter (mirrors server/src/notes.ts readFrontmatter). */
+data class FrontmatterMeta(val pinned: Boolean = false, val color: String? = null)
+
+fun frontmatterMeta(content: String): FrontmatterMeta {
+    val yaml = FRONTMATTER_YAML.find(content)?.groupValues?.get(1) ?: return FrontmatterMeta()
+    var pinned = false
+    var color: String? = null
+    for (line in yaml.split(Regex("""\r?\n"""))) {
+        val m = FRONTMATTER_LINE.matchEntire(line) ?: continue
+        val raw = m.groupValues[2].trim()
+        val value = if (raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith('\'') && raw.endsWith('\'')))) {
+            raw.substring(1, raw.length - 1).trim()
+        } else raw
+        when (m.groupValues[1]) {
+            "pinned" -> pinned = FRONTMATTER_TRUE.matches(value)
+            "color" -> value.lowercase().takeIf { it in NOTE_COLORS }?.let { color = it }
+        }
+    }
+    return FrontmatterMeta(pinned, color)
+}
 
 /**
  * What the editor should hold after a pin or colour change rewrote the note's frontmatter on the server (mirrors
