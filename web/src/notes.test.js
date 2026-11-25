@@ -453,6 +453,47 @@ test('replays queued pin and colour for the signed-in account when the stream re
   }
 });
 
+test('a queued pin waits for a closed note’s offline body draft before changing its hash', async () => {
+  const { api } = await import('./api.js');
+  const mine = original + '\nOffline body edit';
+  let online = false;
+  api.saveNote = async (_path, text, hash) => {
+    if (!online) throw new TypeError('Failed to fetch');
+    expect(hash).toBe('original');
+    return (current = { ...current, content: text, hash: 'body' });
+  };
+  api.noteMeta = async () => {
+    if (!online) throw new TypeError('Failed to fetch');
+    expect(current.hash).toBe('body');
+    return (current = { ...current, pinned: true, content: '---\npinned: true\n---\n' + current.content, hash: 'pin' });
+  };
+  notes.setDraftOwner('scratch');
+  await notes.openNote(path);
+  editor.setText(mine);
+  await notes.setOpenMeta({ pinned: true });
+  await notes.closeNote();
+
+  const before = { window: globalThis.window, EventSource: globalThis.EventSource };
+  const stream = new EventTarget();
+  globalThis.window = new EventTarget();
+  globalThis.EventSource = class { constructor() { return stream; } };
+  try {
+    online = true;
+    notes.listenForChanges();
+    stream.dispatchEvent(new Event('ready'));
+    await tick();
+    expect(current.hash).toBe('original');
+    expect(storage.has('sink:pending-meta:scratch')).toBe(true);
+    await notes.openNote(path);
+    await tick();
+    expect(copies).toHaveLength(0);
+    expect(current).toMatchObject({ pinned: true, content: '---\npinned: true\n---\n' + mine });
+    expect(storage.has('sink:pending-meta:scratch')).toBe(false);
+  } finally {
+    Object.assign(globalThis, before);
+  }
+});
+
 test('a genuinely edited stale draft still becomes a conflict copy', async () => {
   const mine = original + '\nUnsaved local edit';
   storage.set('sink:unsaved:' + path, JSON.stringify({ base: 'original', text: mine }));
