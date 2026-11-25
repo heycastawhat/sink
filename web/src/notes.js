@@ -8,6 +8,7 @@ import { api, ApiError, Unauthorized } from './api.js';
 import { createEditor } from './editor.js';
 import { liveSession, renderPeople } from './live.js';
 import { deferredEditorText } from './deferred-editor-text.js';
+import { searchTerms } from './search-terms.js';
 import { registry, onRegistryChange } from './plugin-api.js';
 import { buzz } from './haptics.js';
 import { askConfirm, askText, editTodo, pickFolder, pickFromList, pickVersion, shareNote, viewPdf } from './dialogs.js';
@@ -124,6 +125,8 @@ const tagged = (tag) => {
 
 export async function setQuery(q) {
   state.q = q;
+  // A note open beside the list (the wide layouts) follows the search.
+  screen.editor?.setHighlight?.(searchTerms(q));
   const seq = ++searchSeq;
   state.fileResults = null;
   if (!q) {
@@ -1280,6 +1283,8 @@ function mountEditor(text) {
   screen.editor = createEditor({
     parent: $('note-editor'),
     doc: text,
+    // Opened from a search: its words are lit up in the note.
+    highlight: searchTerms(state.q),
     extensions: screen.live.extension,
     onChange: () => {
       showFileName();

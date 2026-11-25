@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { extname } from "node:path";
 import { z } from "zod";
 import type { AuthEnv } from "../auth";
-import { cleanPath, COLORS, parseNote, toFtsQuery, VaultError, type Vault } from "../notes";
+import { cleanPath, COLORS, parseNote, parseSearch, toFtsQuery, VaultError, type Vault } from "../notes";
 import { ZipWriter } from "../zip";
 
 const TYPES: Record<string, string> = {
@@ -97,9 +97,17 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     const { q, limit } = parsed.data;
     if (c.req.query("brief") === "true") return c.json({ notes: vault.manifest() });
     if (!q?.trim()) return run(c, async () => c.json({ ...vault.list(), files: await vault.documents() }));
-    const fts = toFtsQuery(q);
+    // `in:Folder`, `#tag` and `is:todo` narrow the words; with only those, it's every note that passes (as MCP's search_notes gets too).
+    const { text, filters } = parseSearch(q);
+    const fts = toFtsQuery(text);
     // `files`: PDFs in folders whose text matches, apart from the notes since clients show them differently.
-    return c.json({ items: fts ? vault.search(fts, limit) : [], files: fts ? vault.searchDocuments(fts, limit) : [] });
+    if (!fts && filters) {
+      return run(c, async () => c.json({ items: vault.list(filters).notes.slice(0, limit), files: vault.documentsIn(filters, await vault.documents()).slice(0, limit) }));
+    }
+    return c.json({
+      items: fts ? vault.search(fts, limit, filters ?? undefined) : [],
+      files: fts ? (filters ? vault.documentsIn(filters, vault.searchDocuments(fts, limit * 4)).slice(0, limit) : vault.searchDocuments(fts, limit)) : [],
+    });
   });
 
   app.post("/notes/scan", (c) => run(c, async () => c.json(await vault.scan())));

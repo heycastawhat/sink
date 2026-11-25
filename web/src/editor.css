@@ -467,6 +467,12 @@
   border-radius: 2px;
 }
 
+/* The words of the search a note was opened from. */
+.note-editor .cm-editor .cm-search-hit {
+  background: color-mix(in srgb, var(--md-sys-color-tertiary, var(--md-sys-color-primary)) 28%, transparent);
+  border-radius: 2px;
+}
+
 .cm-searchMatch-selected {
   background: color-mix(in srgb, var(--md-sys-color-tertiary) 55%, transparent) !important;
 }
