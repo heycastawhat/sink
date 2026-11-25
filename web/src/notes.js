@@ -1353,6 +1353,11 @@ function startLive() {
       screen.hash = hash;
       if (!session.pending()) {
         screen.saved = screen.editor.getText();
+        const pinned = pinnedInText(screen.saved);
+        if (screen.pinned !== pinned) {
+          screen.pinned = pinned;
+          applyLook();
+        }
         clearLiveDraft();
       }
     },
@@ -2215,6 +2220,12 @@ async function writeMeta(path, changes, owner) {
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/;
 const frontmatterOf = (text) => FRONTMATTER.exec(text)?.[0] ?? '';
 const bodyOf = (text) => text.slice(frontmatterOf(text).length);
+function pinnedInText(text) {
+  const yaml = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)?.[1];
+  const pin = yaml?.split(/\r?\n/).findLast((line) => line.startsWith('pinned:'));
+  const value = pin?.slice('pinned:'.length).trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+  return /^(true|yes|1)$/i.test(value ?? '');
+}
 
 function wireScreen() {
   const back = () => {

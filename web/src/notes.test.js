@@ -196,6 +196,29 @@ test('connected live updates and saved notifications still replace the note with
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
+test('a live pin from another device is the starting state for the next toggle', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  const writes = [];
+  api.noteMeta = async (name, changes) => {
+    writes.push([name, changes]);
+    return (current = { ...current, pinned: changes.pinned, content: original, hash: 'unpinned' });
+  };
+  notes.setDraftOwner('scratch');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const frontmatter = "\uFEFF---\npinned: false\npinned: 'YES'\n---  \n";
+  current = { ...current, pinned: true, content: frontmatter + original, hash: 'remote-pin' };
+  remoteInsert(0, frontmatter);
+  toClient({ t: 'saved', hash: current.hash, dirty: false });
+  await tick();
+  expect(notes.openNoteInfo().pinned).toBe(true);
+  await notes.toggleOpenPin();
+  expect(writes).toEqual([[path, { pinned: false, expected_subject: 'scratch' }]]);
+});
+
 test('a newly saved plain live note leaves no draft when Android later saves offline edits', async () => {
   useLive = true;
   firstCreate = true;
