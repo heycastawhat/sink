@@ -1247,6 +1247,7 @@ function startLive() {
     onSaved: (hash) => {
       if (screen.live !== session) return;
       screen.hash = hash;
+      syncLookFromText(screen.editor.getText());
       if (!session.pending()) {
         screen.saved = screen.editor.getText();
         clearLiveDraft();
@@ -1276,6 +1277,7 @@ function mountEditor(text) {
   $('note-editor').innerHTML = '';
   $('note-screen').classList.remove('board');
   screen.live = startLive();
+  screen.frontmatter = frontmatterOf(text);
   renderPeople($('note-people'), []);
   screen.editor = createEditor({
     parent: $('note-editor'),
@@ -1283,6 +1285,7 @@ function mountEditor(text) {
     extensions: screen.live.extension,
     onChange: () => {
       showFileName();
+      syncLookFromText(screen.editor.getText());
       document.dispatchEvent(new CustomEvent('sink:edit'));
       if (live()) {
         // The server saves. Offline, the text is kept here too, in case the tab closes before it's back.
@@ -2056,9 +2059,40 @@ async function setMeta(changes) {
   if (dirty()) save();
 }
 
-const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/;
+const FRONTMATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 const frontmatterOf = (text) => FRONTMATTER.exec(text)?.[0] ?? '';
 const bodyOf = (text) => text.slice(frontmatterOf(text).length);
+
+/** Pin, private and colour read from YAML frontmatter (mirrors server/src/notes.ts readFrontmatter). */
+function frontmatterMeta(text) {
+  const m = FRONTMATTER.exec(text);
+  const out = { pinned: false, private: false, color: null };
+  if (!m) return out;
+  const unquote = (s) => s.trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^(\w[\w-]*):\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    const val = unquote(kv[2]);
+    if (kv[1] === 'pinned') out.pinned = /^(true|yes|1)$/i.test(val);
+    if (kv[1] === 'private') out.private = /^(true|yes|1)$/i.test(val);
+    if (kv[1] === 'color') {
+      const c = val.toLowerCase();
+      if (COLORS.includes(c)) out.color = c;
+    }
+  }
+  return out;
+}
+
+/** Keeps the open note's pin, tint and privacy look in step when frontmatter changes in the editor (e.g. live sync). */
+function syncLookFromText(text) {
+  const fm = frontmatterOf(text);
+  if (fm === screen.frontmatter) return;
+  screen.frontmatter = fm;
+  const meta = frontmatterMeta(text);
+  if (meta.pinned === screen.pinned && meta.private === screen.private && meta.color === screen.color) return;
+  Object.assign(screen, meta);
+  applyLook();
+}
 
 function wireScreen() {
   const back = () => {
