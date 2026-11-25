@@ -10,7 +10,7 @@
 //   SinkBridge.haptic(kind)                 tick, confirm, reject or toggle (haptics.js; the WebView can't vibrate)
 //   SinkBridge.embed(target)                ![[Note]] needs that note; reply with sink.embed(target, note or null)
 //   SinkBridge.live(state)                  live editing's state, JSON: { status, kind, bound, pending, unavailable,
-//                                           hash, saved }: while `bound`, edits sync live and the app doesn't save them;
+//                                           path, hash, saved }: while `bound`, edits sync live and the app doesn't save them;
 //                                           `saved` is the text the server has written (when nothing is pending)
 //   SinkBridge.liveOpen(path)  liveSend(text)  liveSendBinary(base64)  liveClose()
 //                                           the live socket, which the app opens to the server with its token; it
@@ -87,6 +87,7 @@ const loadEmbed = (target) =>
 
 let editor = null;
 let session = null;
+let livePath = null;
 let liveSocket = null;
 const loadingText = deferredEditorText();
 let links = [];
@@ -263,11 +264,12 @@ window.sink = {
 
 /** Live editing for the note (live.js), over a socket the app keeps to the server. */
 function startLive(path, { saved, hash }) {
+  livePath = path;
   return liveSession({
     base: { text: saved, hash },
-    url: () => `/api/live?path=${encodeURIComponent(path)}`,
+    url: () => `/api/live?path=${encodeURIComponent(livePath)}`,
     // Renamed or moved (here or elsewhere): reconnect to it where it is now.
-    onMoved: (to) => (path = to),
+    onMoved: (to) => (livePath = to),
     socket(url) {
       liveSocket?.close();
       const socket = {
@@ -312,6 +314,7 @@ function liveState() {
     pending,
     gone: liveGone,
     unavailable: !session || session.unavailable,
+    path: session ? livePath : null,
     hash: session?.hash ?? null,
     saved: !pending && session?.bound && editor ? editor.getText() : null,
   };

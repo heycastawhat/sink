@@ -389,7 +389,11 @@ fun NoteScreen(
         val theirs = result.theirs
         val copy = result.copy
         ed.adoptConflict(result)
-        status = if (ed.dirty) "Editing…" else "Saved"
+        status = when {
+            copy != null -> "Conflict"
+            ed.dirty -> "Editing…"
+            else -> "Saved"
+        }
         if (!ed.closed && copy != null) {
             haptics.reject()
             val message = if (ed.path == copy.path) {
@@ -535,6 +539,9 @@ fun NoteScreen(
         if (s.status.isNotEmpty()) status = s.status
         // Written by the server: the pair a fallback save (see flush) is checked against.
         if (s.saved != null && s.hash != null) {
+            if (s.path != null && s.path == ed.path && (s.hash != ed.hash || s.saved != ed.saved)) {
+                store.saveLiveRevision(s.path, s.hash, s.saved)
+            }
             ed.hash = s.hash
             ed.saved = s.saved
             ed.current = s.saved
@@ -1115,7 +1122,7 @@ fun NoteScreen(
                     Column(Modifier.weight(1f).padding(start = 4.dp)) {
                         Text(name, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            listOf(where, status).filter { it.isNotEmpty() }.joinToString(" · "),
+                            listOf(where, ed.toolbarStatus(status)).filter { it.isNotEmpty() }.joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall,
                             color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,

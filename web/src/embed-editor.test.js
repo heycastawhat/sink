@@ -16,7 +16,10 @@ const create = (options) => {
     text = asEditorText(value);
     options.onChange?.(text);
   };
-  return { getText: () => text, setText: type, destroy() {} };
+  const livePlugin = options.extensions?.at(-1)?.create?.({
+    state: EditorState.create({ doc: text, extensions: options.extensions }),
+  });
+  return { getText: () => text, setText: type, destroy() { livePlugin?.destroy(); } };
 };
 mock.module('./editor.js', () => ({ createEditor: create }));
 mock.module('./board.js', () => ({ createBoard: create }));
@@ -55,6 +58,27 @@ test('image height follows the measured viewport, ignoring transient zero-height
 const original = '---\ncolor: green\n---\nRemember to walk today.\n';
 const pinned = '---\ncolor: green\npinned: true\n---\nRemember to walk today.\n';
 const blue = '---\ncolor: blue\n---\nRemember to walk today.\n';
+
+test('the Android live state names the current room after a move', async () => {
+  const previousLocation = globalThis.location;
+  globalThis.location = new URL('https://appassets.androidplatform.net/editor.html');
+  const states = [];
+  window.SinkBridge.liveOpen = () => {};
+  window.SinkBridge.liveClose = () => {};
+  window.SinkBridge.live = (raw) => states.push(JSON.parse(raw));
+  try {
+    await sink.load({ text: original, path: 'Before.md', live: { saved: original, hash: 'old' } });
+    sink.live.text(JSON.stringify({ t: 'saved', hash: 'old', dirty: false }));
+    expect(states.at(-1).path).toBe('Before.md');
+
+    sink.live.text(JSON.stringify({ t: 'moved', path: 'Folder/After.md' }));
+    sink.live.text(JSON.stringify({ t: 'saved', hash: 'new', dirty: false }));
+    expect(states.at(-1)).toMatchObject({ path: 'Folder/After.md', hash: 'new' });
+  } finally {
+    sink.retireLive();
+    globalThis.location = previousLocation;
+  }
+});
 
 async function delayed(updates) {
   let finish;

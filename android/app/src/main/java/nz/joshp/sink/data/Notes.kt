@@ -30,6 +30,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.ByteString.Companion.encodeUtf8
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -441,8 +442,10 @@ data class PendingEdit(
 private const val DEFAULT_PLUGINS =
     """[{"id":"diagrams","bundled_client":true},{"id":"math","bundled_client":true},{"id":"daily","bundled_client":true}]"""
 
-class NoteStore(context: Context) {
-    private val dir = File(context.filesDir, "notes").apply { mkdirs() }
+class NoteStore internal constructor(filesDir: File) {
+    constructor(context: Context) : this(context.filesDir)
+
+    private val dir = File(filesDir, "notes").apply { mkdirs() }
     private val notesDir = File(dir, "content").apply { mkdirs() }
     private val pendingDir = File(dir, "pending").apply { mkdirs() }
     private val listFile = File(dir, "list.json")
@@ -477,6 +480,15 @@ class NoteStore(context: Context) {
 
     fun note(path: String): Note? = runCatching { json.decodeFromString<Note>(File(notesDir, id(path)).readText()) }.getOrNull()
     fun saveNote(note: Note) = atomic(File(notesDir, id(note.path)), json.encodeToString(Note.serializer(), note))
+
+    internal fun saveLiveRevision(path: String, hash: String, content: String) {
+        val cached = note(path) ?: return
+        if (hash == cached.hash) return
+        // On reconnect, the room can announce its hash before the new text reaches the editor.
+        if (content.encodeUtf8().sha256().hex() != hash) return
+        runCatching { saveNote(cached.copy(hash = hash, content = content)) }
+    }
+
     fun forget(path: String) {
         File(notesDir, id(path)).delete()
     }
