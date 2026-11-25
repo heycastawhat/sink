@@ -1245,7 +1245,7 @@ function startLive(resume) {
   const stash = screen.path && readUnsaved(screen.path);
   // A failed conflict copy belongs to another version, not to the editor joining this session: it stays for the next
   // open to retry, until typing here stashes over it.
-  screen.retainedDraft = stash && stash.base !== screen.hash && normalizeLineEndings(stash.text) !== screen.saved ? rawUnsaved(screen.path) : null;
+  screen.retainedDraft = stash && stash.base !== screen.hash ? rawUnsaved(screen.path) : null;
   const session = liveSession({
     start: !!screen.path,
     base: { text: screen.saved, hash: screen.hash },
@@ -1492,10 +1492,14 @@ export async function openNote(path, { line } = {}) {
     let resume;
     // Unsaved edits from last time, made on this exact version: bring them back.
     const stash = readUnsaved(note.path);
-    if (stash && normalizeLineEndings(stash.text) !== content) {
-      if (stash.base === note.hash) {
-        text = normalizeLineEndings(stash.text);
-        if (liveDraft && liveDraft.stash === rawUnsaved(note.path)) resume = liveDraft.snapshot;
+    if (stash) {
+      const draftText = normalizeLineEndings(stash.text);
+      const matchingBase = stash.base === note.hash;
+      if (matchingBase && liveDraft && liveDraft.stash === rawUnsaved(note.path)) resume = liveDraft.snapshot;
+      if (draftText === content && !resume) {
+        if (!offline || matchingBase) clearUnsaved(note.path);
+      } else if (matchingBase) {
+        text = draftText;
         toast('Restored unsaved changes');
       } else if (!offline) {
         // The note changed elsewhere since: keep them as a sibling note, like a conflict.
@@ -1509,7 +1513,7 @@ export async function openNote(path, { line } = {}) {
           if (err instanceof Unauthorized) throw err;
         }
       }
-    } else if (stash) clearUnsaved(note.path);
+    }
     if (seq !== openSeq) return;
     const mount = async () => {
       if (isBoardPath(note.path)) await mountBoard(text);

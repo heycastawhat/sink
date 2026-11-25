@@ -290,6 +290,37 @@ test('reopening a draft offline does not replay a live edit the server already s
   expect(copies).toHaveLength(0);
 });
 
+test('cached text matching a revert from a newer revision does not erase the draft', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  const fetchNote = api.note;
+  await notes.openNote(path);
+  await notes.closeNote();
+
+  current = { ...current, hash: 'newer', content: original + '\nNewer server text' };
+  const key = 'sink:unsaved:' + path;
+  const draft = JSON.stringify({ base: current.hash, text: original });
+  storage.set(key, draft);
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(original);
+  expect(storage.get(key)).toBe(draft);
+  hello();
+  await tick();
+  expect(notes.openNoteInfo().text).toBe(current.content);
+  expect(storage.get(key)).toBe(draft);
+
+  api.note = fetchNote;
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(original);
+  hello({ reuseRoom: true });
+  await tick();
+  expect(room.getText('t').toString()).toBe(original);
+  expect(copies).toHaveLength(0);
+});
+
 test('leaving a newly saved live note before the first connection keeps no saved draft', async () => {
   useLive = true;
   firstCreate = true;
