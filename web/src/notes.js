@@ -38,6 +38,19 @@ function savePendingMeta(owner, queue) {
   else localStorage.removeItem(metaQueueKey(owner));
 }
 
+function pendingLook(path) {
+  if (draftOwner != null && path) {
+    try {
+      return pendingMeta(draftOwner).get(path);
+    } catch {}
+  }
+}
+
+function redrawPin(path) {
+  renderGrid();
+  if (path === screen.path && screen.editor) applyLook();
+}
+
 function serializeMeta(task) {
   const run = metaWrites.then(task);
   metaWrites = run.catch(() => {});
@@ -63,6 +76,7 @@ async function sendQueuedMeta(owner, path, changes) {
   if (JSON.stringify(queue.get(path)) === JSON.stringify(changes)) {
     queue.delete(path);
     savePendingMeta(owner, queue);
+    if ('pinned' in changes) redrawPin(path);
   }
 }
 
@@ -81,17 +95,23 @@ function retryPendingMeta() {
   }).catch((err) => toast(err.message));
 }
 
-function changeMeta(path, changes) {
+function changeMeta(path, changes, toggle = false) {
   const owner = draftOwner;
   return serializeMeta(async () => {
     if (owner !== draftOwner) return;
-    if (owner == null || !isQueuedMeta(changes)) {
+    if (owner == null || (!toggle && !isQueuedMeta(changes))) {
+      if (toggle) changes = { pinned: !(screen.path === path ? screen.pinned : noteOf(path)?.pinned) };
       return writeMeta(path, changes);
     }
     const queue = pendingMeta(owner);
+    if (toggle) {
+      const pinned = queue.get(path)?.pinned ?? (screen.path === path ? screen.pinned : noteOf(path)?.pinned);
+      changes = { pinned: !pinned };
+    }
     const next = { ...queue.get(path), ...changes };
     queue.set(path, next);
     savePendingMeta(owner, queue);
+    if ('pinned' in changes) redrawPin(path);
     await sendQueuedMeta(owner, path, next);
     if (pendingMeta(owner).has(path)) {
       toast('Pin or colour change will sync when connected');
@@ -442,7 +462,14 @@ function renderGrid() {
       : prefs.hideFoldered
         ? folderOf(n.path) === state.folder
         : !state.folder || n.path.startsWith(state.folder + '/');
-  const list = (state.results ?? state.notes).filter(inFolder);
+  let queue;
+  try {
+    if (draftOwner != null) queue = pendingMeta(draftOwner);
+  } catch {}
+  const list = (state.results ?? state.notes).filter(inFolder).map((n) => {
+    const pinned = queue?.get(n.path)?.pinned;
+    return pinned === undefined ? n : { ...n, pinned };
+  });
   const docs = (state.results ? (state.fileResults ?? []) : state.files).filter(inFolder);
 
   renderFolderBar();
@@ -1058,6 +1085,7 @@ async function trashCard(path) {
 function openCardMenu(path, x, y, { colours = false } = {}) {
   const n = noteOf(path) ?? fileOf(path);
   if (!n) return;
+  const pinned = pendingLook(path)?.pinned ?? n.pinned;
   const menu = $('card-menu');
   const item = (act, icon, label, cls = '') => `<button class="new-item${cls}" role="menuitem" data-card-act="${act}">${ic(icon)}<span>${label}</span></button>`;
   if (isPdf(path)) colours = false;
@@ -1077,7 +1105,7 @@ function openCardMenu(path, x, y, { colours = false } = {}) {
     : item('open', 'open_in_new', 'Open') +
       item('window', 'tab', 'Open in new window') +
       '<hr class="menu-divider" />' +
-      item('pin', 'push_pin', n.pinned ? 'Unpin' : 'Pin') +
+      item('pin', 'push_pin', pinned ? 'Unpin' : 'Pin') +
       `<div class="new-item card-menu-label">${ic('palette')}<span>Colour</span></div>` +
       swatches +
       item('move', 'drive_file_move', 'Move to folder…') +
@@ -1116,7 +1144,10 @@ async function runCardAct(act, path, from) {
   }
   if (act === 'open') openFromApp(noteHash(path));
   if (act === 'window') window.open(noteHash(path), '_blank', 'noopener');
-  if (act === 'pin') cardMeta(path, { pinned: !n.pinned });
+  if (act === 'pin') {
+    if (screen.path === path) toggleOpenPin();
+    else changeMeta(path, {}, true);
+  }
   if (act === 'move') moveCard(path);
   if (act === 'copy') copyCard(path);
   if (act === 'archive') archiveCard(path);
@@ -1146,8 +1177,11 @@ function wireCardActions() {
     if (!card || !desk() || acts.parentNode === card) return;
     if (isPdf(card.dataset.path)) return acts.remove();
     const n = noteOf(card.dataset.path);
-    acts.querySelector('[data-card-act="pin"] m3e-icon').toggleAttribute('filled', !!n?.pinned);
-    acts.querySelector('[data-card-act="pin"]').title = n?.pinned ? 'Unpin' : 'Pin';
+    const pinned = pendingLook(card.dataset.path)?.pinned ?? n?.pinned;
+    const pin = acts.querySelector('[data-card-act="pin"]');
+    pin.querySelector('m3e-icon').toggleAttribute('filled', !!pinned);
+    pin.title = pinned ? 'Unpin' : 'Pin';
+    pin.setAttribute('aria-label', pin.title);
     card.append(acts);
   });
   acts.addEventListener('click', (e) => {
@@ -1449,9 +1483,10 @@ function clearLiveDraft() {
 
 function applyLook() {
   const el = $('note-screen');
+  const pinned = pendingLook(screen.path)?.pinned ?? screen.pinned;
   el.className = `note-screen${screen.color ? ` c-${screen.color}` : ''}${isBoardPath(screen.path) ? ' board' : ''}${el.classList.contains('expanded') ? ' expanded' : ''}`;
-  $('note-pin').innerHTML = ic('push_pin', '', screen.pinned ? ' filled' : '');
-  $('note-pin').setAttribute('aria-label', screen.pinned ? 'Unpin' : 'Pin');
+  $('note-pin').innerHTML = ic('push_pin', '', pinned ? ' filled' : '');
+  $('note-pin').setAttribute('aria-label', pinned ? 'Unpin' : 'Pin');
   const archived = /^archive\//i.test(screen.path ?? '');
   $('note-archive').querySelector('m3e-icon').setAttribute('name', archived ? 'unarchive' : 'archive');
   $('note-archive').querySelector('span').textContent = archived ? 'Unarchive' : 'Archive';
@@ -1476,7 +1511,7 @@ export const openNoteInfo = () => ({
   path: screen.path,
   folder: screen.folder,
   color: screen.color,
-  pinned: screen.pinned,
+  pinned: pendingLook(screen.path)?.pinned ?? screen.pinned,
   board: isBoardPath(screen.path),
   text: screen.editor?.getText() ?? '',
 });
@@ -1484,6 +1519,7 @@ export const allNotes = () => state.notes;
 export const allFolders = () => state.folders.filter(shownFolder);
 export const currentFolder = () => state.folder;
 export const setOpenMeta = (changes) => setMeta(changes);
+export const toggleOpenPin = () => setMeta({}, true);
 export const goToLine = (line) => screen.editor?.goToLine(line);
 export const formatNote = (kind) => screen.editor?.format?.(kind);
 export const insertImages = (files) => screen.editor?.insertFiles?.(files);
@@ -2098,7 +2134,7 @@ export async function closeNote() {
 
 export const noteIsOpen = () => opening || !$('note-screen').hidden;
 
-async function setMeta(changes) {
+async function setMeta(changes, toggle = false) {
   await flush();
   if (!screen.path) {
     // A draft gets saved first so there's a file to pin.
@@ -2106,7 +2142,7 @@ async function setMeta(changes) {
     await save();
     if (!screen.path) return;
   }
-  await changeMeta(screen.path, changes);
+  await changeMeta(screen.path, changes, toggle);
 }
 
 async function writeMeta(path, changes, owner) {
@@ -2200,7 +2236,7 @@ function wireScreen() {
       flush();
     }
   });
-  $('note-pin').addEventListener('click', () => setMeta({ pinned: !screen.pinned }));
+  $('note-pin').addEventListener('click', toggleOpenPin);
   // Private: assistants (MCP) and the browser extension can't see the note, its todos or what only it embeds.
   $('note-private').addEventListener('click', async () => {
     const hide = !screen.private;

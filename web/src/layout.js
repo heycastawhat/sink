@@ -375,7 +375,7 @@ function wireInfo() {
   box.addEventListener('click', (e) => {
     const colour = e.target.closest('[data-info-color]');
     if (colour) return notes.setOpenMeta({ color: colour.dataset.infoColor || null });
-    if (e.target.closest('[data-info-pin]')) return notes.setOpenMeta({ pinned: !notes.openNoteInfo().pinned });
+    if (e.target.closest('[data-info-pin]')) return notes.toggleOpenPin();
     if (e.target.closest('[data-info-history]')) return $('note-history').click();
     const heading = e.target.closest('[data-line]');
     if (heading) return notes.goToLine(Number(heading.dataset.line));
@@ -528,4 +528,3 @@ export async function startLayout() {
   }
   if (!prefs.layoutChosen && WIDE.matches) askLayout();
 }
-

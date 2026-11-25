@@ -453,6 +453,18 @@ test('replays queued pin and colour for the signed-in account when the stream re
   }
 });
 
+test('two offline pin taps toggle the queued value rather than the old server value', async () => {
+  const { api } = await import('./api.js');
+  api.noteMeta = async () => { throw new TypeError('Failed to fetch'); };
+  notes.setDraftOwner('scratch');
+  await notes.openNote(path);
+  await notes.toggleOpenPin();
+  expect(notes.openNoteInfo().pinned).toBe(true);
+  await notes.toggleOpenPin();
+  expect(notes.openNoteInfo().pinned).toBe(false);
+  expect(JSON.parse(storage.get('sink:pending-meta:scratch'))).toEqual([[path, { pinned: false }]]);
+});
+
 test('a queued pin waits for a closed note’s offline body draft before changing its hash', async () => {
   const { api } = await import('./api.js');
   const mine = original + '\nOffline body edit';
