@@ -214,6 +214,55 @@ test('a newly saved plain live note leaves no draft when Android later saves off
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
+test('offline reopen keeps the last live save and its unsaved draft through Back until reconnect', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const added = '\nSaved while live';
+  remoteInsert(original.length, added);
+  await tick();
+  current = { ...current, content: original + added, hash: 'live-save' };
+  toClient({ t: 'saved', hash: current.hash, dirty: false });
+  await tick();
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  socket.close();
+  socket.onclose();
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(current.content);
+
+  const mine = current.content + '\nTyped offline';
+  editor.setText(mine);
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(mine);
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(mine);
+  expect(JSON.parse(storage.get('sink:unsaved:' + path))).toMatchObject({ base: current.hash, text: mine });
+
+  hello();
+  await tick();
+  expect(room.getText('t').toString()).toBe(mine);
+  toClient({ t: 'saved', hash: 'after-reconnect', dirty: false });
+  await tick();
+  expect(copies).toHaveLength(0);
+  expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
+test('a note deleted on the server does not reopen from a previously saved revision', async () => {
+  const { api, ApiError } = await import('./api.js');
+  await notes.openNote(path);
+  await notes.closeNote();
+  api.note = async () => { throw new ApiError(404); };
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().open).toBe(false);
+  expect(messages.at(-1)).toBe('That note is gone');
+});
+
 test('leaving a newly saved live note before the first connection keeps no saved draft', async () => {
   useLive = true;
   firstCreate = true;

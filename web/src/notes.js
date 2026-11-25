@@ -21,12 +21,14 @@ const SAVE_DELAY = 700;
 // The open note is checked this often too, in case the live change stream is down.
 const POLL_MS = 30_000;
 const draftKey = (path) => `sink:unsaved:${path}`;
+const recentRevisions = new Map();
 let draftOwner = null;
 const newDraftPrefix = 'sink:new-draft:';
 const newDraftKey = (id) => newDraftPrefix + JSON.stringify([draftOwner, id]);
 const validDraftId = (id) => /^\d+-[a-z0-9]+$/.test(id ?? '');
 
 export function setDraftOwner(subject) {
+  if (subject !== draftOwner) recentRevisions.clear();
   draftOwner = subject;
 }
 
@@ -746,6 +748,7 @@ async function moveNoteTo(path, folder) {
   const to = (folder ? folder + '/' : '') + path.split('/').pop();
   try {
     const moved = await api.moveNote(path, to);
+    recentRevisions.delete(path);
     clearUnsaved(path);
     opened.rename(path, moved.path);
     return moved.path;
@@ -977,6 +980,7 @@ async function trashCard(path) {
   if (screen.path === path) return $('note-delete').click();
   try {
     const { trashed_to } = await api.trashNote(path);
+    recentRevisions.delete(path);
     clearUnsaved(path);
     toast('Moved to trash', { action: 'Undo', onAction: () => restore(trashed_to) });
     loadNotes();
@@ -1131,6 +1135,14 @@ const screen = {
   retainedDraft: null, // the stash of a conflict copy that failed on opening, kept while live saves clear the rest
 };
 
+// Keep a few saved revisions in this tab for Back → reopen, not in the service worker's shared shell cache.
+function rememberRevision(mtime = Date.now()) {
+  const { path, hash, saved: content, pinned, private: isPrivate, color } = screen;
+  recentRevisions.delete(path);
+  recentRevisions.set(path, { path, hash, content, pinned, private: isPrivate, color, mtime });
+  if (recentRevisions.size > 20) recentRevisions.delete(recentRevisions.keys().next().value);
+}
+
 /** The live session, once it's started and unless the server turned it down: then the server saves, not us. */
 const live = () => (screen.live?.started && !screen.live.unavailable ? screen.live : null);
 const dirty = () => {
@@ -1246,9 +1258,11 @@ function startLive() {
     },
     onSaved: (hash) => {
       if (screen.live !== session) return;
-      screen.hash = hash;
-      if (!session.pending()) {
+      if (session.bound && !session.pending()) {
+        const mtime = hash === screen.hash ? recentRevisions.get(screen.path)?.mtime : undefined;
+        screen.hash = hash;
         screen.saved = screen.editor.getText();
+        rememberRevision(mtime);
         clearLiveDraft();
       }
     },
@@ -1256,6 +1270,7 @@ function startLive() {
       if (screen.live !== session) return;
       // Deleted elsewhere: carry on the old way, where the next save keeps the text as a new note.
       screen.live = null;
+      recentRevisions.delete(screen.path);
       screen.saved = '';
       renderPeople($('note-people'), []);
       setStatus('Deleted elsewhere', 'error');
@@ -1455,19 +1470,30 @@ export async function openNote(path, { line } = {}) {
   if (!grow) showScreen();
   setStatus('Opening…');
   try {
-    const note = await api.note(path);
+    let note;
+    let offline = false;
+    try {
+      note = await api.note(path);
+    } catch (err) {
+      if (seq !== openSeq) return;
+      if (err.status === 404) recentRevisions.delete(path);
+      if (!(err instanceof TypeError) || !recentRevisions.has(path)) throw err;
+      note = recentRevisions.get(path);
+      offline = true;
+    }
     if (seq !== openSeq) return;
-    note.content = normalizeLineEndings(note.content);
-    Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color, fresh: false });
+    const content = normalizeLineEndings(note.content);
+    Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: content, pinned: note.pinned, private: note.private, color: note.color, fresh: false });
+    rememberRevision(note.mtime);
     opened.touch(note.path);
-    let text = note.content;
+    let text = content;
     // Unsaved edits from last time, made on this exact version: bring them back.
     const stash = readUnsaved(note.path);
-    if (stash && normalizeLineEndings(stash.text) !== note.content) {
+    if (stash && normalizeLineEndings(stash.text) !== content) {
       if (stash.base === note.hash) {
         text = normalizeLineEndings(stash.text);
         toast('Restored unsaved changes');
-      } else {
+      } else if (!offline) {
         // The note changed elsewhere since: keep them as a sibling note, like a conflict.
         // If that fails too (still offline), the stash stays for next time and the note opens anyway.
         try {
@@ -1493,11 +1519,12 @@ export async function openNote(path, { line } = {}) {
       });
     } else await mount();
     renderBacklinks(note.path);
-    if (text !== note.content) save();
+    if (text !== content) save();
+    else if (offline) setStatus('Offline');
     else setStatus(`Edited ${relative(note.mtime)}`);
     if (line != null) screen.editor.goToLine(line);
     // Ready to type at the end, except on touch screens where focusing would throw the keyboard up.
-    else if (!note.content.trim() || !matchMedia('(pointer: coarse)').matches) screen.editor.focus(true);
+    else if (!content.trim() || !matchMedia('(pointer: coarse)').matches) screen.editor.focus(true);
     startPolling();
   } catch (err) {
     if (err instanceof Unauthorized) throw err;
@@ -1778,7 +1805,7 @@ async function doSave() {
   if (!screen.editor) return;
   const session = live();
   if (session) {
-    if (await session.flush()) {
+    if (await session.flush() && !session.pending()) {
       screen.saved = screen.editor.getText();
       clearLiveDraft();
     }
@@ -1795,6 +1822,7 @@ async function doSave() {
       clearNewDraft();
       renderDrafts();
       Object.assign(screen, { path: created.path, hash: created.hash, saved: text });
+      rememberRevision(created.mtime);
       if (location.hash === draftHash(screen.folder, screen.draftId)) history.replaceState(history.state, '', noteHash(created.path));
       applyLook();
       // A file now: open to live editing (anything typed while it was being made is sent along when it connects).
@@ -1802,6 +1830,7 @@ async function doSave() {
     } else {
       const saved = await api.saveNote(screen.path, text, screen.hash);
       Object.assign(screen, { hash: saved.hash, saved: text });
+      rememberRevision(saved.mtime);
     }
     afterSave();
   } catch (err) {
@@ -1842,6 +1871,7 @@ async function resolveConflict(mine, current) {
   if (current) current.content = normalizeLineEndings(current.content);
   if (current && current.content === mine) {
     Object.assign(screen, { hash: current.hash, saved: mine });
+    rememberRevision(current.mtime);
     return afterSave();
   }
   buzz('warn');
@@ -1853,11 +1883,13 @@ async function resolveConflict(mine, current) {
     clearUnsaved(path);
     if (current && screen.editor.getText() === mine) {
       Object.assign(screen, { hash: current.hash, saved: current.content, pinned: current.pinned, private: current.private, color: current.color });
+      rememberRevision(current.mtime);
       screen.editor.setText(current.content);
     } else {
       // The original was deleted, or more text arrived while creating the copy. Keep editing the copy.
       if (location.hash.split('?')[0] === noteHash(path)) history.replaceState(history.state, '', noteHash(copy.path));
       Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine, pinned: copy.pinned, private: copy.private, color: copy.color });
+      rememberRevision(copy.mtime);
     }
     applyLook();
     toast(`Changed somewhere else. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
@@ -1882,6 +1914,7 @@ async function refreshOpenNote() {
     // Only if nothing happened meanwhile: another note opened, a save landed, or typing started.
     if (note.hash !== hash && screen.path === path && screen.hash === hash && !screen.saving && !dirty()) {
       Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color });
+      rememberRevision(note.mtime);
       screen.editor.setText(note.content);
       applyLook();
       setStatus(`Updated ${relative(note.mtime)}`);
@@ -1913,6 +1946,8 @@ export function listenForChanges() {
     } catch {
       return;
     }
+    if (change.type === 'note.deleted') recentRevisions.delete(change.path);
+    if (change.type === 'note.moved') recentRevisions.delete(change.from);
     // Moved elsewhere (another tab, the phone, Obsidian): follow it, or the next save would hit the old path.
     if (screen.path && change.type === 'note.moved' && change.from === screen.path) {
       opened.rename(screen.path, change.path);
@@ -2048,6 +2083,7 @@ async function setMeta(changes) {
     const current = loadingText.read(screen.editor, screen.saved);
     const text = current !== screen.saved ? frontmatterOf(note.content) + bodyOf(current) : note.content;
     Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color });
+    rememberRevision(note.mtime);
     if (text !== current) loadingText.replace(screen.editor, text);
     applyLook();
   })();
@@ -2227,6 +2263,7 @@ function wireScreen() {
     if (to === screen.path) return;
     try {
       const { path } = await api.moveNote(screen.path, to);
+      recentRevisions.delete(screen.path);
       clearUnsaved(screen.path);
       relocate(path);
     } catch (err) {
@@ -2293,6 +2330,7 @@ function wireScreen() {
       // keep_version: what's here now becomes a version too, so a restore can itself be undone from this list.
       const saved = await api.saveNote(path, text, screen.hash, {}, { keep_version: true });
       Object.assign(screen, { hash: saved.hash, saved: text });
+      rememberRevision(saved.mtime);
       screen.editor.setText(text);
       setStatus('Restored');
       toast('Restored that version. The text it replaced is in the history too.');
@@ -2321,6 +2359,7 @@ function wireScreen() {
     await flush();
     try {
       const { trashed_to } = await api.trashNote(screen.path);
+      recentRevisions.delete(screen.path);
       clearUnsaved(screen.path);
       screen.saved = screen.editor.getText();
       toast('Moved to trash', { action: 'Undo', onAction: () => restore(trashed_to) });
