@@ -77,14 +77,20 @@ beforeEach(async () => {
   globalThis.sessionStorage = globalThis.localStorage;
   globalThis.history = { replaceState(_state, _title, hash) { location.hash = hash; } };
   const elements = new Map();
-  const element = () => ({
-    hidden: false,
-    dataset: {},
-    classList: { add() {}, remove() {}, contains: () => false },
-    setAttribute() {},
-    querySelector: () => element(),
-    querySelectorAll: () => [],
-  });
+  const element = () => {
+    const attrs = {};
+    return {
+      hidden: false,
+      className: '',
+      innerHTML: '',
+      attrs,
+      dataset: {},
+      classList: { add() {}, remove() {}, contains: () => false },
+      setAttribute(name, value) { attrs[name] = value; },
+      querySelector: () => element(),
+      querySelectorAll: () => [],
+    };
+  };
   globalThis.document = {
     getElementById(id) {
       if (id === 'notes') return null;
@@ -440,4 +446,48 @@ test('reverting an edit to saved text removes the draft, including an empty note
   expect(storage.has('sink:unsaved:' + path)).toBe(true);
   editor.setText('');
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
+test('remote live frontmatter changes update pin, colour and privacy on the open PWA note', async () => {
+  useLive = true;
+  liveStream();
+  current = { ...current, pinned: false, private: false, color: null };
+  await notes.openNote(path);
+  hello();
+  await tick();
+  expect(notes.openNoteInfo().pinned).toBe(false);
+  expect(notes.openNoteInfo().color).toBeNull();
+  expect(document.getElementById('note-pin').attrs['aria-label']).toBe('Pin');
+
+  const fm = '---\npinned: true\ncolor: green\n---\n';
+  remoteInsert(0, fm);
+  await tick();
+  expect(notes.openNoteInfo().pinned).toBe(true);
+  expect(notes.openNoteInfo().color).toBe('green');
+  expect(document.getElementById('note-screen').className).toContain('c-green');
+  expect(document.getElementById('note-pin').attrs['aria-label']).toBe('Unpin');
+  expect(document.getElementById('note-pin').innerHTML).toContain(' filled');
+
+  // Removing frontmatter clears pin and colour live.
+  room.getText('t').delete(0, fm.length);
+  toClient({ t: 'dirty' });
+  await tick();
+  expect(notes.openNoteInfo().pinned).toBe(false);
+  expect(notes.openNoteInfo().color).toBeNull();
+  expect(document.getElementById('note-screen').className).not.toContain('c-green');
+  expect(document.getElementById('note-pin').attrs['aria-label']).toBe('Pin');
+});
+
+test('remote frontmatter arriving on live hello updates the open PWA note look', async () => {
+  useLive = true;
+  liveStream();
+  current = { ...current, pinned: false, private: false, color: null };
+  await notes.openNote(path);
+  current = { ...current, content: '---\npinned: "YES"\ncolor: \'Blue\'\n---\n' + original, hash: 'android-meta', pinned: true, color: 'blue' };
+  hello();
+  await tick();
+  expect(notes.openNoteInfo().pinned).toBe(true);
+  expect(notes.openNoteInfo().color).toBe('blue');
+  expect(document.getElementById('note-screen').className).toContain('c-blue');
+  expect(document.getElementById('note-pin').attrs['aria-label']).toBe('Unpin');
 });
