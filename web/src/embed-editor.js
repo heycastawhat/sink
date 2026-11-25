@@ -155,6 +155,11 @@ window.sink = {
     }
     loadingText.replace(editor, text);
   },
+  setTextIfUnchanged(expected, text) {
+    if (editor && editor.getText() !== expected) return false;
+    loadingText.replace(editor, text);
+    return true;
+  },
   insert(text) {
     if (!editor) return;
     const view = editor.view;
@@ -202,10 +207,18 @@ window.sink = {
   keepVersion() {
     session?.keepVersion();
   },
-  startLive({ saved, hash }) {
-    if (liveRetired) return;
+  startLive({ saved, hash, expected, replace } = {}) {
+    if (liveRetired) return false;
+    if (replace != null) {
+      if (editor && editor.getText() !== expected) {
+        this.retireLive();
+        return false;
+      }
+      loadingText.replace(editor, replace);
+    }
     if (session) session.start({ text: saved, hash });
     else pendingLive = { saved, hash };
+    return true;
   },
   retireLive() {
     liveRetired = true;

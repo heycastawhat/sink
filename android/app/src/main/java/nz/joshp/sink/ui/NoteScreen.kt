@@ -714,6 +714,9 @@ fun NoteScreen(
         }
         store.saveNote(n)
         if (ed.loaded && editorLoaded && pending == null) readEditor(flush = false)
+        val prevHash = ed.hash
+        val prevSaved = ed.saved
+        val prevCurrent = ed.current
         val outcome = applyFreshNote(
             ed = ed,
             fresh = n,
@@ -725,16 +728,37 @@ fun NoteScreen(
         )
         if (outcome.applyMeta) applyMeta(n)
         outcome.status?.let { status = it }
+        val revertStaleRefresh = {
+            ed.liveMode = false
+            ed.hash = prevHash
+            ed.saved = prevSaved
+            ed.current = prevCurrent
+            scope.launch {
+                readEditor(flush = false)
+                if (ed.dirty) scheduleSave()
+            }
+        }
         if (loadedNote == null) {
             loadedNote = ed.current
         } else if (editorLoaded) {
-            outcome.replaceEditorText?.let(::setEditorText)
             if (outcome.startLive) {
                 val liveInit = buildJsonObject {
                     put("saved", n.content)
                     put("hash", n.hash)
+                    outcome.replaceEditorText?.let {
+                        put("expected", prevCurrent)
+                        put("replace", it)
+                    }
                 }
-                js("window.sink.startLive($liveInit)")
+                web?.evaluateJavascript("window.sink.startLive($liveInit)") { raw ->
+                    if (raw == "false") revertStaleRefresh()
+                }
+            } else if (outcome.replaceEditorText != null) {
+                val expected = JsonPrimitive(prevCurrent)
+                val replace = JsonPrimitive(outcome.replaceEditorText)
+                web?.evaluateJavascript("window.sink.setTextIfUnchanged($expected, $replace)") { raw ->
+                    if (raw == "false") revertStaleRefresh()
+                }
             } else if (outcome.retireLive) {
                 js("window.sink.retireLive()")
             }
