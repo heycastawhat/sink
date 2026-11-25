@@ -1400,6 +1400,23 @@ describe("notes", () => {
     expect(readFileSync(file(n.path), "utf8")).toBe("# Shopping\n\n- [ ] eggs\n- [ ] oat milk\n");
   });
 
+  test("a queued metadata patch cannot follow a switched browser session to another vault", async () => {
+    const first = await login();
+    const second = setup.auth.issueToken("another browser session", "another-account");
+    for (const token of [first, second]) {
+      expect((await send(token, "POST", "/api/notes", { title: "Shopping", content: token === first ? "First vault" : "Second vault" })).status).toBe(201);
+    }
+    const patch = (token: string) => setup.app.request("/api/notes/meta?path=Shopping.md", {
+      method: "PATCH",
+      headers: { cookie: `sink_session=${token}`, origin: PUBLIC, "content-type": "application/json" },
+      body: JSON.stringify({ expected_subject: "abc123", pinned: true }),
+    });
+    expect((await patch(second)).status).toBe(412);
+    expect(await (await get(second, q("Shopping.md"))).json()).toMatchObject({ pinned: false, content: "Second vault" });
+    expect((await patch(first)).status).toBe(200);
+    expect(await (await get(first, q("Shopping.md"))).json()).toMatchObject({ pinned: true });
+  });
+
   test("symlinks can't reach outside the vault", async () => {
     const token = await login();
     const outside = mkdtempSync(join(tmpdir(), "sink-outside-"));

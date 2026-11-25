@@ -443,7 +443,7 @@ test('replays queued pin and colour for the signed-in account when the stream re
     // An installed PWA also gets this event when Chrome goes back online.
     window.dispatchEvent(new Event('online'));
     await tick();
-    expect(writes).toEqual([[path, { pinned: true, color: null }]]);
+    expect(writes).toEqual([[path, { pinned: true, color: null, expected_subject: 'scratch' }]]);
     expect(storage.has('sink:pending-meta:scratch')).toBe(false);
     await notes.openNote(path);
     expect(notes.openNoteInfo().pinned).toBe(true);

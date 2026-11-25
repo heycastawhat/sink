@@ -54,9 +54,9 @@ function scheduleMetaRetry() {
 async function sendQueuedMeta(owner, path, changes) {
   if (owner !== draftOwner) return;
   try {
-    if (!(await writeMeta(path, changes))) return;
+    if (!(await writeMeta(path, changes, owner))) return;
   } catch (err) {
-    if (retryableMeta(err) || err instanceof Unauthorized) return;
+    if (retryableMeta(err) || err instanceof Unauthorized || (err instanceof ApiError && err.status === 412)) return;
     toast(err.message);
   }
   const queue = pendingMeta(owner);
@@ -2107,20 +2107,21 @@ async function setMeta(changes) {
   await changeMeta(screen.path, changes);
 }
 
-async function writeMeta(path, changes) {
+async function writeMeta(path, changes, owner) {
+  const patch = owner === undefined ? changes : { ...changes, expected_subject: owner };
   if (screen.path !== path) {
-    await api.noteMeta(path, changes);
+    await api.noteMeta(path, patch);
     await loadNotes();
     return true;
   }
   if (screen.saving) await screen.saving;
-  if (screen.path !== path) return writeMeta(path, changes);
+  if (screen.path !== path) return writeMeta(path, changes, owner);
   if (dirty() && isQueuedMeta(changes)) return false;
   // Hold autosave until the new hash is in, or a save with the old one would be a conflict.
   clearTimeout(screen.timer);
   const editor = screen.editor;
   const run = (async () => {
-    const meta = await api.noteMeta(path, changes);
+    const meta = await api.noteMeta(path, patch);
     const note = await api.note(meta.path);
     if (screen.editor !== editor || screen.path !== path) return;
     note.content = normalizeLineEndings(note.content);

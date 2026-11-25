@@ -174,6 +174,7 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const q = pathQuery.safeParse(c.req.query());
       const body = z
         .object({
+          expected_subject: z.string().optional(),
           pinned: z.boolean().optional(),
           publish: z.boolean().optional(),
           searchable: z.boolean().optional(),
@@ -182,10 +183,13 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
         })
         .safeParse(await c.req.json().catch(() => null));
       if (!q.success || !body.success) return c.json({ error: "invalid request" }, 400);
+      const { expected_subject, ...changes } = body.data;
+      if (expected_subject !== undefined && expected_subject !== c.get("subject"))
+        return c.json({ error: "The signed-in account changed" }, 412);
       // Publishing is sharing with everyone: not for assistants' tokens, as sharing isn't. Nor is choosing what they see.
       if (c.get("scope") !== "full" && (body.data.publish !== undefined || body.data.searchable !== undefined || body.data.private !== undefined))
         return c.json({ error: "not allowed with this token" }, 403);
-      return c.json(await vault.setMeta(q.data.path, body.data));
+      return c.json(await vault.setMeta(q.data.path, changes));
     }),
   );
 
