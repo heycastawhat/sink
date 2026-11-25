@@ -62,6 +62,29 @@ class EditorConflictTest {
         assertEquals(original.path, editor.pendingEdit()?.path)
     }
 
+    @Test fun `reopened subfolder note resolves the same queued edit as the closing editor`() = runBlocking {
+        val path = "Folder/Scratch.md"
+        val closing = editor().apply {
+            this.path = path
+            folder = "Folder"
+            queued = pendingEdit()!!.copy(at = 1L)
+        }
+        val reopened = editor().apply {
+            this.path = path
+            queued = closing.queued
+        }
+        var creates = 0
+        val createCopy: suspend () -> SaveResult = {
+            creates++
+            SaveResult.Conflict(original.copy(path = path), copy.copy(path = "Folder/${copy.path}"), closing.current)
+        }
+
+        NoteSaver.save(reopened.pendingEdit()!!, reopened.queued, createCopy)
+        NoteSaver.save(closing.pendingEdit()!!, closing.queued, createCopy)
+
+        assertEquals(1, creates)
+    }
+
     @Test fun `Back retry and reopened editor create one conflict copy on reconnect`() = runBlocking {
         val closing = editor().apply { path = "Reconnect Scratch.md"; queued = null }
         val first = closing.pendingEdit()!!
