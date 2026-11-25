@@ -184,8 +184,12 @@ a {
 .brand {
   display: flex;
   align-items: center;
+  /* The nav is a column, so a flex row would stretch to its full width and make all of it a link: shrink to the logo
+     and wordmark, and space the rows below with margin, not padding, so the link stops where they do. */
+  align-self: flex-start;
   gap: 10px;
-  padding: 4px 12px 14px;
+  margin-bottom: 14px;
+  padding: 4px 12px 0;
   text-decoration: none;
 }
 
