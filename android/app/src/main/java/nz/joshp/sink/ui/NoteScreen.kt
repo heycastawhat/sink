@@ -586,18 +586,29 @@ fun NoteScreen(
         if (!ed.deletedLiveNote && s.status.isNotEmpty()) status = s.status
         // Written by the server: the pair a fallback save (see flush) is checked against.
         if (s.saved != null && s.hash != null) {
-            // The path probe is not trusted until the original document has bound and reports saved text.
-            val restored = live.restoreSnapshot
-            if (s.bound && restored != null && restored.path == ed.path) {
-                live.restoreSnapshot = null
-                val matching = restored.takeIf { it.hash == s.hash }
-                val meta = matching ?: store.note(restored.path)
-                store.saveNote(meta?.copy(hash = s.hash, content = s.saved) ?: Note(restored.path, hash = s.hash, content = s.saved))
-                if (matching != null) applyMeta(matching)
-            }
             ed.hash = s.hash
             ed.saved = s.saved
             ed.current = s.saved
+            val restored = live.restoreSnapshot
+            if (s.bound && restored != null && restored.path == ed.path) {
+                live.restoreSnapshot = null
+                // CodeMirror normalizes newlines. Cache only the file bytes that produced the verified live hash.
+                if (restored.hash == s.hash) {
+                    store.saveNote(restored)
+                    applyMeta(restored)
+                } else {
+                    val connection = live.connection
+                    scope.launch {
+                        val n = runCatching { api()?.note(restored.path) }.getOrNull() ?: return@launch
+                        if (n.hash == s.hash && ed.hash == s.hash && ed.path == n.path &&
+                            connection == live.connection && ed.liveMode && !ed.closed
+                        ) {
+                            store.saveNote(n)
+                            applyMeta(n)
+                        }
+                    }
+                }
+            }
         }
     }
 
