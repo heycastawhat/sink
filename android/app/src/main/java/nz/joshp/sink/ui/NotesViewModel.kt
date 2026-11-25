@@ -14,11 +14,9 @@ import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import nz.joshp.sink.data.Change
-import nz.joshp.sink.data.LiveEvent
 import nz.joshp.sink.data.liveEvents
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +31,7 @@ import nz.joshp.sink.data.pluginsJson
 import nz.joshp.sink.data.Api
 import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.NoteMeta
+import nz.joshp.sink.data.NoteSaver
 import nz.joshp.sink.data.NoteStore
 import nz.joshp.sink.data.Todo
 import nz.joshp.sink.data.addTodo
@@ -55,7 +54,6 @@ import nz.joshp.sink.data.editTodo
 import nz.joshp.sink.data.reminderTime
 import nz.joshp.sink.data.todoCount
 import nz.joshp.sink.reminders.ReminderSync
-import java.io.IOException
 
 data class NotesState(
     val notes: List<NoteMeta> = emptyList(),
@@ -104,37 +102,15 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** Changes from the server's live stream, for an open note to pick up (see [listen]). */
     val changes = MutableSharedFlow<Change>(extraBufferCapacity = 32)
 
-    /**
-     * Catch up once the stream is ready, since changes made while disconnected are not replayed. While connected,
-     * pass each change to [changes] and refresh the lists once per burst.
-     */
-    suspend fun listen(): Unit = coroutineScope {
-        var wait = 2_000L
-        var refreshJob: Job? = null
-        while (true) {
-            val api = api()
-            if (api != null) {
-                try {
-                    api.liveEvents().collect { event ->
-                        wait = 2_000L
-                        val change = (event as? LiveEvent.Changed)?.change
-                        if (change != null) changes.emit(change)
-                        refreshJob?.cancel()
-                        refreshJob = launch {
-                            delay(400)
-                            refresh()
-                            if (_todos.value.loaded || change?.type?.startsWith("todo.") == true) loadTodos() else loadTodoBadge()
-                        }
-                    }
-                    wait = 2_000L
-                } catch (_: IOException) {
-                    // Back off until the next connection attempt.
-                }
-            }
-            delay(wait)
-            wait = (wait * 2).coerceAtMost(60_000L)
-        }
-    }
+    suspend fun listen() = listenForNotesUpdates(
+        events = { api()?.liveEvents() },
+        completed = NoteSaver.completed,
+        onChange = { changes.emit(it) },
+        refresh = { change ->
+            refresh()
+            if (_todos.value.loaded || change?.type?.startsWith("todo.") == true) loadTodos() else loadTodoBadge()
+        },
+    )
 
     private val _opened = MutableStateFlow(store.opened())
     /** When this phone last opened each note, for Recents. */
