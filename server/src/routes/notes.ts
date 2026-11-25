@@ -3,7 +3,8 @@ import { Hono } from "hono";
 import { extname } from "node:path";
 import { z } from "zod";
 import type { AuthEnv } from "../auth";
-import { cleanPath, COLORS, parseNote, toFtsQuery, VaultError, type Vault } from "../notes";
+import { liveFor } from "../live";
+import { cleanPath, COLORS, isBoard, parseNote, toFtsQuery, VaultError, type Vault } from "../notes";
 import { ZipWriter } from "../zip";
 
 const TYPES: Record<string, string> = {
@@ -29,7 +30,12 @@ const TYPES: Record<string, string> = {
 
 const pathQuery = z.object({ path: z.string().min(1).max(1024) });
 // keep_version: always keep the text being replaced as a version (restoring an old one shouldn't lose the current).
-const saveBody = z.object({ content: z.string(), base_hash: z.string().max(64).nullable(), keep_version: z.boolean().optional() });
+const saveBody = z.object({
+  content: z.string(),
+  base_hash: z.string().max(64).nullable(),
+  keep_version: z.boolean().optional(),
+  live: z.object({ guid: z.uuid(), update: z.base64().max(16 * 1024 * 1024) }).optional(),
+});
 const createBody = z.object({
   folder: z.string().max(1024).default(""),
   title: z.string().trim().max(200).default(""),
@@ -164,7 +170,18 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
       const body = saveBody.safeParse(await c.req.json().catch(() => null));
       if (!q.success || !body.success) return c.json({ error: "invalid request" }, 400);
       if (await publishes(c, q.data.path, body.data.content)) return c.json({ error: "not allowed with this token" }, 403);
-      return c.json(await vault.write(q.data.path, body.data.content, body.data.base_hash, { keepVersion: body.data.keep_version }));
+      const { content, base_hash, keep_version, live } = body.data;
+      if (live) {
+        if (c.get("scope") !== "full") return c.json({ error: "not allowed with this token" }, 403);
+        if (!base_hash || isBoard(q.data.path)) return c.json({ error: "invalid live save" }, 400);
+        const path = cleanPath(q.data.path, "note");
+        const room = await liveFor(vault).open(path).catch((err: unknown) => {
+          if (err instanceof VaultError && err.status === 404) throw new VaultError(409, "note was deleted");
+          throw err;
+        });
+        return c.json(await room.saveFallback(path, content, base_hash, live.guid, Buffer.from(live.update, "base64"), keep_version));
+      }
+      return c.json(await vault.write(q.data.path, content, base_hash, { keepVersion: keep_version }));
     }),
   );
 

@@ -70,6 +70,7 @@ const loadEmbed = (target) =>
 let editor = null;
 let session = null;
 let liveSocket = null;
+let retiredLive = null;
 const loadingText = deferredEditorText();
 let links = [];
 let timer = null;
@@ -94,6 +95,7 @@ window.sink = {
     links = targets;
     editor?.destroy();
     session?.destroy();
+    retiredLive = null;
     liveGone = false;
     session = live && path && bridge.liveOpen ? startLive(path, live) : null;
     let sourceText = loadingText.take(text);
@@ -195,9 +197,14 @@ window.sink = {
     session?.keepVersion();
   },
   retireLive() {
+    const snapshot = session?.snapshot();
+    if (snapshot) retiredLive = { guid: snapshot.guid, update: base64(snapshot.update) };
     session?.destroy();
     session = null;
     report();
+  },
+  retiredEdit() {
+    return { text: window.sink.textOrNull(), live: retiredLive };
   },
   // The app's live socket, coming back in.
   live: {
@@ -247,9 +254,7 @@ function startLive(path, { saved, hash }) {
         readyState: 0,
         send(data) {
           if (typeof data === 'string') return bridge.liveSend(data);
-          let binary = '';
-          for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i, i + 0x8000));
-          bridge.liveSendBinary(btoa(binary));
+          bridge.liveSendBinary(base64(data));
         },
         close() {
           if (liveSocket !== socket) return;
@@ -271,6 +276,12 @@ function startLive(path, { saved, hash }) {
       report();
     },
   });
+}
+
+function base64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
 }
 
 let lastStatus = { text: '', kind: '' };

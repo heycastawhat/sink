@@ -143,6 +143,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.Json
@@ -161,6 +162,7 @@ import nz.joshp.sink.data.ApiException
 import nz.joshp.sink.data.NOTE_COLORS
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.NoteSaver
+import nz.joshp.sink.data.LiveHandoff
 import nz.joshp.sink.data.LiveSocket
 import nz.joshp.sink.data.LiveState
 import okio.ByteString
@@ -226,7 +228,11 @@ private class LiveLink {
     @Volatile var socket: LiveSocket? = null
     var state = LiveState()
     var flushReply: ((LiveState) -> Unit)? = null
+    var retiredBase: Pair<String, String>? = null
 }
+
+@Serializable
+private data class RetiredEdit(val text: String? = null, val live: LiveHandoff? = null)
 
 private enum class TemplateAsk { Slash, Menu }
 
@@ -517,6 +523,7 @@ fun NoteScreen(
     fun exitLive() {
         if (!ed.liveMode) return
         ed.liveMode = false
+        ed.path?.let { p -> ed.hash?.let { live.retiredBase = p to it } }
         js("window.sink.retireLive()")
         closeLive()
     }
@@ -543,10 +550,20 @@ fun NoteScreen(
     fun readAndSave(w: WebView, then: () -> Unit) {
         val previous = ed.current
         val hash = ed.hash
-        readEditorText({ ed.current }, { script, done -> w.evaluateJavascript(script) { done(it) } }) { latest ->
+        val finish: (String) -> Unit = { latest ->
             if (ed.hash == hash || latest != previous) ed.current = latest
             saveInBackground()
             then()
+        }
+        val base = live.retiredBase
+        if (base != null && base.first == ed.path && base.second == hash) {
+            w.evaluateJavascript("window.sink.retiredEdit()") { raw ->
+                val retired = raw?.let { runCatching { json.decodeFromString<RetiredEdit>(it) }.getOrNull() }
+                retired?.live?.let { ed.retireLive(base.first, base.second, it) }
+                finish(retired?.text ?: ed.current)
+            }
+        } else {
+            readEditorText({ ed.current }, { script, done -> w.evaluateJavascript(script) { done(it) } }, finish)
         }
     }
 

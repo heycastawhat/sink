@@ -1,5 +1,6 @@
 package nz.joshp.sink.ui
 
+import nz.joshp.sink.data.LiveHandoff
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.QueuedSave
@@ -21,6 +22,23 @@ class EditingTest {
         saved = "Original text"
         current = currentText
         queued = edit
+    }
+
+    @Test
+    fun retiringLiveAttachesTheSnapshotOnlyToTheSamePathAndBaseHash() {
+        val snapshot = LiveHandoff("room", "dXBkYXRl")
+        val editor = offlineEditor(edit.text)
+        editor.retireLive(path, checkNotNull(edit.baseHash), snapshot)
+        val pending = checkNotNull(editor.pendingEdit())
+        assertEquals(snapshot, pending.live)
+
+        val reopened = offlineEditor(edit.text + " again").apply { queued = pending }
+        assertEquals(snapshot, reopened.pendingEdit()?.live)
+        reopened.hash = "new revision"
+        assertNull(reopened.pendingEdit()?.live)
+
+        editor.path = "Other.md"
+        assertNull(editor.pendingEdit()?.live)
     }
 
     @Test

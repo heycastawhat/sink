@@ -1,5 +1,6 @@
 package nz.joshp.sink.ui
 
+import nz.joshp.sink.data.LiveHandoff
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.QueuedSave
@@ -16,6 +17,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     var loaded = false
     /** The page is editing live (web/src/live.js) and syncs every edit itself: nothing here saves it. */
     var liveMode = false
+    private var retiredLive: Triple<String, String, LiveHandoff>? = null
     val key get() = path ?: draftKey
     val dirty get() = loaded && current != saved
     /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */
@@ -24,8 +26,14 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
 
     fun pendingEdit(): PendingEdit? =
         if (dirty && (path != null || current.isNotBlank())) {
-            PendingEdit(key, path, folder, hash, current, at = System.currentTimeMillis())
+            val live = retiredLive?.takeIf { it.first == path && it.second == hash }?.third
+                ?: queued?.takeIf { it.path == path && it.baseHash == hash }?.live
+            PendingEdit(key, path, folder, hash, current, at = System.currentTimeMillis(), live = live)
         } else null
+
+    fun retireLive(path: String, baseHash: String, snapshot: LiveHandoff) {
+        retiredLive = Triple(path, baseHash, snapshot)
+    }
 
     fun matchesConflict(outcome: QueuedSave.Conflict): Boolean =
         loaded && outcome.matches(queued, key, hash)
