@@ -255,6 +255,37 @@ test('offline reopen keeps the last live save and its unsaved draft through Back
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
+test('offline reopen keeps pin and colour saved while live', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  api.noteMeta = async (_path, changes) => {
+    current = { ...current, ...changes, hash: changes.pinned ? 'pin' : 'teal' };
+    current.content = '---\npinned: true\n' + (current.color ? 'color: teal\n' : '') + '---\n' + original;
+    const text = room.getText('t');
+    room.transact(() => {
+      text.delete(0, text.length);
+      text.insert(0, current.content);
+    });
+    toClient({ t: 'saved', hash: current.hash, dirty: false });
+    return current;
+  };
+  await notes.setOpenMeta({ pinned: true });
+  await notes.setOpenMeta({ color: 'teal' });
+  expect(notes.openNoteInfo()).toMatchObject({ pinned: true, color: 'teal', text: current.content });
+  expect(statuses.at(-1)).toBe('Saved');
+
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  socket.close();
+  socket.onclose();
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo()).toMatchObject({ pinned: true, color: 'teal', text: current.content });
+});
+
 test('a note deleted on the server does not reopen from a previously saved revision', async () => {
   const { api, ApiError } = await import('./api.js');
   await notes.openNote(path);

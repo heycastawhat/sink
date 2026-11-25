@@ -2099,7 +2099,8 @@ async function setMeta(changes) {
     note.content = normalizeLineEndings(note.content);
     // Live, the new frontmatter arrives like anyone's change.
     if (live()) {
-      Object.assign(screen, { pinned: note.pinned, private: note.private, color: note.color });
+      Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color });
+      rememberRevision(note.mtime);
       return applyLook();
     }
     // Typed meanwhile: keep that body under the server's new frontmatter, so the next save doesn't undo the change.
