@@ -212,8 +212,8 @@ for (const otherEdit of ['', ' (keep this edit)']) {
     if (otherEdit) liveView.dispatch({ changes: { from: from + 'Original'.length, insert: otherEdit } });
 
     room.transact(() => {
-      room.getText('t').delete(from, 'Original'.length);
       room.getText('t').insert(from, 'Collaborator');
+      room.getText('t').delete(from + 'Collaborator'.length, 'Original'.length);
     });
     current = { ...current, hash: 'collaborator', content: original.replace('Original', 'Collaborator') };
     await reconnectLive();
