@@ -1127,10 +1127,11 @@ export class Vault {
   }
 
   /**
-   * Version history and share links aren't tied to the notes table (they outlive a note's row, in the trash too), so
-   * they follow a note or folder here. OR REPLACE: a stale share left at the destination gives way.
+   * History, share links and saved live state follow a note into and out of the trash. Keeping the live document
+   * identity lets offline editors sync into the restored copy, without giving it to a new note at the old path.
+   * OR REPLACE: stale state left at the destination gives way.
    */
-  private repath(from: string, to: string, folder: boolean, tables = ["versions", "shares"]) {
+  private repath(from: string, to: string, folder: boolean, tables = ["versions", "shares", "live_docs"]) {
     for (const table of tables) {
       if (!folder) this.db.query(`UPDATE OR REPLACE ${table} SET path = ? WHERE path = ?`).run(to, from);
       else
@@ -1140,9 +1141,9 @@ export class Vault {
     }
   }
 
-  /** History and share links of something deleted for good. */
+  /** History, share links and live state of something deleted for good. */
   private forget(path: string) {
-    for (const table of ["versions", "shares"])
+    for (const table of ["versions", "shares", "live_docs"])
       this.db.query(`DELETE FROM ${table} WHERE path = ? OR substr(path, 1, ?) = ?`).run(path, chars(path) + 1, path + "/");
   }
 
@@ -1205,7 +1206,6 @@ export class Vault {
           .all(chars(path) + 1, path + "/")
           .map((r) => r.path);
     this.db.query("INSERT OR REPLACE INTO trash (path, original, at) VALUES (?, ?, ?)").run(dest.slice(TRASH.length + 1), path, now());
-    // Into the trash with it, so a new note at the old path doesn't inherit its share link or history.
     this.repath(path, dest, !isNote);
     this.refile(path);
     for (const p of gone) this.emit({ type: "note.deleted", path: p, source: "sink" });
