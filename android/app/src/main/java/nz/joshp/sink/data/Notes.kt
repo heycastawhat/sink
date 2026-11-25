@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -213,6 +214,21 @@ suspend fun Api.noteMeta(path: String, pinned: Boolean? = null, color: String? =
         if (clearColor) put("color", JsonNull) else color?.let { put("color", it) }
     }
     return call(authed(pathUrl("/api/notes/meta", path)).patch(jsonBody(body)).build()) { json.decodeFromString(it) }
+}
+
+@Serializable
+internal data class MetaChange(val pinned: Boolean? = null, val color: String? = null, val clearColor: Boolean = false) {
+    fun then(next: MetaChange) = MetaChange(
+        pinned = next.pinned ?: pinned,
+        color = if (next.clearColor) null else next.color ?: color,
+        clearColor = next.clearColor || (next.color == null && clearColor),
+    )
+}
+
+internal sealed interface MetaResult {
+    data class Saved(val note: Note) : MetaResult
+    data class Failed(val message: String) : MetaResult
+    data object Offline : MetaResult
 }
 
 suspend fun Api.moveNote(from: String, to: String) {
@@ -445,6 +461,27 @@ class NoteStore(context: Context) {
     private val dir = File(context.filesDir, "notes").apply { mkdirs() }
     private val notesDir = File(dir, "content").apply { mkdirs() }
     private val pendingDir = File(dir, "pending").apply { mkdirs() }
+    private fun metaDir(api: Api) = File(dir, "meta-" + id(api.base + "\n" + api.token)).apply { mkdirs() }
+    private fun metaFile(api: Api, path: String) = File(metaDir(api), id(path))
+
+    @Serializable
+    private data class PendingMeta(val path: String, val change: MetaChange)
+
+    internal fun pendingMeta(api: Api, path: String): MetaChange? =
+        readPendingMeta(metaFile(api, path))?.change
+
+    internal fun allMetaPaths(api: Api): List<String> =
+        metaDir(api).listFiles().orEmpty().filterNot { it.name.endsWith(".tmp") }.mapNotNull { readPendingMeta(it)?.path }
+
+    internal fun putPendingMeta(api: Api, path: String, change: MetaChange) =
+        atomic(metaFile(api, path), json.encodeToString(PendingMeta.serializer(), PendingMeta(path, change)))
+
+    internal fun clearPendingMeta(api: Api, path: String) {
+        metaFile(api, path).delete()
+    }
+
+    private fun readPendingMeta(file: File): PendingMeta? =
+        runCatching { json.decodeFromString<PendingMeta>(file.readText()) }.getOrNull()
     private val listFile = File(dir, "list.json")
 
     private fun id(s: String) = MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
@@ -544,6 +581,8 @@ object NoteSaver {
     private val outcomes = mutableMapOf<String, QueuedSave>()
     private val _completed = MutableSharedFlow<QueuedSave>()
     internal val completed = _completed.asSharedFlow()
+    private val _metaCompleted = MutableSharedFlow<Note>()
+    internal val metaCompleted = _metaCompleted.asSharedFlow()
 
     internal suspend fun lastOutcome(path: String): QueuedSave? = lock.withLock { outcomes[path] }
 
@@ -583,6 +622,47 @@ object NoteSaver {
         }
         outcome?.let { _completed.emit(it) }
         return result
+    }
+
+    internal suspend fun changeMeta(context: Context, api: Api, path: String, change: MetaChange): MetaResult =
+        withContext(NonCancellable + Dispatchers.IO) {
+            lock.withLock {
+                val store = NoteStore(context)
+                val next = store.pendingMeta(api, path)?.then(change) ?: change
+                store.putPendingMeta(api, path, next)
+                saveMetaLocked(store, api, path, next).also {
+                    if (it == MetaResult.Offline) NoteSync.enqueue(context)
+                }
+            }
+        }
+
+    internal suspend fun syncMeta(context: Context, api: Api, path: String): MetaResult? {
+        val result = lock.withLock {
+            val store = NoteStore(context)
+            val change = store.pendingMeta(api, path) ?: return@withLock null
+            saveMetaLocked(store, api, path, change)
+        }
+        if (result is MetaResult.Saved) _metaCompleted.emit(result.note)
+        return result
+    }
+
+    private suspend fun saveMetaLocked(store: NoteStore, api: Api, path: String, change: MetaChange): MetaResult {
+        if (store.pending(path) != null) return MetaResult.Offline
+        return try {
+            api.noteMeta(path, change.pinned, change.color, change.clearColor)
+            val updated = api.note(path)
+            store.saveNote(updated)
+            store.clearPendingMeta(api, path)
+            MetaResult.Saved(updated)
+        } catch (e: ApiException) {
+            if (e.code == 401 || e.code == 409 || e.code >= 500) MetaResult.Offline
+            else {
+                store.clearPendingMeta(api, path)
+                MetaResult.Failed(e.message ?: "Couldn't change it")
+            }
+        } catch (_: IOException) {
+            MetaResult.Offline
+        }
     }
 
     private suspend fun saveLocked(context: Context, api: Api, edit: PendingEdit, requeue: Boolean): SaveResult {
@@ -669,6 +749,9 @@ class NoteSyncWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 SaveResult.Offline -> retry = true
                 else -> Unit
             }
+        }
+        for (path in store.allMetaPaths(api)) {
+            if (NoteSaver.syncMeta(applicationContext, api, path) == MetaResult.Offline) retry = true
         }
         if (retry) Result.retry() else Result.success()
     }

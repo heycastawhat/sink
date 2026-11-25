@@ -411,6 +411,48 @@ test('pin then leave and reopen after an Android edit does not resurrect a saved
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
+test('replays queued pin and colour for the signed-in account when the stream reconnects', async () => {
+  const { api } = await import('./api.js');
+  const writes = [];
+  api.noteMeta = async () => { throw new TypeError('Failed to fetch'); };
+  notes.setDraftOwner('scratch');
+  await notes.openNote(path);
+  await notes.setOpenMeta({ pinned: true });
+  await notes.setOpenMeta({ color: 'blue' });
+  await notes.setOpenMeta({ color: null });
+  expect(current.content).toBe(original);
+  expect(messages.at(-1)).toContain('will sync');
+  await notes.closeNote();
+
+  const before = { window: globalThis.window, EventSource: globalThis.EventSource };
+  const stream = new EventTarget();
+  globalThis.window = new EventTarget();
+  globalThis.EventSource = class { constructor() { return stream; } };
+  api.noteMeta = async (name, changes) => {
+    writes.push([name, changes]);
+    current = { ...current, ...changes, content: pinned, hash: 'new' };
+    return current;
+  };
+  try {
+    notes.setDraftOwner('another account');
+    notes.listenForChanges();
+    stream.dispatchEvent(new Event('ready'));
+    await tick();
+    expect(writes).toEqual([]);
+    notes.setDraftOwner('scratch');
+    // An installed PWA also gets this event when Chrome goes back online.
+    window.dispatchEvent(new Event('online'));
+    await tick();
+    expect(writes).toEqual([[path, { pinned: true, color: null }]]);
+    expect(storage.has('sink:pending-meta:scratch')).toBe(false);
+    await notes.openNote(path);
+    expect(notes.openNoteInfo().pinned).toBe(true);
+    expect(notes.openNoteInfo().text).toBe(pinned);
+  } finally {
+    Object.assign(globalThis, before);
+  }
+});
+
 test('a genuinely edited stale draft still becomes a conflict copy', async () => {
   const mine = original + '\nUnsaved local edit';
   storage.set('sink:unsaved:' + path, JSON.stringify({ base: 'original', text: mine }));

@@ -25,6 +25,80 @@ let draftOwner = null;
 const newDraftPrefix = 'sink:new-draft:';
 const newDraftKey = (id) => newDraftPrefix + JSON.stringify([draftOwner, id]);
 const validDraftId = (id) => /^\d+-[a-z0-9]+$/.test(id ?? '');
+const metaQueueKey = (owner) => 'sink:pending-meta:' + owner;
+let metaWrites = Promise.resolve();
+let metaRetry;
+
+function pendingMeta(owner) {
+  return new Map(JSON.parse(localStorage.getItem(metaQueueKey(owner)) ?? '[]'));
+}
+
+function savePendingMeta(owner, queue) {
+  if (queue.size) localStorage.setItem(metaQueueKey(owner), JSON.stringify([...queue]));
+  else localStorage.removeItem(metaQueueKey(owner));
+}
+
+function serializeMeta(task) {
+  const run = metaWrites.then(task);
+  metaWrites = run.catch(() => {});
+  return run;
+}
+
+const retryableMeta = (err) => err instanceof TypeError || (err instanceof ApiError && (err.status >= 500 || err.status === 409));
+const isQueuedMeta = (changes) => Object.keys(changes).every((key) => key === 'pinned' || key === 'color');
+
+function scheduleMetaRetry() {
+  if (changes && !metaRetry) metaRetry = setTimeout(retryPendingMeta, POLL_MS);
+}
+
+async function sendQueuedMeta(owner, path, changes) {
+  if (owner !== draftOwner) return;
+  try {
+    if (!(await writeMeta(path, changes))) return;
+  } catch (err) {
+    if (retryableMeta(err) || err instanceof Unauthorized) return;
+    toast(err.message);
+  }
+  const queue = pendingMeta(owner);
+  if (JSON.stringify(queue.get(path)) === JSON.stringify(changes)) {
+    queue.delete(path);
+    savePendingMeta(owner, queue);
+  }
+}
+
+function retryPendingMeta() {
+  clearTimeout(metaRetry);
+  metaRetry = null;
+  const owner = draftOwner;
+  if (owner == null) return;
+  void serializeMeta(async () => {
+    if (owner !== draftOwner) return;
+    for (const [path, changes] of pendingMeta(owner)) {
+      if (screen.path === path) await flush();
+      await sendQueuedMeta(owner, path, changes);
+    }
+    if (pendingMeta(owner).size) scheduleMetaRetry();
+  }).catch((err) => toast(err.message));
+}
+
+function changeMeta(path, changes) {
+  const owner = draftOwner;
+  return serializeMeta(async () => {
+    if (owner !== draftOwner) return;
+    if (owner == null || !isQueuedMeta(changes)) {
+      return writeMeta(path, changes);
+    }
+    const queue = pendingMeta(owner);
+    const next = { ...queue.get(path), ...changes };
+    queue.set(path, next);
+    savePendingMeta(owner, queue);
+    await sendQueuedMeta(owner, path, next);
+    if (pendingMeta(owner).has(path)) {
+      toast('Pin or colour change will sync when connected');
+      scheduleMetaRetry();
+    }
+  }).catch((err) => toast(err.message));
+}
 
 export function setDraftOwner(subject) {
   draftOwner = subject;
@@ -924,12 +998,7 @@ const desk = () => $('app').classList.contains('desk');
 /** Pin or colour a card's note. The open note goes through setMeta, so its editor keeps the new hash. */
 async function cardMeta(path, changes) {
   if (screen.path === path) return setMeta(changes);
-  try {
-    await api.noteMeta(path, changes);
-    await loadNotes();
-  } catch (err) {
-    toast(err.message);
-  }
+  await changeMeta(path, changes);
 }
 
 async function archiveCard(path) {
@@ -1906,6 +1975,7 @@ let changes = null;
 export function listenForChanges() {
   if (changes || typeof EventSource === 'undefined') return;
   const source = (changes = new EventSource('/api/events'));
+  window.addEventListener('online', retryPendingMeta);
   source.addEventListener('change', (e) => {
     let change;
     try {
@@ -1928,6 +1998,7 @@ export function listenForChanges() {
   // in between was never sent: catch up on everything shown.
   let connected = false;
   source.addEventListener('ready', () => {
+    retryPendingMeta();
     if (!connected) return void (connected = true);
     if (screen.path) refreshOpenNote();
     refreshSoon();
@@ -2033,11 +2104,25 @@ async function setMeta(changes) {
     await save();
     if (!screen.path) return;
   }
+  await changeMeta(screen.path, changes);
+}
+
+async function writeMeta(path, changes) {
+  if (screen.path !== path) {
+    await api.noteMeta(path, changes);
+    await loadNotes();
+    return true;
+  }
+  if (screen.saving) await screen.saving;
+  if (screen.path !== path) return writeMeta(path, changes);
+  if (dirty() && isQueuedMeta(changes)) return false;
   // Hold autosave until the new hash is in, or a save with the old one would be a conflict.
   clearTimeout(screen.timer);
+  const editor = screen.editor;
   const run = (async () => {
-    const meta = await api.noteMeta(screen.path, changes);
+    const meta = await api.noteMeta(path, changes);
     const note = await api.note(meta.path);
+    if (screen.editor !== editor || screen.path !== path) return;
     note.content = normalizeLineEndings(note.content);
     // Live, the new frontmatter arrives like anyone's change.
     if (live()) {
@@ -2051,9 +2136,13 @@ async function setMeta(changes) {
     if (text !== current) loadingText.replace(screen.editor, text);
     applyLook();
   })();
-  screen.saving = run.catch((err) => toast(err.message)).finally(() => (screen.saving = null));
-  await screen.saving;
-  if (dirty()) save();
+  screen.saving = run.catch(() => {}).finally(() => (screen.saving = null));
+  try {
+    await run;
+    return true;
+  } finally {
+    if (dirty()) save();
+  }
 }
 
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/;
