@@ -166,6 +166,7 @@ import nz.joshp.sink.data.LiveState
 import okio.ByteString
 import okio.ByteString.Companion.decodeBase64
 import nz.joshp.sink.data.NoteStore
+import nz.joshp.sink.data.NoteSync
 import nz.joshp.sink.data.SaveResult
 import nz.joshp.sink.data.QueuedSave
 import nz.joshp.sink.data.attach
@@ -540,12 +541,12 @@ fun NoteScreen(
     }
 
 
-    fun readAndSave(w: WebView, then: () -> Unit) {
+    fun readAndSave(w: WebView, then: () -> Unit, saveLatest: () -> Unit = ::saveInBackground) {
         val previous = ed.current
         val hash = ed.hash
         readEditorText({ ed.current }, { script, done -> w.evaluateJavascript(script) { done(it) } }) { latest ->
             if (ed.hash == hash || latest != previous) ed.current = latest
-            saveInBackground()
+            saveLatest()
             then()
         }
     }
@@ -581,11 +582,18 @@ fun NoteScreen(
             if (!ed.liveMode) readAndSave(w, done)
             else NoteSaver.scope.launch(Dispatchers.Main.immediate) {
                 val s = liveFlush()
-                // Offline with edits the server hasn't had: they go to the offline queue instead, and live editing
-                // stops on this page so they can't also arrive through it later (twice).
-                if (s.pending && !s.connected) {
+                // A dropped network can leave the socket looking connected after the flush timed out.
+                if (ed.needsLiveFallback(s)) {
                     exitLive()
-                    readAndSave(w, done)
+                    readAndSave(w, done) {
+                        // The next editor may open before a network request would have failed.
+                        ed.pendingEdit()?.let { edit ->
+                            store.putPending(edit)
+                            ed.queued = edit
+                            NoteSync.enqueue(context)
+                            status = "Offline, will save"
+                        }
+                    }
                 } else done()
             }
         }, 120)
@@ -638,7 +646,8 @@ fun NoteScreen(
         onDispose { lifecycle.removeObserver(observer) }
     }
 
-    BackHandler(enabled = !navBack) { flushAndLeave() }
+    // Navigation's default Back pops the WebView without giving the live editor time to save.
+    BackHandler(enabled = !navBack || (loadedNote != null && ed.liveMode)) { flushAndLeave() }
 
     // On its own page, pulling the note down from its top closes it, like a back gesture (see PullDownToClose).
     val backDispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher

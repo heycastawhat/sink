@@ -1,5 +1,6 @@
 package nz.joshp.sink.ui
 
+import nz.joshp.sink.data.LiveState
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.QueuedSave
@@ -21,6 +22,22 @@ class EditingTest {
         saved = "Original text"
         current = currentText
         queued = edit
+    }
+
+    @Test
+    fun anUnconfirmedLiveFlushFallsBackEvenWhileTheSocketLooksConnected() {
+        val editor = offlineEditor(edit.text).apply {
+            liveMode = true
+            queued = null
+        }
+        val flush = LiveState(connected = true, bound = true, pending = true)
+
+        assertTrue(editor.needsLiveFallback(flush))
+        assertEquals(edit.copy(at = 0), editor.pendingEdit()?.copy(at = 0))
+        assertFalse(editor.needsLiveFallback(flush.copy(pending = false)))
+
+        editor.liveMode = false
+        assertFalse(editor.needsLiveFallback(flush))
     }
 
     @Test
