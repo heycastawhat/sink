@@ -191,9 +191,9 @@ async function openLive() {
   await sink.load({ path, text: original, live: args });
   const room = new Y.Doc({ guid: 'original-note' });
   room.getText('t').insert(0, original);
-  const hello = (guid) => {
+  const hello = (guid, hash = args.hash) => {
     sink.live.opened();
-    sink.live.text(JSON.stringify({ t: 'hello', guid, hash: args.hash, dirty: false, editor: true }));
+    sink.live.text(JSON.stringify({ t: 'hello', guid, hash, dirty: false, editor: true }));
   };
   const receive = (tag, payload) => sink.live.binary(btoa(String.fromCharCode(tag, ...payload)));
   hello(room.guid);
@@ -211,17 +211,19 @@ test('an open Android editor is deleted while in Trash and rejoins the same live
   sink.resumeLive(args);
   await Promise.resolve();
   expect(urls).toEqual(Array(2).fill('/api/live?path=Scratch%20note.md'));
-  hello(room.guid);
+  const restored = original + 'Changed before rejoining\n';
+  room.getText('t').insert(original.length, 'Changed before rejoining\n');
+  hello(room.guid, 'restored');
   receive(1, Y.encodeStateAsUpdate(room));
-  expect(states.at(-1)).toMatchObject({ gone: false, bound: true, status: 'Saved' });
+  expect(states.at(-1)).toMatchObject({ gone: false, bound: true, status: 'Saved', hash: 'restored', saved: restored });
 
   const vector = Y.encodeStateVector(room);
-  room.getText('t').insert(original.length, 'From the web\n');
+  room.getText('t').insert(restored.length, 'From the web\n');
   receive(2, Y.encodeStateAsUpdate(room, vector));
-  expect(sink.getText()).toBe(original + 'From the web\n');
+  expect(sink.getText()).toBe(restored + 'From the web\n');
   type(sink.getText() + 'From Android\n');
   Y.applyUpdate(room, frames.at(-1).subarray(1));
-  expect(room.getText('t').toString()).toBe(original + 'From the web\nFrom Android\n');
+  expect(room.getText('t').toString()).toBe(restored + 'From the web\nFrom Android\n');
 });
 
 test('the Android editor does not sync with a replacement, or probe after typing has already resumed', async () => {
