@@ -34,6 +34,7 @@ const createBody = z.object({
   folder: z.string().max(1024).default(""),
   title: z.string().trim().max(200).default(""),
   content: z.string().default(""),
+  expected_subject: z.string().optional(),
 });
 const linkMentionBody = z.object({
   path: z.string().min(1).max(1024),
@@ -197,7 +198,9 @@ export function noteRoutes(vault: Vault, maxUploadBytes: number, trashDays = 0) 
     run(c, async () => {
       const body = createBody.safeParse(await c.req.json().catch(() => null));
       if (!body.success) return c.json({ error: "invalid body" }, 400);
-      const { folder, title, content } = body.data;
+      const { folder, title, content, expected_subject } = body.data;
+      if (expected_subject !== undefined && expected_subject !== c.get("subject"))
+        return c.json({ error: "The signed-in account changed" }, 412);
       if (await publishes(c, null, content)) return c.json({ error: "not allowed with this token" }, 403);
       return c.json(await vault.create(folder, title, content), 201);
     }),

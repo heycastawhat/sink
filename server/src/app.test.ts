@@ -1417,6 +1417,20 @@ describe("notes", () => {
     expect(await (await get(first, q("Shopping.md"))).json()).toMatchObject({ pinned: true });
   });
 
+  test("a draft recovery cannot create a copy in a switched browser session", async () => {
+    const first = await login();
+    const second = setup.auth.issueToken("another browser session", "another-account");
+    const create = (token: string) => setup.app.request("/api/notes", {
+      method: "POST",
+      headers: { cookie: `sink_session=${token}`, origin: PUBLIC, "content-type": "application/json" },
+      body: JSON.stringify({ expected_subject: "abc123", title: "Recovered draft", content: "Unsaved draft" }),
+    });
+    expect((await create(second)).status).toBe(412);
+    expect((await get(second, q("Recovered draft.md"))).status).toBe(404);
+    expect((await create(first)).status).toBe(201);
+    expect(await (await get(first, q("Recovered draft.md"))).json()).toMatchObject({ content: "Unsaved draft" });
+  });
+
   test("symlinks can't reach outside the vault", async () => {
     const token = await login();
     const outside = mkdtempSync(join(tmpdir(), "sink-outside-"));

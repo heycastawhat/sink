@@ -558,6 +558,49 @@ test('a failed conflict copy keeps the genuine draft for retry', async () => {
   expect(storage.get('sink:unsaved:' + path)).toBe(stash);
 });
 
+test('a stale legacy draft survives until the signed-in user saves a conflict copy', async () => {
+  const key = 'sink:unsaved:' + path;
+  const mine = original + '\nUnsaved before the upgrade';
+  const stash = JSON.stringify({ base: 'original', text: mine });
+  storage.set(key, stash);
+  current = { ...current, content: latest, hash: 'android' };
+  notes.setDraftOwner('scratch');
+  let confirmed = false;
+  document.getElementById('theme').append = () => {};
+  document.createElement = () => {
+    const actions = {};
+    return {
+      classList: { contains: () => false, add() {} },
+      querySelector: (selector) => ({ addEventListener: (_, action) => { actions[selector] = action; } }),
+      querySelectorAll: () => [],
+      addEventListener() {},
+      showModal: () => actions[confirmed ? '[data-ok]' : '[data-cancel]'](),
+      close() {},
+      remove() {},
+    };
+  };
+
+  await notes.openNote(path);
+  expect(copies).toHaveLength(0);
+  expect(storage.get(key)).toBe(stash);
+  await notes.closeNote();
+
+  confirmed = true;
+  failCopy = true;
+  await notes.openNote(path);
+  expect(copies).toHaveLength(0);
+  expect(storage.get(key)).toBe(stash);
+  expect(messages.at(-1)).toContain('still in this browser');
+  await notes.closeNote();
+
+  failCopy = false;
+  await notes.openNote(path);
+  expect(copies).toHaveLength(1);
+  expect(copies[0]).toMatchObject({ content: mine, expected_subject: 'scratch' });
+  expect(notes.openNoteInfo().text).toBe(latest);
+  expect(storage.has(key)).toBe(false);
+});
+
 test('reverting an edit to saved text removes the draft, including an empty note', async () => {
   current = { ...current, content: '' };
   await notes.openNote(path);

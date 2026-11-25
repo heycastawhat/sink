@@ -1487,15 +1487,47 @@ function rawUnsaved(path, owner = draftOwner) {
     return null;
   }
 }
-function adoptLegacyDraft(note) {
-  if (draftOwner == null || rawUnsaved(note.path) != null) return;
-  const raw = rawUnsaved(note.path, null);
+async function recoverLegacyDraft(note, seq) {
+  const owner = draftOwner;
+  if (owner == null) return;
+  const { path } = note;
+  const raw = rawUnsaved(path, null);
   const draft = parseUnsaved(raw);
-  if (!draft || (draft.base !== note.hash && normalizeLineEndings(draft.text) !== note.content)) return;
+  if (!draft) return;
+  if (normalizeLineEndings(draft.text) === note.content) return clearUnsaved(path, null);
+  if (draft.base === note.hash && rawUnsaved(path, owner) == null) {
+    try {
+      localStorage.setItem(draftKey(path, owner), raw);
+      clearUnsaved(path, null);
+    } catch {}
+    return;
+  }
+  const recover = await askConfirm({
+    title: 'Recover an older unsaved draft?',
+    body: 'This browser kept a draft for this path without recording its account. Save a separate copy in the current account only if the draft belongs here. Cancelling keeps it in this browser.',
+    action: 'Save a copy',
+  });
+  if (!recover || seq !== openSeq || owner !== draftOwner || rawUnsaved(path, null) !== raw) return;
+  if (!(await saveDraftCopy(path, raw, null, owner))) {
+    toast("Couldn't save the copy. Your draft is still in this browser.");
+  }
+}
+
+async function saveDraftCopy(path, raw, owner, expectedSubject = owner) {
+  const stash = parseUnsaved(raw);
   try {
-    localStorage.setItem(draftKey(note.path), raw);
-    localStorage.removeItem(draftKey(note.path, null));
-  } catch {}
+    const copy = await api.createNote({
+      folder: folderOf(path), title: conflictTitle(path), content: stash.text,
+      ...(expectedSubject == null ? {} : { expected_subject: expectedSubject }),
+    });
+    if (rawUnsaved(path, owner) === raw) clearUnsaved(path, owner);
+    toast(`Changed somewhere else. Your unsaved version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
+    loadNotes();
+    return true;
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    return false;
+  }
 }
 function clearLiveDraft() {
   if (!screen.retainedDraft || rawUnsaved(screen.path) !== screen.retainedDraft) clearUnsaved(screen.path);
@@ -1585,12 +1617,15 @@ export async function openNote(path, { line } = {}) {
     const note = await api.note(path);
     if (seq !== openSeq) return;
     note.content = normalizeLineEndings(note.content);
-    adoptLegacyDraft(note);
+    await recoverLegacyDraft(note, seq);
+    if (seq !== openSeq) return;
     Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color, fresh: false });
     opened.touch(note.path);
     let text = note.content;
     // Unsaved edits from last time, made on this exact version: bring them back.
-    const stash = readUnsaved(note.path);
+    const owner = draftOwner;
+    const raw = rawUnsaved(note.path, owner);
+    const stash = parseUnsaved(raw);
     if (stash && normalizeLineEndings(stash.text) !== note.content) {
       if (stash.base === note.hash) {
         text = normalizeLineEndings(stash.text);
@@ -1598,14 +1633,7 @@ export async function openNote(path, { line } = {}) {
       } else {
         // The note changed elsewhere since: keep them as a sibling note, like a conflict.
         // If that fails too (still offline), the stash stays for next time and the note opens anyway.
-        try {
-          const copy = await api.createNote({ folder: folderOf(note.path), title: conflictTitle(note.path), content: stash.text });
-          clearUnsaved(note.path);
-          toast(`Changed somewhere else. Your unsaved version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
-          loadNotes();
-        } catch (err) {
-          if (err instanceof Unauthorized) throw err;
-        }
+        await saveDraftCopy(note.path, raw, owner);
       }
     } else if (stash) clearUnsaved(note.path);
     if (seq !== openSeq) return;
