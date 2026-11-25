@@ -307,6 +307,46 @@ test('replaying a body draft made before the first live sync keeps a saved pin',
   expect(copies).toHaveLength(0);
 });
 
+test('offline reopen keeps a live body draft when a pin saves after the socket drops', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const accepted = '\nAccepted before disconnect';
+  liveView.dispatch({ changes: { from: original.length, insert: accepted } });
+  await tick();
+  expect(room.getText('t').toString()).toBe(original + accepted);
+  socket.close();
+  socket.onclose();
+  const draft = '\nOffline live draft';
+  liveView.dispatch({ changes: { from: liveView.state.doc.length, insert: draft } });
+  api.noteMeta = async () => {
+    current = { ...current, content: pinned + accepted, hash: 'pinned', pinned: true };
+    return current;
+  };
+  await notes.setOpenMeta({ pinned: true });
+  room.getText('t').insert(0, pinned.slice(0, -original.length));
+
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().pinned).toBe(true);
+  expect(notes.openNoteInfo().text).toContain(draft);
+  const more = '\nTyped after reopening';
+  liveView.dispatch({ changes: { from: liveView.state.doc.length, insert: more } });
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toContain(draft + more);
+  hello({ reuseRoom: true });
+  await tick();
+  const expected = pinned + accepted + draft + more;
+  expect(room.getText('t').toString()).toBe(expected);
+  expect(notes.openNoteInfo().text).toBe(expected);
+  expect(copies).toHaveLength(0);
+});
+
 test('a note deleted on the server does not reopen from a previously saved revision', async () => {
   const { api, ApiError } = await import('./api.js');
   await notes.openNote(path);

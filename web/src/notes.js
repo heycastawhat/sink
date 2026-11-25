@@ -1518,8 +1518,15 @@ export async function openNote(path, { line } = {}) {
     const stash = readUnsaved(note.path);
     if (stash) {
       const draftText = normalizeLineEndings(stash.text);
-      const matchingBase = stash.base === note.hash;
-      if (matchingBase && liveDraft && liveDraft.stash === rawUnsaved(note.path)) resume = liveDraft.snapshot;
+      const matchingSnapshot = liveDraft && liveDraft.stash === rawUnsaved(note.path);
+      let matchingBase = stash.base === note.hash;
+      if (offline && !matchingBase && matchingSnapshot && stash.base === liveDraft.base.hash) {
+        // The cache may know a metadata save this live document hasn't seen. Keep the draft's actual
+        // base and Yjs identities until it syncs; the cached pin and colour still apply to the editor.
+        Object.assign(screen, { hash: liveDraft.base.hash, saved: liveDraft.base.content });
+        matchingBase = true;
+      }
+      if (matchingBase && matchingSnapshot) resume = liveDraft.snapshot;
       if (draftText === content && !resume) {
         if (!offline || matchingBase) clearUnsaved(note.path);
       } else if (matchingBase) {
@@ -2052,7 +2059,9 @@ async function closeEditor() {
     stashUnsaved();
     const revision = recentRevisions.get(screen.path);
     const snapshot = live()?.snapshot();
-    if (revision && snapshot) revision.liveDraft = { stash: rawUnsaved(screen.path), snapshot };
+    if (revision && snapshot) {
+      revision.liveDraft = { stash: rawUnsaved(screen.path), snapshot, base: { hash: screen.hash, content: screen.saved } };
+    }
   }
   else if (dirty() && !blank(screen.editor.getText())) {
     if (stashNewDraft()) {
