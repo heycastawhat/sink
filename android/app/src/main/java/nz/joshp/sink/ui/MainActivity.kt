@@ -152,6 +152,8 @@ class MainActivity : ComponentActivity() {
         handleSignIn(intent)
         handleDebugSignIn(intent)
         openNote.value = noteTarget(intent)
+        // Not on recreation either, or the dialog would come back after a rotation.
+        addingTodo.value = savedInstanceState == null && intent.getBooleanExtra(EXTRA_NEW_TODO, false)
         // Not again when the activity is recreated (rotation): the files were already copied and opened.
         if (savedInstanceState == null) {
             handleSharedFiles(intent)
@@ -220,8 +222,11 @@ class MainActivity : ComponentActivity() {
     private val signingIn = mutableStateOf(false)
     private val signInError = mutableStateOf<String?>(null)
 
-    // A note route from a todo reminder, the New note tile, or text and files shared from another app.
+    // A note route from a todo reminder, the Take a note tile or widget, or text and files shared from another app.
     private val openNote = mutableStateOf<NoteTarget?>(null)
+
+    // The new-todo dialog, asked for by the Add todo tile or widget.
+    private val addingTodo = mutableStateOf(false)
 
     // The quick switcher, open over whatever screen is showing.
     private val switching = mutableStateOf(false)
@@ -253,6 +258,7 @@ class MainActivity : ComponentActivity() {
         handleSignIn(intent)
         handleDebugSignIn(intent)
         noteTarget(intent)?.let { openNote.value = it }
+        if (intent.getBooleanExtra(EXTRA_NEW_TODO, false)) addingTodo.value = true
         handleSharedFiles(intent)
         handleSharedLink(intent)
     }
@@ -594,6 +600,20 @@ class MainActivity : ComponentActivity() {
           }
         }
 
+        if (addingTodo.value) {
+            TodoDialog(
+                // lifecycleScope, not a composition scope: the dialog leaves the composition as it's answered.
+                onAdd = { text, due ->
+                    addingTodo.value = false
+                    lifecycleScope.launch {
+                        val told = notesVm.addTodo(text, due, null) ?: "Added to Todo.md"
+                        android.widget.Toast.makeText(this@MainActivity, told, android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onDismiss = { addingTodo.value = false },
+            )
+        }
+
         if (switching.value) {
             val state by notesVm.state.collectAsState()
             val opened by notesVm.opened.collectAsState()
@@ -623,6 +643,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_OPEN_NOTE = "open_note"
         const val EXTRA_OPEN_LINE = "open_line"
         const val EXTRA_NEW_NOTE = "new_note"
+        const val EXTRA_NEW_TODO = "new_todo"
         private val Loading = Session("", "")
         /** The splash's drop has landed and settled by now (see drawable/splash_icon_animated.xml). */
         private const val SPLASH_MIN_MS = 800L

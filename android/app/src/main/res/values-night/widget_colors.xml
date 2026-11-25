@@ -1,0 +1,8 @@
+<resources>
+    <color name="widget_surface">#211F24</color>
+    <color name="widget_ripple">#33FFFFFF</color>
+    <color name="widget_note_container">#4D3D75</color>
+    <color name="widget_note_content">#E9DDFF</color>
+    <color name="widget_todo_container">#633B48</color>
+    <color name="widget_todo_content">#FFD9E3</color>
+</resources>
