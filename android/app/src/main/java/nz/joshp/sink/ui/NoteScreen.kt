@@ -693,6 +693,8 @@ fun NoteScreen(
             if (pending != null) status = "Offline, will save"
             loadedNote = start
         }
+        val initialHash = ed.hash
+        val initialSaved = ed.saved
         val fresh = runCatching { api()?.note(path) }
         freshDone = true
         val err = fresh.exceptionOrNull()
@@ -718,7 +720,6 @@ fun NoteScreen(
             if (editorLoaded && !board && pending == null) js("window.sink.retireLive()")
             return@LaunchedEffect
         }
-        store.saveNote(n)
         if (ed.loaded && editorLoaded && pending == null) readEditor(flush = false)
         val prevHash = ed.hash
         val prevSaved = ed.saved
@@ -731,7 +732,11 @@ fun NoteScreen(
             saving = saveJob?.isActive == true,
             pendingNow = store.pending(path) != null,
             statusText = "Edited ${relativeTime(n.mtime)}",
+            initialPath = path,
+            initialHash = initialHash,
+            initialSaved = initialSaved,
         )
+        if (outcome.saveCache) store.saveNote(n)
         if (outcome.applyMeta) applyMeta(n)
         outcome.status?.let { status = it }
         val revertStaleRefresh = {

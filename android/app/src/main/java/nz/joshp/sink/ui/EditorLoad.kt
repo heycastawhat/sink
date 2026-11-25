@@ -35,6 +35,7 @@ internal fun shouldKeepOnMissingNote(
 ): Boolean = ed.dirty || ed.queued != null || pending != null || saving || pendingNow
 
 internal data class FreshLoadOutcome(
+    val saveCache: Boolean = false,
     val applyMeta: Boolean = false,
     val replaceEditorText: String? = null,
     val startLive: Boolean = false,
@@ -54,6 +55,9 @@ internal fun applyFreshNote(
     saving: Boolean,
     pendingNow: Boolean,
     statusText: String,
+    initialPath: String? = ed.path,
+    initialHash: String? = ed.hash,
+    initialSaved: String = ed.saved,
 ): FreshLoadOutcome {
     if (!ed.loaded) {
         ed.hash = fresh.hash
@@ -67,21 +71,24 @@ internal fun applyFreshNote(
         ed.loaded = true
         ed.liveMode = !board && pending == null
         return FreshLoadOutcome(
+            saveCache = true,
             applyMeta = true,
             scheduleSave = start != ed.saved,
             status = statusText,
         )
     }
+    val advanced = ed.path != initialPath || ed.hash != initialHash || ed.saved != initialSaved
     if (pending != null) {
-        if (saving || ed.queued != pending) return FreshLoadOutcome()
+        if (saving || advanced || ed.queued != pending) return FreshLoadOutcome()
         ed.saved = fresh.content
         return FreshLoadOutcome(
+            saveCache = true,
             applyMeta = true,
             scheduleSave = ed.current != ed.saved,
             status = statusText,
         )
     }
-    if (ed.dirty || saving || pendingNow || ed.queued != null) {
+    if (advanced || ed.dirty || saving || pendingNow || ed.queued != null) {
         return FreshLoadOutcome(retireLive = true)
     }
     val changed = fresh.content != ed.current
@@ -90,6 +97,7 @@ internal fun applyFreshNote(
     ed.current = fresh.content
     ed.liveMode = !board
     return FreshLoadOutcome(
+        saveCache = true,
         applyMeta = true,
         replaceEditorText = if (changed) fresh.content else null,
         startLive = !board,

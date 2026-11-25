@@ -152,4 +152,39 @@ class EditorLoadTest {
         edited.current = original + "Typed before 404\n"
         assertTrue(shouldKeepOnMissingNote(edited, pending = null, saving = false, pendingNow = false))
     }
+
+    @Test
+    fun staleFreshResponseAfterAutosaveDoesNotRollBackCacheOrEditor() {
+        val ed = Editing("Phone note.md", "draft", "")
+        loadCachedNote(ed, cachedNote, pending = null)
+        val initialHash = ed.hash
+        val initialSaved = ed.saved
+
+        // Simulate autosave completing with a newer revision before the slow open fetch returns.
+        ed.hash = "h3"
+        ed.saved = original + "Saved newer edit\n"
+        ed.current = ed.saved
+
+        val outcome = applyFreshNote(
+            ed,
+            cachedNote,
+            pending = null,
+            board = false,
+            saving = false,
+            pendingNow = false,
+            statusText = "Edited now",
+            initialPath = "Phone note.md",
+            initialHash = initialHash,
+            initialSaved = initialSaved,
+        )
+
+        assertFalse(outcome.saveCache)
+        assertFalse(outcome.applyMeta)
+        assertNull(outcome.replaceEditorText)
+        assertFalse(outcome.startLive)
+        assertTrue(outcome.retireLive)
+        assertEquals("h3", ed.hash)
+        assertEquals(original + "Saved newer edit\n", ed.saved)
+        assertEquals(original + "Saved newer edit\n", ed.current)
+    }
 }
