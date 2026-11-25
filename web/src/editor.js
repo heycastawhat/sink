@@ -20,6 +20,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } 
 import { tags as t } from '@lezer/highlight';
 import './editor.css';
 import { buzz } from './haptics.js';
+import { pasteHtmlImage } from './paste-image.js';
 import { inlineHtml, tableCells } from './util.js';
 import { registry } from './plugin-api.js';
 import { cellSpans, nextCell, prevCell, tableEditing, tableEnter } from './table-edit.js';
@@ -1051,15 +1052,19 @@ export function createEditor(opts) {
     };
   };
 
+  // An embed on a line of its own at `pos` (the cursor by default).
+  const insertEmbed = (view, text, pos) => {
+    const at = pos ?? view.state.selection.main.head;
+    const line = view.state.doc.lineAt(at);
+    const insert = (line.length && at === line.to ? '\n' : '') + text + '\n';
+    view.dispatch({ changes: { from: at, insert }, selection: { anchor: at + insert.length } });
+  };
+
   const insertFiles = async (view, files, pos) => {
     if (!opts.uploadFile || !files.length) return false;
     for (const file of files) {
       try {
-        const text = await opts.uploadFile(file);
-        const at = pos ?? view.state.selection.main.head;
-        const line = view.state.doc.lineAt(at);
-        const insert = (line.length && at === line.to ? '\n' : '') + text + '\n';
-        view.dispatch({ changes: { from: at, insert }, selection: { anchor: at + insert.length } });
+        insertEmbed(view, await opts.uploadFile(file), pos);
       } catch (err) {
         opts.onError?.(err);
       }
@@ -1162,7 +1167,11 @@ export function createEditor(opts) {
           paste(e, view) {
             const files = [...(e.clipboardData?.files ?? [])];
             // Without an uploader (an older Android app) leave the paste to the browser rather than swallow the image.
-            if (!files.length || !opts.uploadFile) return pasteLink(e, view);
+            if (!files.length || !opts.uploadFile) {
+              // An image copied from a web page arrives as HTML with no file: fetch it and upload it like a pasted one.
+              if (pasteHtmlImage(e, { uploadFile: opts.uploadFile, insert: (text) => insertEmbed(view, text), onError: opts.onError })) return true;
+              return pasteLink(e, view);
+            }
             e.preventDefault();
             insertFiles(view, files);
             return true;
