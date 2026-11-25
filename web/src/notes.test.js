@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, mock, test } from 'bun:test';
-import { EditorState } from '@codemirror/state';
+import { EditorState, Facet } from '@codemirror/state';
 import * as Y from 'yjs';
 
 const realLiveSession = (await import('./live.js')).liveSession;
 let useLive;
 let livePlugin;
 let liveView;
+const liveExtension = Facet.define({ combine: (extensions) => extensions[0] });
 
 let editor;
 const create = (options) => {
@@ -14,15 +15,21 @@ const create = (options) => {
     liveView = {
       state: EditorState.create({ doc: text, extensions: options.extensions }),
       dispatch(spec) {
+        const previous = this.state.facet(liveExtension);
         const transaction = this.state.update(spec);
         this.state = transaction.state;
-        livePlugin.update({ transactions: [transaction], docChanged: transaction.docChanged, selectionSet: transaction.selection != null });
+        const next = this.state.facet(liveExtension);
+        if (next !== previous) {
+          livePlugin.destroy();
+          livePlugin = next.create(this);
+        } else livePlugin.update({ transactions: [transaction], docChanged: transaction.docChanged, selectionSet: transaction.selection != null });
         if (transaction.docChanged) options.onChange?.(this.state.doc.toString());
       },
     };
-    livePlugin = options.extensions.at(-1).create(liveView);
+    livePlugin = liveView.state.facet(liveExtension).create(liveView);
   }
   editor = {
+    view: liveView,
     getText: () => useLive ? liveView.state.doc.toString() : text,
     setText(value) {
       if (useLive) return liveView.dispatch({ changes: { from: 0, to: liveView.state.doc.length, insert: value } });
@@ -37,13 +44,18 @@ const create = (options) => {
 mock.module('./editor.js', () => ({ createEditor: create }));
 // Most tests cover fallback saving; live tests drive the real session with a headless CodeMirror view.
 mock.module('./live.js', () => ({
-  liveSession: (options) => useLive ? realLiveSession({
-    ...options,
-    onStatus(text, kind) {
-      statuses.push(text);
-      options.onStatus(text, kind);
-    },
-  }) : ({ extension: [], started: false, unavailable: false, start() {}, destroy() {} }),
+  liveSession: (options) => {
+    if (!useLive) return { extension: [], started: false, unavailable: false, start() {}, destroy() {} };
+    const session = realLiveSession({
+      ...options,
+      onStatus(text, kind) {
+        statuses.push(text);
+        options.onStatus(text, kind);
+      },
+    });
+    session.extension.push(liveExtension.of(session.extension.at(-1)));
+    return session;
+  },
   renderPeople() {},
 }));
 
@@ -58,6 +70,7 @@ let socket;
 let room;
 let firstCreate;
 let statuses;
+let stream;
 const path = 'N23 Journal.md';
 const original = '# N23 Journal\n\nOriginal body';
 const pinned = '---\npinned: true\n---\n' + original;
@@ -67,6 +80,7 @@ beforeEach(async () => {
   useLive = false;
   firstCreate = false;
   statuses = [];
+  liveView = null;
   socket = room = null;
   storage = new Map();
   globalThis.localStorage = {
@@ -77,6 +91,7 @@ beforeEach(async () => {
   globalThis.sessionStorage = globalThis.localStorage;
   globalThis.history = { replaceState(_state, _title, hash) { location.hash = hash; } };
   const elements = new Map();
+  const documentEvents = new EventTarget();
   const element = () => ({
     hidden: false,
     dataset: {},
@@ -86,15 +101,23 @@ beforeEach(async () => {
     querySelectorAll: () => [],
   });
   globalThis.document = {
+    hidden: false,
     getElementById(id) {
       if (id === 'notes') return null;
       if (!elements.has(id)) elements.set(id, element());
+      if (id === 'todos') elements.get(id).hidden = true;
       return elements.get(id);
     },
     body: element(),
     querySelectorAll: () => [],
-    addEventListener() {},
-    dispatchEvent() {},
+    addEventListener: documentEvents.addEventListener.bind(documentEvents),
+    dispatchEvent: documentEvents.dispatchEvent.bind(documentEvents),
+  };
+  globalThis.EventSource = class extends EventTarget {
+    constructor() {
+      super();
+      stream = this;
+    }
   };
   globalThis.ResizeObserver = class { disconnect() {} };
   globalThis.matchMedia = () => ({ matches: true });
@@ -105,7 +128,9 @@ beforeEach(async () => {
   messages = [];
   const { api } = await import('./api.js');
   api.note = async () => ({ ...current });
+  api.saveNote = async (_path, content) => (current = { ...current, content, hash: 'written' });
   api.notes = async () => ({ notes: [current, ...copies], folders: [] });
+  api.todoCount = async () => ({ overdue: 0, today: 0 });
   api.backlinks = api.mentions = async () => ({ items: [] });
   api.noteMeta = async () => {
     current = { ...current, content: pinned, hash: 'pinned', pinned: true };
@@ -179,6 +204,8 @@ function remoteInsert(at, text) {
   toClient({ t: 'dirty' });
 }
 
+const noteCreated = () => stream.dispatchEvent(new MessageEvent('change', { data: JSON.stringify({ type: 'note.created', path }) }));
+
 test('connected live updates and saved notifications still replace the note without making a draft', async () => {
   useLive = true;
   liveStream();
@@ -194,6 +221,84 @@ test('connected live updates and saved notifications still replace the note with
   await tick();
   expect(statuses.at(-1)).toBe('Saved');
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
+for (const changed of [false, true]) {
+  test(`the same open editor rejoins live editing after a restore ${changed ? 'with changes' : 'with the same hash'}`, async () => {
+    useLive = true;
+    liveStream();
+    const { api, ApiError } = await import('./api.js');
+    const reads = api.note;
+    const writes = [];
+    api.saveNote = async (...args) => { writes.push(args); return { hash: current.hash }; };
+    notes.listenForChanges();
+    await notes.openNote(path);
+    hello();
+    await tick();
+    const existingEditor = editor;
+    const oldSocket = socket;
+    const status = document.getElementById('note-status');
+    api.note = async () => { throw new ApiError(404); };
+    toClient({ t: 'gone' });
+    await tick();
+    expect(status.textContent).toBe('Deleted elsewhere');
+    expect(oldSocket.readyState).toBe(3);
+
+    // Restoring with the original tab hidden still has to refresh when the user returns.
+    document.hidden = !changed;
+    if (changed) current = { ...current, content: latest, hash: 'restored' };
+    api.note = reads;
+    noteCreated();
+    if (document.hidden) {
+      document.hidden = false;
+      document.dispatchEvent(new Event('visibilitychange'));
+    }
+    await tick();
+    expect(editor).toBe(existingEditor);
+    expect(socket).not.toBe(oldSocket);
+    expect(notes.openNoteInfo().text).toBe(current.content);
+    hello();
+    await tick();
+    expect(status.textContent).toBe('Saved');
+    remoteInsert(current.content.length, '\nLive after restore');
+    await tick();
+    expect(notes.openNoteInfo().text).toBe(current.content + '\nLive after restore');
+    expect(writes).toEqual([]);
+    expect(copies).toEqual([]);
+  });
+}
+
+test('typing while a restore check is in flight still uses the conflict-copy fallback', async () => {
+  useLive = true;
+  liveStream();
+  const { setHaptics } = await import('./haptics.js');
+  setHaptics(false);
+  const { api, ApiError } = await import('./api.js');
+  notes.listenForChanges();
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const oldSocket = socket;
+  api.note = async () => { throw new ApiError(404); };
+  toClient({ t: 'gone' });
+  await tick();
+
+  current = { ...current, content: latest, hash: 'restored' };
+  let restored;
+  api.note = () => new Promise((resolve) => { restored = resolve; });
+  api.saveNote = async () => { throw new ApiError(409, { current }); };
+  noteCreated();
+  const mine = original + '\nUnsaved local edit';
+  editor.setText(mine);
+  restored({ ...current });
+  await tick();
+  expect(socket).toBe(oldSocket);
+  expect(notes.openNoteInfo().text).toBe(mine);
+
+  expect(await notes.saveForReload()).toBe(true);
+  expect(copies.map((copy) => copy.content)).toEqual([mine]);
+  expect(notes.openNoteInfo().text).toBe(latest);
+  setHaptics(true);
 });
 
 test('a newly saved plain live note leaves no draft when Android later saves offline edits', async () => {
