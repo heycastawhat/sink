@@ -1,6 +1,11 @@
 package nz.joshp.sink.ui
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.NoteMeta
 import nz.joshp.sink.data.NoteSaver
@@ -100,10 +105,20 @@ class EditorConflictTest {
             creates++
             SaveResult.Conflict(original.copy(path = first.path!!), copy.copy(path = "Copy $creates.md"), first.text)
         }
+        val completed = async(start = CoroutineStart.UNDISPATCHED) {
+            withTimeout(5_000) {
+                NoteSaver.completed.filterIsInstance<QueuedSave.Conflict>().first { it.edit.key == first.key }
+            }
+        }
         val fromBack = NoteSaver.save(closing.pendingEdit()!!, closing.queued, createCopy)
         val fromReopen = NoteSaver.save(reopened.pendingEdit()!!, reopened.queued, createCopy)
 
         assertEquals(1, creates)
         assertEquals(fromBack, fromReopen)
+        val outcome = completed.await()
+        assertTrue(reopened.matchesConflict(outcome))
+        reopened.adoptConflict(outcome.result())
+        assertEquals(original.hash, reopened.hash)
+        assertNull(reopened.pendingEdit())
     }
 }
