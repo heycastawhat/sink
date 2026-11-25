@@ -1,0 +1,13 @@
+{
+  "name": "sink-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "fail=0; for f in *.test.ts; do bun test \"$f\" || fail=1; done; exit $fail",
+    "browsers": "bunx playwright-core install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "playwright-core": "1.65.1"
+  }
+}

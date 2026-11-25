@@ -16,3 +16,5 @@ docker-compose.override.yml
 HANDOFF.local.md
 # Built Chrome extension package (bun run zip in extension/).
 /extension/sink-extension.zip
+# Screenshots left by failing browser tests.
+/e2e/test-results/
