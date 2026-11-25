@@ -290,6 +290,37 @@ test('reopening a draft offline does not replay a live edit the server already s
   expect(copies).toHaveLength(0);
 });
 
+test('undoing an offline edit before Back does not resurrect text a collaborator replaced', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const from = original.indexOf('Original');
+  const to = from + 'Original'.length;
+  socket.close();
+  socket.onclose();
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  liveView.dispatch({ changes: { from, to } });
+  liveView.dispatch({ changes: { from, insert: 'Original' } });
+  expect(notes.openNoteInfo().text).toBe(original);
+  await notes.closeNote();
+  await notes.openNote(path);
+
+  room.transact(() => {
+    room.getText('t').delete(from, to - from);
+    room.getText('t').insert(from, 'Collaborator');
+  });
+  await tick();
+  current = { ...current, hash: 'collaborator', content: original.replace('Original', 'Collaborator') };
+  hello({ reuseRoom: true });
+  await tick();
+  expect(room.getText('t').toString()).toBe(current.content);
+  expect(notes.openNoteInfo().text).toBe(current.content);
+  expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
 test('cached text matching a revert from a newer revision does not erase the draft', async () => {
   useLive = true;
   liveStream();
