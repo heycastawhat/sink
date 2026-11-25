@@ -7,7 +7,9 @@ let sink;
 let rootStyles;
 let type;
 let change;
+let created;
 const create = (options) => {
+  created = options;
   const asEditorText = (text) => options.doc == null ? text : EditorState.create({ doc: text }).doc.toString();
   let text = asEditorText(options.doc ?? options.text);
   type = (value) => {
@@ -133,4 +135,34 @@ test('reading without flushing leaves the pending change notification scheduled'
   type(pinned);
   expect(sink.textOrNull({ flush: false })).toBe(pinned);
   expect(await changed).toBe(pinned);
+});
+
+test('an image pasted into the page goes to the app to upload, and its embed comes back', async () => {
+  const sent = [];
+  window.SinkBridge.uploadImage = (...args) => sent.push(args);
+  await sink.load({ text: original });
+  const bytes = new Uint8Array([137, 80, 78, 71, 0, 255]);
+  const upload = created.uploadFile(new File([bytes], 'image.png', { type: 'image/png' }));
+  await new Promise((resolve) => setTimeout(resolve));
+  const [[id, name, mime, base64]] = sent;
+  expect([name, mime]).toEqual(['image.png', 'image/png']);
+  expect(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))).toEqual(bytes);
+  sink.uploaded(id, '![[image.png]]');
+  expect(await upload).toBe('![[image.png]]');
+});
+
+test('a failed upload rejects with the app\u2019s reason', async () => {
+  const sent = [];
+  window.SinkBridge.uploadImage = (...args) => sent.push(args);
+  await sink.load({ text: original });
+  const upload = created.uploadFile(new File([new Uint8Array([1])], '', { type: '' }));
+  await new Promise((resolve) => setTimeout(resolve));
+  expect(sent[0].slice(1, 3)).toEqual(['image', 'image/png']);
+  sink.uploaded(sent[0][0], null, 'Upload failed');
+  await expect(upload).rejects.toThrow('Upload failed');
+});
+
+test('an app that cannot upload gets no uploader, so a pasted image is left to the browser', async () => {
+  await sink.load({ text: original });
+  expect(created.uploadFile).toBeUndefined();
 });

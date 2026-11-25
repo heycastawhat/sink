@@ -192,6 +192,7 @@ private class Bridge(
     val onLink: (String) -> Unit,
     val onLinkMention: (src: String, hash: String, start: Int, text: String) -> Unit,
     val onPickImage: () -> Unit,
+    val onUploadImage: (id: Int, name: String, mime: String, base64: String) -> Unit,
     val onPickTemplate: () -> Unit,
     val onHaptic: (String) -> Unit,
     val onEmbed: (String) -> Unit,
@@ -210,6 +211,7 @@ private class Bridge(
     @JavascriptInterface fun haptic(kind: String) = main.post { onHaptic(kind) }.let { }
     @JavascriptInterface fun linkMention(src: String, hash: String, start: Int, text: String) = main.post { onLinkMention(src, hash, start, text) }.let { }
     @JavascriptInterface fun pickImage() = main.post(onPickImage).let { }
+    @JavascriptInterface fun uploadImage(id: Int, name: String, mime: String, base64: String) = main.post { onUploadImage(id, name, mime, base64) }.let { }
     @JavascriptInterface fun pickTemplate() = main.post(onPickTemplate).let { }
     @JavascriptInterface fun embed(target: String) = main.post { onEmbed(target) }.let { }
     @JavascriptInterface fun live(state: String) = main.post { onLive(state) }.let { }
@@ -814,6 +816,24 @@ fun NoteScreen(
         }
     }
 
+    // An image pasted into the page (it can't reach the server itself; its fetches stay in the app): upload it and
+    // hand the embed back for the page to put at the cursor.
+    fun uploadPasted(id: Int, name: String, mime: String, base64: String) {
+        scope.launch {
+            status = "Uploading…"
+            val result = runCatching {
+                val bytes = withContext(Dispatchers.IO) { base64.decodeBase64()?.toByteArray() } ?: error("not an image")
+                api()!!.attach(name, mime, bytes)
+            }
+            result.onSuccess { js("window.sink.uploaded($id, ${JsonPrimitive(it.embed)})") }
+                .onFailure {
+                    js("window.sink.uploaded($id, null, ${JsonPrimitive(it.message ?: "it could not be uploaded")})")
+                    snackbar.showSnackbar("Upload failed: ${it.message}")
+                }
+            status = ""
+        }
+    }
+
     fun linkMention(src: String, hash: String, start: Int, text: String) {
         val p = ed.path ?: return
         scope.launch {
@@ -1024,6 +1044,7 @@ fun NoteScreen(
                     onLink = ::openLink,
                     onLinkMention = ::linkMention,
                     onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onUploadImage = ::uploadPasted,
                     onPickTemplate = { templating = TemplateAsk.Slash },
                     onHaptic = { kind ->
                         when (kind) {
