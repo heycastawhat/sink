@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from 'bun:test';
-import { EditorState } from '@codemirror/state';
+import { history, undo } from '@codemirror/commands';
+import { EditorState, Transaction } from '@codemirror/state';
 import * as Y from 'yjs';
 
 const realLiveSession = (await import('./live.js')).liveSession;
@@ -12,14 +13,15 @@ const create = (options) => {
   let text = EditorState.create({ doc: options.doc }).doc.toString();
   if (useLive) {
     liveView = {
-      state: EditorState.create({ doc: text, extensions: options.extensions }),
+      state: EditorState.create({ doc: text, extensions: [history(), options.extensions] }),
       dispatch(spec) {
-        const transaction = this.state.update(spec);
+        const transaction = spec instanceof Transaction ? spec : this.state.update(spec);
         this.state = transaction.state;
         livePlugin.update({ transactions: [transaction], docChanged: transaction.docChanged, selectionSet: transaction.selection != null });
         if (transaction.docChanged) options.onChange?.(this.state.doc.toString());
       },
     };
+    liveView.dispatch = liveView.dispatch.bind(liveView);
     livePlugin = options.extensions.at(-1).create(liveView);
   }
   editor = {
@@ -55,6 +57,7 @@ let messages;
 let storage;
 const nativeFetch = globalThis.fetch;
 let socket;
+let nextSocket;
 let room;
 let firstCreate;
 let statuses;
@@ -68,6 +71,7 @@ beforeEach(async () => {
   firstCreate = false;
   statuses = [];
   socket = room = null;
+  nextSocket = null;
   storage = new Map();
   globalThis.localStorage = {
     getItem: (key) => storage.get(key) ?? null,
@@ -138,6 +142,7 @@ class FakeSocket {
   constructor() {
     this.readyState = 0;
     socket = this;
+    nextSocket?.();
   }
   send(data) {
     if (typeof data === 'string') {
@@ -166,9 +171,11 @@ function liveStream() {
   globalThis.WebSocket = FakeSocket;
 }
 function hello() {
-  room = new Y.Doc();
-  room.getText('t').insert(0, current.content.replace(/\r\n?/g, '\n'));
-  room.on('update', (update, origin) => origin !== 'client' && toClient(frame(2, update)));
+  if (!room) {
+    room = new Y.Doc();
+    room.getText('t').insert(0, current.content.replace(/\r\n?/g, '\n'));
+    room.on('update', (update, origin) => origin !== 'client' && toClient(frame(2, update)));
+  }
   socket.readyState = 1;
   toClient({ t: 'hello', guid: room.guid, hash: current.hash, dirty: false, editor: true });
   toClient(frame(0, Y.encodeStateVector(room)));
@@ -178,6 +185,71 @@ function remoteInsert(at, text) {
   room.getText('t').insert(at, text);
   toClient({ t: 'dirty' });
 }
+
+async function disconnectLive() {
+  useLive = true;
+  liveStream();
+  await notes.openNote(path);
+  hello();
+  await tick();
+  socket.close();
+  socket.onclose();
+}
+
+async function reconnectLive() {
+  await new Promise(resolve => { nextSocket = resolve; });
+  nextSocket = null;
+  hello();
+  await tick();
+}
+
+for (const otherEdit of ['', ' (keep this edit)']) {
+  test('offline undo preserves a collaborator replacement' + (otherEdit ? ' alongside another local edit' : ''), async () => {
+    await disconnectLive();
+    const from = original.indexOf('Original');
+    liveView.dispatch({ changes: { from, to: from + 'Original'.length } });
+    expect(undo(liveView)).toBe(true);
+    if (otherEdit) liveView.dispatch({ changes: { from: from + 'Original'.length, insert: otherEdit } });
+
+    room.transact(() => {
+      room.getText('t').delete(from, 'Original'.length);
+      room.getText('t').insert(from, 'Collaborator');
+    });
+    current = { ...current, hash: 'collaborator', content: original.replace('Original', 'Collaborator') };
+    await reconnectLive();
+    const expected = current.content.replace('Collaborator', 'Collaborator' + otherEdit);
+    expect(room.getText('t').toString()).toBe(expected);
+    expect(notes.openNoteInfo().text).toBe(expected);
+    expect(copies).toHaveLength(0);
+  });
+}
+
+test('offline deletion keeps its position when a collaborator edits an identical line', async () => {
+  const line = 'Same line\n';
+  const from = original.length + 1;
+  current.content = original + '\n' + line + line + 'End';
+  await disconnectLive();
+  const second = from + line.length;
+  liveView.dispatch({ changes: { from, to: second } });
+  room.transact(() => {
+    room.getText('t').delete(second, line.length);
+    room.getText('t').insert(second, 'Edited second line\n');
+  });
+  await reconnectLive();
+  const expected = original + '\nEdited second line\nEnd';
+  expect(room.getText('t').toString()).toBe(expected);
+  expect(notes.openNoteInfo().text).toBe(expected);
+});
+
+test('offline replacement of an emoji preserves the whole surrogate pair', async () => {
+  const from = original.length;
+  current.content = original + '🙂';
+  await disconnectLive();
+  liveView.dispatch({ changes: { from: from + 1, to: from + 2, insert: '🙃'[1] } });
+  await reconnectLive();
+  expect(room.getText('t').toString()).toBe(original + '🙃');
+  expect(notes.openNoteInfo().text).toBe(original + '🙃');
+});
 
 test('connected live updates and saved notifications still replace the note without making a draft', async () => {
   useLive = true;
