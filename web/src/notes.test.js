@@ -424,6 +424,11 @@ test('replays queued pin and colour for the signed-in account when the stream re
   expect(messages.at(-1)).toContain('will sync');
   await notes.closeNote();
 
+  const ownDraftKey = 'sink:account-unsaved:' + JSON.stringify(['scratch', path]);
+  const otherDraftKey = 'sink:account-unsaved:' + JSON.stringify(['another account', path]);
+  storage.set(ownDraftKey, JSON.stringify({ base: 'before-server-save', text: original.replaceAll('\n', '\r\n') }));
+  storage.set(otherDraftKey, JSON.stringify({ base: 'different-vault', text: 'Other account draft' }));
+
   const before = { window: globalThis.window, EventSource: globalThis.EventSource };
   const stream = new EventTarget();
   globalThis.window = new EventTarget();
@@ -445,6 +450,8 @@ test('replays queued pin and colour for the signed-in account when the stream re
     await tick();
     expect(writes).toEqual([[path, { pinned: true, color: null, expected_subject: 'scratch' }]]);
     expect(storage.has('sink:pending-meta:scratch')).toBe(false);
+    expect(storage.has(ownDraftKey)).toBe(false);
+    expect(storage.has(otherDraftKey)).toBe(true);
     await notes.openNote(path);
     expect(notes.openNoteInfo().pinned).toBe(true);
     expect(notes.openNoteInfo().text).toBe(pinned);

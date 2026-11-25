@@ -20,7 +20,8 @@ export const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purp
 const SAVE_DELAY = 700;
 // The open note is checked this often too, in case the live change stream is down.
 const POLL_MS = 30_000;
-const draftKey = (path) => `sink:unsaved:${path}`;
+const draftKey = (path, owner = draftOwner) =>
+  owner == null ? `sink:unsaved:${path}` : 'sink:account-unsaved:' + JSON.stringify([owner, path]);
 let draftOwner = null;
 const newDraftPrefix = 'sink:new-draft:';
 const newDraftKey = (id) => newDraftPrefix + JSON.stringify([draftOwner, id]);
@@ -1456,26 +1457,40 @@ function stashUnsaved() {
     localStorage.setItem(draftKey(screen.path), JSON.stringify({ base: screen.hash, text: screen.editor.getText(), at: Date.now() }));
   } catch {}
 }
-function clearUnsaved(path) {
+function clearUnsaved(path, owner = draftOwner) {
   try {
-    const hadDraft = rawUnsaved(path) != null;
-    localStorage.removeItem(draftKey(path));
-    if (hadDraft && draftOwner != null && pendingMeta(draftOwner).has(path)) retryPendingMeta();
+    const hadDraft = rawUnsaved(path, owner) != null;
+    localStorage.removeItem(draftKey(path, owner));
+    if (hadDraft && owner != null && owner === draftOwner && pendingMeta(owner).has(path)) retryPendingMeta();
   } catch {}
 }
-function readUnsaved(path) {
+function parseUnsaved(raw) {
   try {
-    return JSON.parse(rawUnsaved(path));
+    const draft = JSON.parse(raw);
+    return typeof draft?.text === 'string' ? draft : null;
   } catch {
     return null;
   }
 }
-function rawUnsaved(path) {
+function readUnsaved(path) {
+  return parseUnsaved(rawUnsaved(path));
+}
+function rawUnsaved(path, owner = draftOwner) {
   try {
-    return localStorage.getItem(draftKey(path));
+    return localStorage.getItem(draftKey(path, owner));
   } catch {
     return null;
   }
+}
+function adoptLegacyDraft(note) {
+  if (draftOwner == null || rawUnsaved(note.path) != null) return;
+  const raw = rawUnsaved(note.path, null);
+  const draft = parseUnsaved(raw);
+  if (!draft || (draft.base !== note.hash && normalizeLineEndings(draft.text) !== note.content)) return;
+  try {
+    localStorage.setItem(draftKey(note.path), raw);
+    localStorage.removeItem(draftKey(note.path, null));
+  } catch {}
 }
 function clearLiveDraft() {
   if (!screen.retainedDraft || rawUnsaved(screen.path) !== screen.retainedDraft) clearUnsaved(screen.path);
@@ -1565,6 +1580,7 @@ export async function openNote(path, { line } = {}) {
     const note = await api.note(path);
     if (seq !== openSeq) return;
     note.content = normalizeLineEndings(note.content);
+    adoptLegacyDraft(note);
     Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color, fresh: false });
     opened.touch(note.path);
     let text = note.content;
@@ -2146,22 +2162,32 @@ async function setMeta(changes, toggle = false) {
 }
 
 async function writeMeta(path, changes, owner) {
-  // A patch changes the hash the body draft was made against, even if no editor is open.
-  if (owner !== undefined && readUnsaved(path)) return false;
+  if (screen.path === path && screen.saving) await screen.saving;
+  // Don't invalidate an unsaved body draft, but a stale stash whose text is already saved is not an edit.
+  const raw = owner === undefined ? null : rawUnsaved(path, owner);
+  const draft = parseUnsaved(raw);
+  if (draft) {
+    if (screen.path === path && dirty()) return false;
+    const note = await api.note(path);
+    if (normalizeLineEndings(draft.text) !== normalizeLineEndings(note.content) || rawUnsaved(path, owner) !== raw) return false;
+  }
+  const clearSavedDraft = () => {
+    if (draft && rawUnsaved(path, owner) === raw) clearUnsaved(path, owner);
+  };
   const patch = owner === undefined ? changes : { ...changes, expected_subject: owner };
   if (screen.path !== path) {
     await api.noteMeta(path, patch);
+    clearSavedDraft();
     await loadNotes();
     return true;
   }
-  if (screen.saving) await screen.saving;
-  if (screen.path !== path) return writeMeta(path, changes, owner);
-  if (isQueuedMeta(changes) && (dirty() || (owner !== undefined && readUnsaved(path)))) return false;
+  if (screen.saving || (isQueuedMeta(changes) && dirty())) return false;
   // Hold autosave until the new hash is in, or a save with the old one would be a conflict.
   clearTimeout(screen.timer);
   const editor = screen.editor;
   const run = (async () => {
     const meta = await api.noteMeta(path, patch);
+    clearSavedDraft();
     const note = await api.note(meta.path);
     if (screen.editor !== editor || screen.path !== path) return;
     note.content = normalizeLineEndings(note.content);
