@@ -1141,6 +1141,10 @@ const screen = {
 // Keep a few saved revisions in this tab for Back → reopen, not in the service worker's shared shell cache.
 function rememberRevision(mtime = Date.now()) {
   const { path, hash, saved: content, pinned, private: isPrivate, color } = screen;
+  cacheRevision({ path, hash, content, pinned, private: isPrivate, color, mtime });
+}
+
+function cacheRevision({ path, hash, content, pinned, private: isPrivate, color, mtime }) {
   recentRevisions.delete(path);
   recentRevisions.set(path, { path, hash, content, pinned, private: isPrivate, color, mtime });
   if (recentRevisions.size > 20) recentRevisions.delete(recentRevisions.keys().next().value);
@@ -1375,8 +1379,18 @@ function clearNewDraft() {
 /** Keeps unsaved text in the browser, so a crash or a dead NAS doesn't lose it. */
 function stashUnsaved() {
   if (!dirty()) return clearUnsaved(screen.path);
+  let { hash: base } = screen;
+  let text = screen.editor.getText();
+  const revision = recentRevisions.get(screen.path);
+  // A metadata save can reach the cache before the first live sync. Carry it into a body-only draft,
+  // but don't relabel a draft whose original body changed on the server or whose frontmatter was edited locally.
+  if (live()?.bound === false && revision && revision.hash !== base &&
+      bodyOf(revision.content) === bodyOf(screen.saved) && frontmatterOf(text) === frontmatterOf(screen.saved)) {
+    base = revision.hash;
+    text = frontmatterOf(revision.content) + bodyOf(text);
+  }
   try {
-    localStorage.setItem(draftKey(screen.path), JSON.stringify({ base: screen.hash, text: screen.editor.getText(), at: Date.now() }));
+    localStorage.setItem(draftKey(screen.path), JSON.stringify({ base, text, at: Date.now() }));
   } catch {}
 }
 function clearUnsaved(path) {
@@ -2099,8 +2113,8 @@ async function setMeta(changes) {
     note.content = normalizeLineEndings(note.content);
     // Live, the new frontmatter arrives like anyone's change.
     if (live()) {
-      Object.assign(screen, { hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color });
-      rememberRevision(note.mtime);
+      cacheRevision(note);
+      Object.assign(screen, { pinned: note.pinned, private: note.private, color: note.color });
       return applyLook();
     }
     // Typed meanwhile: keep that body under the server's new frontmatter, so the next save doesn't undo the change.

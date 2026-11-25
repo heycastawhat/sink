@@ -286,6 +286,27 @@ test('offline reopen keeps pin and colour saved while live', async () => {
   expect(notes.openNoteInfo()).toMatchObject({ pinned: true, color: 'teal', text: current.content });
 });
 
+test('replaying a body draft made before the first live sync keeps a saved pin', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  await notes.setOpenMeta({ pinned: true });
+  liveView.dispatch({ changes: { from: liveView.state.doc.length, insert: '\nTyped before first sync' } });
+  const expected = current.content + '\nTyped before first sync';
+
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  socket.close();
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo()).toMatchObject({ pinned: true, text: expected });
+  hello();
+  await tick();
+  expect(room.getText('t').toString()).toBe(expected);
+  expect(notes.openNoteInfo()).toMatchObject({ pinned: true, text: expected });
+  expect(copies).toHaveLength(0);
+});
+
 test('a note deleted on the server does not reopen from a previously saved revision', async () => {
   const { api, ApiError } = await import('./api.js');
   await notes.openNote(path);
