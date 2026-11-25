@@ -27,6 +27,13 @@ internal fun loadCachedNote(ed: Editing, cached: Note?, pending: PendingEdit?): 
     return start
 }
 
+internal fun shouldKeepOnMissingNote(
+    ed: Editing,
+    pending: PendingEdit?,
+    saving: Boolean,
+    pendingNow: Boolean,
+): Boolean = ed.dirty || ed.queued != null || pending != null || saving || pendingNow
+
 internal data class FreshLoadOutcome(
     val applyMeta: Boolean = false,
     val replaceEditorText: String? = null,

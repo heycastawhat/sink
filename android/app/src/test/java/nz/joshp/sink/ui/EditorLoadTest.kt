@@ -140,4 +140,16 @@ class EditorLoadTest {
         assertFalse(boardEd.liveMode)
         assertFalse(boardOutcome.startLive)
     }
+
+    @Test
+    fun missingNoteKeepsUnsavedEditsInsteadOfClosing() {
+        val clean = Editing("Phone note.md", "draft", "")
+        loadCachedNote(clean, cachedNote, pending = null)
+        assertFalse(shouldKeepOnMissingNote(clean, pending = null, saving = false, pendingNow = false))
+
+        val edited = Editing("Phone note.md", "draft", "")
+        loadCachedNote(edited, cachedNote, pending = null)
+        edited.current = original + "Typed before 404\n"
+        assertTrue(shouldKeepOnMissingNote(edited, pending = null, saving = false, pendingNow = false))
+    }
 }

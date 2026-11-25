@@ -697,6 +697,12 @@ fun NoteScreen(
         freshDone = true
         val err = fresh.exceptionOrNull()
         if (err is ApiException && err.code == 404) {
+            if (ed.loaded && editorLoaded) readEditor(flush = false)
+            if (shouldKeepOnMissingNote(ed, pending, saveJob?.isActive == true, store.pending(path) != null)) {
+                if (editorLoaded && !board && pending == null) js("window.sink.retireLive()")
+                scheduleSave()
+                return@LaunchedEffect
+            }
             snackbar.showSnackbar("That note is gone")
             leave()
             return@LaunchedEffect
