@@ -1241,7 +1241,7 @@ export async function newBoard() {
  * Live co-editing for the open note: everyone with it open (here, in other tabs and devices, on its share link) types
  * into the same copy and sees each other's cursors. The server saves; a new note joins once its first save makes a file.
  */
-function startLive() {
+function startLive(resume) {
   const stash = screen.path && readUnsaved(screen.path);
   // A failed conflict copy belongs to another version, not to the editor joining this session: it stays for the next
   // open to retry, until typing here stashes over it.
@@ -1249,6 +1249,7 @@ function startLive() {
   const session = liveSession({
     start: !!screen.path,
     base: { text: screen.saved, hash: screen.hash },
+    resume,
     url: () => `/api/live?path=${encodeURIComponent(screen.path)}`,
     onStatus: (text, kind) => {
       if (screen.live === session) setStatus(text, kind);
@@ -1284,13 +1285,13 @@ function startLive() {
   return session;
 }
 
-function mountEditor(text) {
+function mountEditor(text, resume) {
   loadingText = deferredEditorText();
   screen.live?.destroy();
   screen.editor?.destroy();
   $('note-editor').innerHTML = '';
   $('note-screen').classList.remove('board');
-  screen.live = startLive();
+  screen.live = startLive(resume);
   renderPeople($('note-people'), []);
   screen.editor = createEditor({
     parent: $('note-editor'),
@@ -1484,14 +1485,17 @@ export async function openNote(path, { line } = {}) {
     if (seq !== openSeq) return;
     const content = normalizeLineEndings(note.content);
     Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: content, pinned: note.pinned, private: note.private, color: note.color, fresh: false });
+    const liveDraft = recentRevisions.get(note.path)?.liveDraft;
     rememberRevision(note.mtime);
     opened.touch(note.path);
     let text = content;
+    let resume;
     // Unsaved edits from last time, made on this exact version: bring them back.
     const stash = readUnsaved(note.path);
     if (stash && normalizeLineEndings(stash.text) !== content) {
       if (stash.base === note.hash) {
         text = normalizeLineEndings(stash.text);
+        if (liveDraft && liveDraft.stash === rawUnsaved(note.path)) resume = liveDraft.snapshot;
         toast('Restored unsaved changes');
       } else if (!offline) {
         // The note changed elsewhere since: keep them as a sibling note, like a conflict.
@@ -1509,7 +1513,7 @@ export async function openNote(path, { line } = {}) {
     if (seq !== openSeq) return;
     const mount = async () => {
       if (isBoardPath(note.path)) await mountBoard(text);
-      else mountEditor(text);
+      else mountEditor(text, resume);
       applyLook();
     };
     if (grow) {
@@ -2016,7 +2020,12 @@ async function closeEditor() {
   await flush();
   // Another open or close finished it while the save was out.
   if (!screen.editor) return;
-  if (dirty() && screen.path) stashUnsaved();
+  if (dirty() && screen.path) {
+    stashUnsaved();
+    const revision = recentRevisions.get(screen.path);
+    const snapshot = live()?.snapshot();
+    if (revision && snapshot) revision.liveDraft = { stash: rawUnsaved(screen.path), snapshot };
+  }
   else if (dirty() && !blank(screen.editor.getText())) {
     if (stashNewDraft()) {
       renderDrafts();

@@ -165,10 +165,12 @@ function toClient(msg) {
 function liveStream() {
   globalThis.WebSocket = FakeSocket;
 }
-function hello() {
-  room = new Y.Doc();
-  room.getText('t').insert(0, current.content.replace(/\r\n?/g, '\n'));
-  room.on('update', (update, origin) => origin !== 'client' && toClient(frame(2, update)));
+function hello({ reuseRoom = false } = {}) {
+  if (!reuseRoom) {
+    room = new Y.Doc();
+    room.getText('t').insert(0, current.content.replace(/\r\n?/g, '\n'));
+    room.on('update', (update, origin) => origin !== 'client' && toClient(frame(2, update)));
+  }
   socket.readyState = 1;
   toClient({ t: 'hello', guid: room.guid, hash: current.hash, dirty: false, editor: true });
   toClient(frame(0, Y.encodeStateVector(room)));
@@ -261,6 +263,31 @@ test('a note deleted on the server does not reopen from a previously saved revis
   await notes.openNote(path);
   expect(notes.openNoteInfo().open).toBe(false);
   expect(messages.at(-1)).toBe('That note is gone');
+});
+
+test('reopening a draft offline does not replay a live edit the server already saved', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  liveView.dispatch({ changes: { from: original.length, insert: '\nAlready accepted' } });
+  socket.close();
+  socket.onclose();
+  const accepted = original + '\nAlready accepted';
+  expect(room.getText('t').toString()).toBe(accepted);
+  current = { ...current, hash: 'accepted', content: accepted };
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(accepted);
+  const suffix = '\nAdded after reopen';
+  liveView.dispatch({ changes: { from: accepted.length, insert: suffix } });
+  hello({ reuseRoom: true });
+  await tick();
+  expect(room.getText('t').toString()).toBe(accepted + suffix);
+  expect(copies).toHaveLength(0);
 });
 
 test('leaving a newly saved live note before the first connection keeps no saved draft', async () => {
