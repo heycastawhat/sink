@@ -322,6 +322,8 @@ fun NoteScreen(
     }
     var pageReady by remember { mutableStateOf(false) }
     var loadedNote by remember { mutableStateOf<String?>(null) }
+    var editorLoaded by remember(path) { mutableStateOf(false) }
+    var freshDone by remember(path) { mutableStateOf(false) }
     var saveJob by remember { mutableStateOf<Job?>(null) }
     val saveLock = remember { Mutex() }
     val live = remember { LiveLink() }
@@ -685,44 +687,94 @@ fun NoteScreen(
         }
         vm.markOpened(path)
         val pending = store.pending(path)
-        store.note(path)?.let { cached ->
-            ed.hash = cached.hash
-            ed.saved = cached.content
-            applyMeta(cached)
+        val cached = store.note(path)
+        cached?.let(::applyMeta)
+        loadCachedNote(ed, cached, pending)?.let { start ->
+            if (pending != null) status = "Offline, will save"
+            loadedNote = start
         }
+        val initialHash = ed.hash
+        val initialSaved = ed.saved
         val fresh = runCatching { api()?.note(path) }
-        fresh.getOrNull()?.let { n ->
-            store.saveNote(n)
-            ed.hash = n.hash
-            ed.saved = n.content
-            applyMeta(n)
-            status = "Edited ${relativeTime(n.mtime)}"
-        }
+        freshDone = true
         val err = fresh.exceptionOrNull()
         if (err is ApiException && err.code == 404) {
+            if (ed.loaded && editorLoaded) readEditor(flush = false)
+            if (shouldKeepOnMissingNote(ed, pending, saveJob?.isActive == true, store.pending(path) != null)) {
+                if (editorLoaded && !board && pending == null) js("window.sink.retireLive()")
+                scheduleSave()
+                return@LaunchedEffect
+            }
             snackbar.showSnackbar("That note is gone")
             leave()
             return@LaunchedEffect
         }
-        if (fresh.getOrNull() == null && store.note(path) == null) {
-            status = "Offline"
-            snackbar.showSnackbar("Can't open this note offline yet")
+        val n = fresh.getOrNull()
+        if (n == null) {
+            if (!ed.loaded) {
+                status = "Offline"
+                snackbar.showSnackbar("Can't open this note offline yet")
+                return@LaunchedEffect
+            }
+            if (!ed.dirty && ed.queued == null) status = "Offline copy"
+            if (editorLoaded && !board && pending == null) js("window.sink.retireLive()")
             return@LaunchedEffect
         }
-        if (fresh.getOrNull() == null) status = "Offline copy"
-        // Unsaved edits from before: show them, and save (a stale base becomes a conflict copy, never an overwrite).
-        val start = pending?.let {
-            ed.hash = it.baseHash
-            ed.queued = it
-            it.text
-        } ?: ed.saved
-        ed.current = start
-        ed.loaded = true
-        // Edited live (with everyone else who has it open) when the server could be reached just now and nothing is
-        // waiting in the offline queue for it: queued text would otherwise reach the server twice, saved and synced.
-        ed.liveMode = !board && fresh.getOrNull() != null && pending == null
-        loadedNote = start
-        if (start != ed.saved) scheduleSave()
+        if (ed.loaded && editorLoaded && pending == null) readEditor(flush = false)
+        val prevHash = ed.hash
+        val prevSaved = ed.saved
+        val prevCurrent = ed.current
+        val outcome = applyFreshNote(
+            ed = ed,
+            fresh = n,
+            pending = pending,
+            board = board,
+            saving = saveJob?.isActive == true,
+            pendingNow = store.pending(path) != null,
+            statusText = "Edited ${relativeTime(n.mtime)}",
+            initialPath = path,
+            initialHash = initialHash,
+            initialSaved = initialSaved,
+        )
+        if (outcome.saveCache) store.saveNote(n)
+        if (outcome.applyMeta) applyMeta(n)
+        outcome.status?.let { status = it }
+        val revertStaleRefresh = {
+            ed.liveMode = false
+            ed.hash = prevHash
+            ed.saved = prevSaved
+            ed.current = prevCurrent
+            scope.launch {
+                readEditor(flush = false)
+                if (ed.dirty) scheduleSave()
+            }
+        }
+        if (loadedNote == null) {
+            loadedNote = ed.current
+        } else if (editorLoaded) {
+            if (outcome.startLive) {
+                val liveInit = buildJsonObject {
+                    put("saved", n.content)
+                    put("hash", n.hash)
+                    outcome.replaceEditorText?.let {
+                        put("expected", prevCurrent)
+                        put("replace", it)
+                    }
+                }
+                web?.evaluateJavascript("window.sink.startLive($liveInit)") { raw ->
+                    if (raw == "false") revertStaleRefresh()
+                }
+            } else if (outcome.replaceEditorText != null) {
+                val expected = JsonPrimitive(prevCurrent)
+                val replace = JsonPrimitive(outcome.replaceEditorText)
+                web?.evaluateJavascript("window.sink.setTextIfUnchanged($expected, $replace)") { raw ->
+                    if (raw == "false") revertStaleRefresh()
+                }
+            } else if (outcome.retireLive) {
+                js("window.sink.retireLive()")
+            }
+        }
+        if (outcome.scheduleSave) scheduleSave()
     }
 
     // The page and the note can arrive in either order; load once both are here.
@@ -743,8 +795,13 @@ fun NoteScreen(
             if (ed.liveMode) putJsonObject("live") {
                 put("saved", ed.saved)
                 ed.hash?.let { put("hash", it) }
+            } else if (!board && ed.path != null && ed.queued == null && !freshDone) putJsonObject("live") {
+                put("saved", ed.saved)
+                ed.hash?.let { put("hash", it) }
+                put("start", false)
             }
         }
+        editorLoaded = true
         js("window.sink.load($payload)")
         // Mentions after the text, so a slow or offline server never holds the note up.
         val p = ed.path?.takeIf { !board } ?: return@LaunchedEffect

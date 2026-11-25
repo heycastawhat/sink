@@ -14,7 +14,10 @@ const create = (options) => {
     text = asEditorText(value);
     options.onChange?.(text);
   };
-  return { getText: () => text, setText: type, destroy() {} };
+  const livePlugin = options.extensions?.at(-1)?.create?.({
+    state: EditorState.create({ doc: text, extensions: options.extensions }),
+  });
+  return { getText: () => text, setText: type, destroy() { livePlugin?.destroy(); } };
 };
 mock.module('./editor.js', () => ({ createEditor: create }));
 mock.module('./board.js', () => ({ createBoard: create }));
@@ -133,4 +136,117 @@ test('reading without flushing leaves the pending change notification scheduled'
   type(pinned);
   expect(sink.textOrNull({ flush: false })).toBe(pinned);
   expect(await changed).toBe(pinned);
+});
+
+test('a deferred live session waits for startLive before opening its socket', async () => {
+  const previousLocation = globalThis.location;
+  globalThis.location = new URL('https://appassets.androidplatform.net/editor.html');
+  const opened = [];
+  window.SinkBridge.liveOpen = (url) => opened.push(url);
+  window.SinkBridge.liveClose = () => {};
+  try {
+    await sink.load({ text: original, path: 'Note.md', live: { saved: original, hash: 'h1', start: false } });
+    await Promise.resolve();
+    expect(opened).toEqual([]);
+
+    sink.setText(pinned);
+    sink.startLive({ saved: pinned, hash: 'h2' });
+    await Promise.resolve();
+    expect(opened).toEqual(['/api/live?path=Note.md']);
+  } finally {
+    sink.retireLive();
+    globalThis.location = previousLocation;
+  }
+});
+
+test('startLive arriving while plugins load connects once the editor mounts', async () => {
+  const previousLocation = globalThis.location;
+  globalThis.location = new URL('https://appassets.androidplatform.net/editor.html');
+  const opened = [];
+  window.SinkBridge.liveOpen = (url) => opened.push(url);
+  window.SinkBridge.liveClose = () => {};
+  try {
+    let finish;
+    plugins = () => new Promise((resolve) => (finish = resolve));
+    const loading = sink.load({ text: original, path: 'Note.md', live: { saved: original, hash: 'h1', start: false } });
+    sink.setText(pinned);
+    sink.startLive({ saved: pinned, hash: 'h2' });
+    finish();
+    await loading;
+    await Promise.resolve();
+    expect(sink.textOrNull()).toBe(pinned);
+    expect(opened).toEqual(['/api/live?path=Note.md']);
+  } finally {
+    sink.retireLive();
+    globalThis.location = previousLocation;
+  }
+});
+
+test('retireLive while plugins load prevents a deferred live session from connecting', async () => {
+  const previousLocation = globalThis.location;
+  globalThis.location = new URL('https://appassets.androidplatform.net/editor.html');
+  const opened = [];
+  window.SinkBridge.liveOpen = (url) => opened.push(url);
+  window.SinkBridge.liveClose = () => {};
+  try {
+    let finish;
+    plugins = () => new Promise((resolve) => (finish = resolve));
+    const loading = sink.load({ text: original, path: 'Note.md', live: { saved: original, hash: 'h1', start: false } });
+    sink.retireLive();
+    finish();
+    await loading;
+    await Promise.resolve();
+    expect(opened).toEqual([]);
+  } finally {
+    globalThis.location = previousLocation;
+  }
+});
+
+test('startLive refuses to overwrite text typed after the native snapshot', async () => {
+  const previousLocation = globalThis.location;
+  globalThis.location = new URL('https://appassets.androidplatform.net/editor.html');
+  const opened = [];
+  window.SinkBridge.liveOpen = (url) => opened.push(url);
+  window.SinkBridge.liveClose = () => {};
+  try {
+    await sink.load({ text: original, path: 'Note.md', live: { saved: original, hash: 'h1', start: false } });
+    sink.setText(`${original}typed\n`);
+
+    const applied = sink.startLive({
+      saved: 'server newer\n',
+      hash: 'h2',
+      expected: original,
+      replace: 'server newer\n',
+    });
+
+    expect(applied).toBe(false);
+    expect(sink.textOrNull({ flush: false })).toBe(`${original}typed\n`);
+    expect(opened).toEqual([]);
+  } finally {
+    globalThis.location = previousLocation;
+  }
+});
+
+test('startLive atomically replaces untouched cached text and connects live', async () => {
+  const previousLocation = globalThis.location;
+  globalThis.location = new URL('https://appassets.androidplatform.net/editor.html');
+  const opened = [];
+  window.SinkBridge.liveOpen = (url) => opened.push(url);
+  window.SinkBridge.liveClose = () => {};
+  try {
+    await sink.load({ text: original, path: 'Note.md', live: { saved: original, hash: 'h1', start: false } });
+
+    const applied = sink.startLive({
+      saved: 'server newer\n',
+      hash: 'h2',
+      expected: original,
+      replace: 'server newer\n',
+    });
+
+    expect(applied).toBe(true);
+    expect(sink.textOrNull({ flush: false })).toBe('server newer\n');
+    expect(opened).toEqual(['/api/live?path=Note.md']);
+  } finally {
+    globalThis.location = previousLocation;
+  }
 });
