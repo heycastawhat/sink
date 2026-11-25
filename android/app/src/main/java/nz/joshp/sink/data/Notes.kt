@@ -150,11 +150,12 @@ suspend fun Api.searchNotes(q: String): List<NoteMeta> {
 suspend fun Api.note(path: String): Note = call(authed(pathUrl("/api/notes/file", path)).build()) { json.decodeFromString(it) }
 
 /** [keepVersion]: keep the text being replaced as a version even mid-sitting (restoring an old version). */
-suspend fun Api.saveNote(path: String, content: String, baseHash: String?, keepVersion: Boolean = false): NoteMeta {
+suspend fun Api.saveNote(path: String, content: String, baseHash: String?, keepVersion: Boolean = false, live: LiveHandoff? = null): NoteMeta {
     val body = buildJsonObject {
         put("content", content)
         if (baseHash == null) put("base_hash", JsonNull) else put("base_hash", baseHash)
         if (keepVersion) put("keep_version", true)
+        if (live != null) put("live", json.encodeToJsonElement(LiveHandoff.serializer(), live))
     }
     return call(authed(pathUrl("/api/notes/file", path)).put(jsonBody(body)).build()) { json.decodeFromString(it) }
 }
@@ -422,6 +423,9 @@ suspend fun Api.addTodo(text: String, due: String?, time: String?): Added {
 
 // ---------- local copy ----------
 
+@Serializable
+data class LiveHandoff(val guid: String, val update: String)
+
 /** An edit not yet on the server. [path] null = a new note that has no file yet. */
 @Serializable
 data class PendingEdit(
@@ -431,6 +435,7 @@ data class PendingEdit(
     @SerialName("base_hash") val baseHash: String?,
     val text: String,
     val at: Long = 0,
+    val live: LiveHandoff? = null,
 )
 
 /**
@@ -592,7 +597,7 @@ object NoteSaver {
                 if (edit.text.isBlank()) return SaveResult.Saved(NoteMeta("", ""))
                 api.createNote(edit.folder, titleFor(edit.text), edit.text)
             } else {
-                api.saveNote(edit.path, edit.text, edit.baseHash)
+                api.saveNote(edit.path, edit.text, edit.baseHash, live = edit.live)
             }
             store.saveNote(Note(meta.path, meta.title, meta.hash, edit.text, meta.mtime, meta.pinned, meta.color))
             store.clearPending(edit.key)

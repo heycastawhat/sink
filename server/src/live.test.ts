@@ -158,7 +158,77 @@ async function save(c: Client) {
 
 const file = (path: string) => readFileSync(join(s.vaultDir, path), "utf8");
 
+const write = (path: string, content: string, baseHash: string, doc?: Y.Doc) =>
+  s.app.request(`/api/notes/file?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${s.token}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      content,
+      base_hash: baseHash,
+      live: doc && { guid: doc.guid, update: Buffer.from(Y.encodeStateAsUpdate(doc)).toString("base64") },
+    }),
+  });
+
 describe("live editing", () => {
+  for (const delivery of ["discarded", "after fallback", "before fallback"]) {
+    test(`a live fallback writes one insertion when socket delivery is ${delivery}`, async () => {
+      const initial = await put("Handoff.md", "Hello\n");
+      const android = await open(initial.path);
+      const observer = await open(initial.path);
+      const update = new Promise<Uint8Array>((resolve) => android.doc.once("update", resolve));
+      const send = android.ws.send.bind(android.ws);
+      android.ws.send = () => {};
+      android.insert(5, " Android");
+      const frameToDeliver = frame(UPDATE, await update);
+      if (delivery === "before fallback") {
+        send(frameToDeliver);
+        await until(() => observer.text === "Hello Android\n", "original socket edit accepted");
+        expect(file(initial.path)).toBe("Hello\n");
+      }
+      const res = await write(initial.path, android.text, initial.hash, android.doc);
+      expect(res.status).toBe(200);
+      if (delivery === "after fallback") {
+        const acks = android.acks;
+        send(frameToDeliver);
+        await until(() => android.acks > acks, "delayed socket edit accepted");
+      }
+      await liveFor(s.vault).flush();
+      await until(() => observer.text.includes(" Android"), "fallback relayed to the other peer");
+      expect(observer.text).toBe("Hello Android\n");
+      expect(file(initial.path)).toBe("Hello Android\n");
+    });
+  }
+
+  test("a live fallback keeps a newer committed edit as a hash conflict", async () => {
+    const initial = await put("Handoff.md", "Hello\n");
+    const android = await open(initial.path);
+    android.ws.send = () => {};
+    android.insert(5, " Android");
+    const other = await write(initial.path, "Hello PWA\n", initial.hash);
+    expect(other.status).toBe(200);
+    const conflict = await write(initial.path, "Hello Android\n", initial.hash, android.doc);
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ current: { content: "Hello PWA\n" } });
+    expect(file(initial.path)).toBe("Hello PWA\n");
+  });
+
+  test("a live fallback keeps unpublished changes from another live peer", async () => {
+    const initial = await put("Handoff.md", "Hello\n");
+    const android = await open(initial.path);
+    const other = await open(initial.path);
+    android.ws.send = () => {};
+    android.insert(5, " Android");
+    const snapshot = Buffer.from(Y.encodeStateAsUpdate(android.doc));
+    other.insert(0, "PWA: ");
+    await until(() => android.text.startsWith("PWA: "), "other peer's update");
+    const offline = new Y.Doc({ guid: android.doc.guid });
+    Y.applyUpdate(offline, snapshot);
+    expect((await write(initial.path, "Hello Android\n", initial.hash, offline)).status).toBe(200);
+    offline.destroy();
+    await liveFor(s.vault).flush();
+    expect(file(initial.path)).toBe("PWA: Hello Android\n");
+  });
+
   test("two people: each sees the other's typing, concurrent edits both go in, and the file is written", async () => {
     await put("Plan.md", "Hello world\n");
     const a = await open("Plan.md");

@@ -520,6 +520,7 @@ export function liveSession(opts) {
       return bound && !destroyed;
     },
     pending: () => pending() || (!bound && view?.state.doc.toString() !== base),
+    snapshot: () => bound && !destroyed ? { guid: doc.guid, update: Y.encodeStateAsUpdate(doc) } : null,
     /** The next write keeps what it replaces as a version (restoring an old version). */
     keepVersion() {
       if (!connected || !send(JSON.stringify({ t: 'keep' }))) keepNext = true;

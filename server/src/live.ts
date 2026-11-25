@@ -2,7 +2,7 @@ import type { Server, ServerWebSocket } from "bun";
 import diff from "fast-diff";
 import type { Context } from "hono";
 import * as Y from "yjs";
-import { cleanPath, isBoard, MAX_NOTE_BYTES, splitFrontmatter, VaultError, type Note, type Vault, type VaultEvent } from "./notes";
+import { cleanPath, isBoard, MAX_NOTE_BYTES, splitFrontmatter, VaultError, type Note, type NoteMeta, type Vault, type VaultEvent } from "./notes";
 
 /**
  * Live co-editing: everyone with a note open (signed in, or through an editable share link) edits one copy of it held
@@ -349,6 +349,67 @@ export class Room {
       this.recheck = false;
       await this.checkFile();
     }
+  }
+
+  async saveFallback(path: string, content: string, baseHash: string, guid: string, update: Uint8Array, keepVersion?: boolean): Promise<NoteMeta> {
+    while (this.saving) await this.saving;
+    if (this.closed || path !== this.path) throw new VaultError(409, "note changed since it was read");
+    const write = this.writeFallback(path, content, baseHash, guid, update, keepVersion);
+    this.saving = write.then(() => {}, () => {});
+    try {
+      return await write;
+    } finally {
+      this.saving = null;
+      if (!this.peers.size && !this.idleTimer && !this.closed) {
+        this.idleTimer = setTimeout(() => void this.closeIfIdle(), IDLE_CLOSE_MS);
+      }
+      if (this.recheck) {
+        this.recheck = false;
+        await this.checkFile();
+      }
+    }
+  }
+
+  private async writeFallback(path: string, content: string, baseHash: string, guid: string, update: Uint8Array, keepVersion?: boolean) {
+    if (baseHash !== this.savedHash) {
+      const current = await this.hub.vault.read(path).catch((err: unknown) => {
+        if (err instanceof VaultError && err.status === 404) throw new VaultError(409, "note was deleted");
+        throw err;
+      });
+      if (current.hash !== baseHash) throw new VaultError(409, "note changed since it was read", current);
+      this.absorb(current);
+    }
+    if (guid !== this.doc.guid) {
+      return this.hub.vault.write(path, content, baseHash, { keepVersion });
+    }
+    // Take the queued changes with their original Yjs identities, not as a second diff of the same text.
+    // Fork the saved revision so concurrent live changes absent from the queued snapshot are not overwritten.
+    const fork = new Y.Doc();
+    let state: Uint8Array;
+    try {
+      Y.applyUpdate(fork, this.savedState);
+      try {
+        Y.applyUpdate(fork, update);
+      } catch {
+        throw new VaultError(400, "invalid live update");
+      }
+      const theirs = normalize(content);
+      const queued = textOf(fork).toString();
+      if (queued !== theirs) textOf(fork).applyDelta(diffDelta(queued, theirs));
+      state = Y.encodeStateAsUpdate(fork);
+    } finally {
+      fork.destroy();
+    }
+    const saved = await this.hub.vault.write(path, content, baseHash, { keepVersion });
+    this.savedText = normalize(content);
+    this.savedHash = saved.hash;
+    this.savedState = state;
+    this.hub.store(this.path, this.doc.guid, state, saved.hash);
+    Y.applyUpdate(this.doc, state, FILE);
+    this.dirty = this.str !== this.savedText;
+    if (this.dirty) this.scheduleSave(SAVE_DELAY_MS);
+    this.sendSaved();
+    return saved;
   }
 
   private async write() {
