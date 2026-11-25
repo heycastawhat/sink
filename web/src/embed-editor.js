@@ -17,7 +17,8 @@
 //   SinkBridge.liveFlushed(state)           sink.liveFlush()'s answer, the same JSON as live(state)
 // The app drives it with:
 //   sink.load({ text, path, dark, colors, links, line, plugins, board, live })   colors: { '--md-sys-color-primary': '#...', ... }
-//     live: { saved, hash }: edit live (live.js); `saved` and `hash` are the file as the app last had it.
+//     live: { saved, hash, start }: edit live (live.js); `saved` and `hash` are the file as the app last had it.
+//       `start: false` mounts the plugin without connecting until `sink.startLive({ saved, hash })`.
 //     board: the text is an Excalidraw board (.excalidraw.md); it opens in Excalidraw instead of the text editor.
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
@@ -29,6 +30,7 @@
 //   sink.mentions(items)   GET /api/notes/mentions' items: unlinked mentions, a collapsed section after the backlinks
 //   sink.inset(px)      how much of the page's bottom the app's floating toolbar covers; the cursor stays above it
 //   sink.keepVersion()  live: the next write keeps what it replaces as a version (restoring an old one)
+//   sink.startLive({ saved, hash })  connect a deferred live session once the server's copy has arrived
 //   sink.liveFlush()    leaving or pausing: send what's typed and have the server write it; answers with liveFlushed
 //   sink.retireLive()   stop live editing here (the app saves the text itself from now on)
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
@@ -70,6 +72,8 @@ const loadEmbed = (target) =>
 let editor = null;
 let session = null;
 let liveSocket = null;
+let pendingLive = null;
+let liveRetired = false;
 const loadingText = deferredEditorText();
 let links = [];
 let timer = null;
@@ -80,6 +84,8 @@ const attachment = (ref) => `https://sink.attachment/${ref.split('/').map(encode
 window.sink = {
   async load({ text = '', path = null, dark = false, colors = {}, links: targets = [], line = null, plugins = [], board = false, live = null } = {}) {
     if (board) return loadBoard(text, dark, colors);
+    pendingLive = null;
+    liveRetired = false;
     await loadPlugins(
       {
         list: async () => plugins,
@@ -95,7 +101,9 @@ window.sink = {
     editor?.destroy();
     session?.destroy();
     liveGone = false;
-    session = live && path && bridge.liveOpen ? startLive(path, live) : null;
+    const liveOpts = liveRetired ? null : (pendingLive ? { ...pendingLive, start: true } : live);
+    pendingLive = null;
+    session = liveOpts && path && bridge.liveOpen ? startLive(path, liveOpts) : null;
     let sourceText = loadingText.take(text);
     let editorText;
     // Android compares the bridge text to the saved file. Don't report CodeMirror's LF normalization as an edit.
@@ -194,7 +202,14 @@ window.sink = {
   keepVersion() {
     session?.keepVersion();
   },
+  startLive({ saved, hash }) {
+    if (liveRetired) return;
+    if (session) session.start({ text: saved, hash });
+    else pendingLive = { saved, hash };
+  },
   retireLive() {
+    liveRetired = true;
+    pendingLive = null;
     session?.destroy();
     session = null;
     report();
@@ -235,9 +250,10 @@ window.sink = {
 };
 
 /** Live editing for the note (live.js), over a socket the app keeps to the server. */
-function startLive(path, { saved, hash }) {
+function startLive(path, { saved, hash, start = true }) {
   return liveSession({
     base: { text: saved, hash },
+    start,
     url: () => `/api/live?path=${encodeURIComponent(path)}`,
     // Renamed or moved (here or elsewhere): reconnect to it where it is now.
     onMoved: (to) => (path = to),
