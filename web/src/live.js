@@ -160,8 +160,7 @@ export function liveSession(opts) {
 
   const ytext = () => doc.getText('t');
   const unconfirmed = () => made > confirmed;
-  const pending = () => unconfirmed() || serverDirty ||
-    (!!view && (!bound || !connected) && view.state.doc.toString() !== (bound ? ytext().toString() : base));
+  const pending = () => unconfirmed() || serverDirty;
   const wake = () => {
     for (const w of [...waiters]) w();
   };
@@ -216,7 +215,7 @@ export function liveSession(opts) {
   function onUpdate(update, origin) {
     if (origin === REMOTE) return;
     made++;
-    if (connected) sendChanges(UPDATE, update);
+    sendChanges(UPDATE, update);
     status();
   }
   function useDoc(next) {
@@ -230,10 +229,10 @@ export function liveSession(opts) {
   }
   useDoc(new Y.Doc());
 
-  function editorToDoc(changes) {
+  function editorToDoc(tr) {
     doc.transact(() => {
       let shift = 0;
-      changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+      tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
         const at = fromA + shift;
         if (toA > fromA) ytext().delete(at, toA - fromA);
         if (inserted.length) ytext().insert(at, inserted.toString());
@@ -384,9 +383,6 @@ export function liveSession(opts) {
       resuming = false;
       made = confirmed = 0;
       useDoc(new Y.Doc({ guid: d.guid }));
-    } else if (bound) {
-      // Only commit the net edits made while offline. An edit and its undo must not reinsert a collaborator's text.
-      editorToDoc(diffChanges(ytext().toString(), view.state.doc.toString()));
     }
     send(frame(SYNC_STEP1, Y.encodeStateVector(doc)));
     if (keepNext) send(JSON.stringify({ t: 'keep' }));
@@ -495,21 +491,22 @@ export function liveSession(opts) {
   let started = opts.start !== false;
   const plugin = ViewPlugin.define((v) => {
     view = v;
-    if (opts.resume?.text === view.state.doc.toString()) {
+    if (opts.resume) {
       const restored = new Y.Doc({ guid: opts.resume.guid });
       Y.applyUpdate(restored, opts.resume.state);
-      useDoc(restored);
-      bound = resuming = true;
-      made = 1;
+      if (restored.getText('t').toString() === view.state.doc.toString()) {
+        useDoc(restored);
+        bound = resuming = true;
+        made = 1;
+      } else restored.destroy();
     }
     if (started) queueMicrotask(connect);
     return {
       update(u) {
-        if (bound && connected && !destroyed) {
-          for (const tr of u.transactions) if (tr.docChanged && !tr.annotation(fromDoc)) editorToDoc(tr.changes);
-        }
+        if (bound && !destroyed) for (const tr of u.transactions) if (tr.docChanged && !tr.annotation(fromDoc)) editorToDoc(tr);
         if (u.docChanged || u.selectionSet) schedulePresence();
-        if (u.docChanged && (!bound || !connected)) status();
+        // Typed before the first sync (or with no file yet): not in the document, but not saved either.
+        if (u.docChanged && !bound) status();
       },
       destroy,
     };
@@ -517,7 +514,7 @@ export function liveSession(opts) {
 
   return {
     extension: [peopleField, remoteSelections, remoteCarets, editable.of([]), plugin],
-    snapshot: () => bound ? { guid: doc.guid, state: Y.encodeStateAsUpdate(doc), text: view.state.doc.toString() } : null,
+    snapshot: () => bound ? { guid: doc.guid, state: Y.encodeStateAsUpdate(doc) } : null,
     /** Connects now (with `start: false`): `base` is the file as it was just saved. */
     start(next) {
       if (started) return;
@@ -544,7 +541,7 @@ export function liveSession(opts) {
     get bound() {
       return bound && !destroyed;
     },
-    pending,
+    pending: () => pending() || (!bound && view?.state.doc.toString() !== base),
     /** The next write keeps what it replaces as a version (restoring an old version). */
     keepVersion() {
       if (!connected || !send(JSON.stringify({ t: 'keep' }))) keepNext = true;
