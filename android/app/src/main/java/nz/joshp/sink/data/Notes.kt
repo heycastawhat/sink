@@ -511,9 +511,10 @@ class NoteStore(context: Context) {
 }
 
 /** What a save came to. */
-sealed interface SaveResult {
+internal sealed interface SaveResult {
     /** Written; [meta] is the file now. */
     data class Saved(val meta: NoteMeta) : SaveResult
+    data class Acknowledged(val outcome: QueuedSave.Saved) : SaveResult
     /** Changed elsewhere: their version is [theirs]; ours went to [copy] (null if theirs already matched ours). */
     data class Conflict(val theirs: Note?, val copy: NoteMeta?, val savedText: String) : SaveResult
     /** No network or the NAS is down: kept on the phone, retried by [NoteSync]. */
@@ -524,12 +525,20 @@ sealed interface SaveResult {
 internal sealed interface QueuedSave {
     val edit: PendingEdit
 
+    fun matches(queued: PendingEdit?, key: String, baseHash: String?) =
+        edit == queued && edit.key == key && edit.baseHash == baseHash
+
     data class Saved(override val edit: PendingEdit, val path: String, val hash: String) : QueuedSave
     data class Conflict(override val edit: PendingEdit, val server: Note?, val copy: NoteMeta?) : QueuedSave {
-        fun matches(queued: PendingEdit?, key: String, baseHash: String?) =
-            edit == queued && edit.key == key && edit.baseHash == baseHash
-
         fun result() = SaveResult.Conflict(server, copy, edit.text)
+    }
+
+    fun beforeWrite(next: PendingEdit, queued: PendingEdit?): SaveResult? {
+        if (!matches(queued, next.key, next.baseHash)) return null
+        return when (this) {
+            is Saved -> if (path == next.path) SaveResult.Acknowledged(this) else null
+            is Conflict -> result()
+        }
     }
 }
 
@@ -557,11 +566,8 @@ object NoteSaver {
         return first.replace(Regex("""^[-*+]\s+(\[.]\s+)?|^#+\s+"""), "").take(60)
     }
 
-    suspend fun save(context: Context, api: Api, edit: PendingEdit, queued: PendingEdit?): SaveResult = lock.withLock {
-        val outcome = outcomes[edit.key] as? QueuedSave.Conflict
-        if (outcome?.matches(queued, edit.key, edit.baseHash) == true) {
-            return@withLock outcome.result()
-        }
+    internal suspend fun save(context: Context, api: Api, edit: PendingEdit, queued: PendingEdit?): SaveResult = lock.withLock {
+        outcomes[edit.key]?.beforeWrite(edit, queued)?.let { return@withLock it }
         saveLocked(context, api, edit, requeue = true)
     }
 

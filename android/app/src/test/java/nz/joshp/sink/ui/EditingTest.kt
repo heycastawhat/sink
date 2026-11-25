@@ -3,6 +3,7 @@ package nz.joshp.sink.ui
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.QueuedSave
+import nz.joshp.sink.data.SaveResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -52,5 +53,28 @@ class EditingTest {
         assertTrue(editor.dirty)
         assertFalse(editor.acceptRemote(remote, ack.hash))
         assertEquals("Offline edit plus new typing", editor.current)
+    }
+
+    @Test
+    fun foregroundSaveWaitingBehindWorkerRebuildsItsEditWithTheAcknowledgedHash() {
+        val editor = offlineEditor("Offline edit plus new typing")
+        val waiting = editor.pendingEdit()!!
+        assertEquals(edit.baseHash, waiting.baseHash)
+
+        val result = ack.beforeWrite(waiting, editor.queued) as SaveResult.Acknowledged
+        assertTrue(editor.acknowledge(result.outcome))
+
+        val next = editor.pendingEdit()!!
+        assertEquals(ack.hash, next.baseHash)
+        assertEquals(waiting.text, next.text)
+        assertNull(ack.beforeWrite(next, editor.queued))
+    }
+
+    @Test
+    fun workerSaveOnlyAcknowledgesTheExactQueuedEditOnTheSameBaseAndPath() {
+        val waiting = offlineEditor("New typing").pendingEdit()!!
+        assertNull(ack.beforeWrite(waiting, edit.copy(at = edit.at + 1)))
+        assertNull(ack.beforeWrite(waiting.copy(baseHash = remote.hash), edit))
+        assertNull(ack.beforeWrite(waiting.copy(path = "Other.md"), edit))
     }
 }
