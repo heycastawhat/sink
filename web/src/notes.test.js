@@ -243,6 +243,8 @@ for (const changed of [false, true]) {
     await tick();
     expect(status.textContent).toBe('Deleted elsewhere');
     expect(oldSocket.readyState).toBe(3);
+    const otherTabDraft = JSON.stringify({ base: current.hash, text: original + '\nDraft from another tab' });
+    storage.set('sink:unsaved:' + path, otherTabDraft);
 
     // Restoring with the original tab hidden still has to refresh when the user returns.
     document.hidden = !changed;
@@ -260,6 +262,7 @@ for (const changed of [false, true]) {
     hello();
     await tick();
     expect(status.textContent).toBe('Saved');
+    expect(storage.get('sink:unsaved:' + path)).toBe(otherTabDraft);
     remoteInsert(current.content.length, '\nLive after restore');
     await tick();
     expect(notes.openNoteInfo().text).toBe(current.content + '\nLive after restore');

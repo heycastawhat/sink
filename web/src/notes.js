@@ -1132,6 +1132,7 @@ const screen = {
   live: null, // the live co-editing session (live.js), while the note is open on the server for it
   deletedElsewhere: false,
   retainedDraft: null, // the stash of a conflict copy that failed on opening, kept while live saves clear the rest
+  restoredLiveDraft: undefined, // after a restore, only clear drafts this session wrote
 };
 
 /** The live session, once it's started and unless the server turned it down: then the server saves, not us. */
@@ -1232,7 +1233,8 @@ export async function newBoard() {
  * Live co-editing for the open note: everyone with it open (here, in other tabs and devices, on its share link) types
  * into the same copy and sees each other's cursors. The server saves; a new note joins once its first save makes a file.
  */
-function startLive() {
+function startLive({ restoring = false } = {}) {
+  screen.restoredLiveDraft = restoring ? null : undefined;
   const stash = screen.path && readUnsaved(screen.path);
   // A failed conflict copy belongs to another version, not to the editor joining this session: it stays for the next
   // open to retry, until typing here stashes over it.
@@ -1353,9 +1355,11 @@ function clearNewDraft() {
 
 /** Keeps unsaved text in the browser, so a crash or a dead NAS doesn't lose it. */
 function stashUnsaved() {
-  if (!dirty()) return clearUnsaved(screen.path);
+  if (!dirty()) return live() ? clearLiveDraft() : clearUnsaved(screen.path);
   try {
-    localStorage.setItem(draftKey(screen.path), JSON.stringify({ base: screen.hash, text: screen.editor.getText(), at: Date.now() }));
+    const draft = JSON.stringify({ base: screen.hash, text: screen.editor.getText(), at: Date.now() });
+    localStorage.setItem(draftKey(screen.path), draft);
+    if (live() && screen.restoredLiveDraft !== undefined) screen.restoredLiveDraft = draft;
   } catch {}
 }
 function clearUnsaved(path) {
@@ -1378,6 +1382,10 @@ function rawUnsaved(path) {
   }
 }
 function clearLiveDraft() {
+  if (screen.restoredLiveDraft !== undefined) {
+    if (screen.restoredLiveDraft && rawUnsaved(screen.path) === screen.restoredLiveDraft) clearUnsaved(screen.path);
+    return;
+  }
   if (!screen.retainedDraft || rawUnsaved(screen.path) !== screen.retainedDraft) clearUnsaved(screen.path);
 }
 
@@ -1891,7 +1899,7 @@ async function refreshOpenNote() {
     Object.assign(screen, { hash: note.hash, saved: content, pinned: note.pinned, private: note.private, color: note.color, deletedElsewhere: false });
     if (deletedElsewhere) {
       // A restore can have the very same hash. Rejoin without rebuilding the editor or replaying its old text.
-      screen.live = startLive();
+      screen.live = startLive({ restoring: true });
       editor.view.dispatch({ effects: liveExtension.reconfigure(screen.live.extension) });
     }
     if (editor.getText() !== content) editor.setText(content);
