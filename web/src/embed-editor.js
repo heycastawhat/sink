@@ -5,6 +5,7 @@
 //   SinkBridge.openLink(target)             [[wikilink]] or url tapped
 //   SinkBridge.linkMention(src, hash, start, text)   "Link" pressed on an unlinked mention; reply with sink.backlinks/mentions again
 //   SinkBridge.pickImage()                  user wants to attach an image; reply with sink.insert(text)
+//   SinkBridge.uploadImage(id, name, mime, base64)   an image pasted or dropped into the text; reply with sink.uploaded(id, embed, error)
 //   SinkBridge.pickTemplate()               /template: user wants a template; reply with sink.template(text or null)
 //   SinkBridge.haptic(kind)                 tick, confirm, reject or toggle (haptics.js; the WebView can't vibrate)
 //   SinkBridge.embed(target)                ![[Note]] needs that note; reply with sink.embed(target, note or null)
@@ -21,6 +22,7 @@
 //     board: the text is an Excalidraw board (.excalidraw.md); it opens in Excalidraw instead of the text editor.
 //     plugins: GET /api/plugins' list. Built-in ones are bundled here (so they work offline); others load from
 //     https://sink.server/plugins/<id>/…, which the app fetches from the server with its token.
+//   sink.uploaded(id, embed, error)   uploadImage's answer: the embed text to insert, or why it failed
 //   sink.setText(text)  sink.insert(text)  sink.getText()  sink.textOrNull()  sink.focus()
 //   sink.format(kind)   the bar above the keyboard: heading, h1, h2, h3, task, bullet, numbered, quote, bold, italic, strike,
 //                       code, link, indent, outdent, undo, redo, find (see editor.js format)
@@ -58,6 +60,22 @@ const pickTemplate = () =>
     templateReply = resolve;
     bridge.pickTemplate();
   });
+
+// Pasted images waiting on the app's upload, by id.
+const uploads = new Map();
+let uploadId = 0;
+const uploadFile = async (file) => {
+  // Chunked: spreading a whole photo into fromCharCode overflows the stack.
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const id = ++uploadId;
+  return new Promise((resolve, reject) => {
+    uploads.set(id, { resolve, reject });
+    // The clipboard names its images "image.png"; the server de-duplicates names, so that's fine.
+    bridge.uploadImage(id, file.name || 'image', file.type || 'image/png', btoa(binary));
+  });
+};
 
 // ![[Note]]s waiting on the app, by target.
 const embeds = new Map();
@@ -109,6 +127,9 @@ window.sink = {
         timer = setTimeout(() => bridge.changed(preserveUnchangedText(t)), 250);
       },
       onOpenLink: (target) => bridge.openLink(target),
+      // Only when the app can take them (an older app can't, and a pasted image then goes the browser's way).
+      uploadFile: bridge.uploadImage ? uploadFile : undefined,
+      onError: (err) => bridge.haptic?.('reject'),
       resolveEmbed: attachment,
       resolveImage: (src) => (/^(https?:|data:)/i.test(src) ? src : attachment(decodeLink(src).replace(/^(\.\.\/)+/, ''))),
       // An older app can't fetch them: embeds show just the note's name.
@@ -173,6 +194,12 @@ window.sink = {
   },
   pickImage() {
     bridge.pickImage();
+  },
+  uploaded(id, embed, error) {
+    const wait = uploads.get(id);
+    uploads.delete(id);
+    if (embed) wait?.resolve(embed);
+    else wait?.reject(new Error(error || 'it could not be uploaded'));
   },
   template(text) {
     templateReply?.(text);

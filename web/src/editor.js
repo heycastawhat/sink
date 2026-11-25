@@ -1161,14 +1161,15 @@ export function createEditor(opts) {
           },
           paste(e, view) {
             const files = [...(e.clipboardData?.files ?? [])];
-            if (!files.length) return pasteLink(e, view);
+            // Without an uploader (an older Android app) leave the paste to the browser rather than swallow the image.
+            if (!files.length || !opts.uploadFile) return pasteLink(e, view);
             e.preventDefault();
             insertFiles(view, files);
             return true;
           },
           drop(e, view) {
             const files = [...(e.dataTransfer?.files ?? [])];
-            if (!files.length) return false;
+            if (!files.length || !opts.uploadFile) return false;
             e.preventDefault();
             insertFiles(view, files, view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? undefined);
             return true;
