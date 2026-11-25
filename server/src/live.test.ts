@@ -250,6 +250,45 @@ describe("live editing", () => {
     expect(file("Back.md")).toBe(">> A: abc\nfrom b\n");
   });
 
+  test("a restored note merges offline typing without replaying text saved after disconnect", async () => {
+    const path = "Plan.md";
+    await put(path, "Plan\n");
+    const a = await open(path);
+    const b = await open(path);
+    a.insert(a.text.length, "Saved before trash\n");
+    await until(() => b.text === a.text, "edit reached other client");
+    a.close();
+    await until(() => a.closed, "a closed without receiving the save");
+    await save(b);
+    expect(file(path)).toBe("Plan\nSaved before trash\n");
+    a.insert(a.text.length, "Typed offline 🙂\n");
+
+    const { trashed_to } = await s.vault.trash(path);
+    await b.next("gone");
+    expect((await post("/api/notes/trash/restore", { path: trashed_to })).status).toBe(200);
+
+    const again = await open(path, a.doc);
+    await save(again);
+    expect(file(path)).toBe("Plan\nSaved before trash\nTyped offline 🙂\n");
+  });
+
+  test("a trashed folder's live state follows a numbered restore, not a note that reuses the path", async () => {
+    const path = "Folder/Plan.md";
+    await s.vault.create("Folder", "Plan", "original\n");
+    const a = await open(path);
+    const { trashed_to } = await s.vault.trash("Folder");
+    await a.next("gone");
+    await s.vault.create("Folder", "Plan", "replacement\n");
+    const replacement = await open(path);
+    expect(replacement.doc.guid).not.toBe(a.doc.guid);
+    expect(replacement.text).toBe("replacement\n");
+
+    expect(await s.vault.restore(trashed_to)).toEqual({ path: "Folder 1", notes: 1 });
+    const restored = await open("Folder 1/Plan.md");
+    expect(restored.doc.guid).toBe(a.doc.guid);
+    expect(restored.text).toBe("original\n");
+  });
+
   test("assistants and other sites' pages don't get live editing", async () => {
     await put("Mine.md", "x\n");
     const mcp = s.auth.issueToken("assistant", "abc123", "mcp");
@@ -331,6 +370,8 @@ describe("live editing", () => {
     expect(del.status).toBe(200);
     await a.next("gone");
     expect(liveFor(s.vault).room("New.md")).toBeUndefined();
+    expect(s.db.query("SELECT path FROM live_docs").all()).toEqual([{ path: ".trash/New.md" }]);
+    await s.vault.deleteForever("New.md");
     expect(s.db.query("SELECT path FROM live_docs").all()).toEqual([]);
   });
 
