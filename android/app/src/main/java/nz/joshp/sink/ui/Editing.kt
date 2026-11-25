@@ -22,10 +22,13 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     var flushing = 0
     var closed = false
 
-    fun pendingEdit(): PendingEdit? =
-        if (dirty && (path != null || current.isNotBlank())) {
-            PendingEdit(key, path, folder, hash, current, at = System.currentTimeMillis())
-        } else null
+    fun pendingEdit(): PendingEdit? {
+        if (!dirty || (path == null && current.isBlank())) return null
+        val edit = PendingEdit(key, path, folder, hash, current)
+        return queued?.takeIf {
+            it == edit.copy(folder = if (path == null) folder else it.folder, at = it.at)
+        } ?: edit.copy(at = System.currentTimeMillis())
+    }
 
     fun matchesConflict(outcome: QueuedSave.Conflict): Boolean =
         loaded && outcome.matches(queued, key, hash)

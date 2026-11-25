@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -557,12 +558,21 @@ object NoteSaver {
         return first.replace(Regex("""^[-*+]\s+(\[.]\s+)?|^#+\s+"""), "").take(60)
     }
 
-    suspend fun save(context: Context, api: Api, edit: PendingEdit, queued: PendingEdit?): SaveResult = lock.withLock {
+    suspend fun save(context: Context, api: Api, edit: PendingEdit, queued: PendingEdit?): SaveResult =
+        save(edit, queued) { saveLocked(context, api, edit, requeue = true) }
+
+    internal suspend fun save(edit: PendingEdit, queued: PendingEdit?, write: suspend () -> SaveResult): SaveResult = lock.withLock {
         val outcome = outcomes[edit.key] as? QueuedSave.Conflict
         if (outcome?.matches(queued, edit.key, edit.baseHash) == true) {
             return@withLock outcome.result()
         }
-        saveLocked(context, api, edit, requeue = true)
+        write().also { result ->
+            if (edit == queued && result is SaveResult.Conflict) {
+                val resolved = QueuedSave.Conflict(edit, result.theirs, result.copy)
+                outcomes[edit.key] = resolved
+                scope.launch { _completed.emit(resolved) }
+            }
+        }
     }
 
     internal suspend fun sync(context: Context, api: Api, edit: PendingEdit): SaveResult? {
