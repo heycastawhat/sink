@@ -147,6 +147,7 @@ export function liveSession(opts) {
   /** The editor and the document hold the same text (once the first sync has settled what that is). */
   let bound = false;
   let resuming = false;
+  let offlineChanges = null;
   /** On the first sync: the text the editor started from, so what was typed before it can be worked out and kept. */
   let base = opts.base.text;
   /** Our changes made and those the server has confirmed (in order: one ack per update it took). */
@@ -240,6 +241,22 @@ export function liveSession(opts) {
         shift += inserted.length - (toA - fromA);
       });
     }, LOCAL);
+  }
+
+  function commitOfflineChanges() {
+    if (!offlineChanges) return;
+    const before = ytext().toString();
+    if (before !== view.state.doc.toString()) {
+      const specs = [];
+      // Cancel undo within the changed ranges without letting a whole-document diff move an edit to identical text.
+      offlineChanges.iterChanges((from, to, _fromB, _toB, inserted) => {
+        diffChanges(before.slice(from, to), inserted.toString()).iterChanges((start, end, _startB, _endB, text) => {
+          specs.push({ from: from + start, to: from + end, insert: text });
+        });
+      }, true);
+      editorToDoc(ChangeSet.of(specs, before.length));
+    }
+    offlineChanges = null;
   }
 
   /**
@@ -382,12 +399,10 @@ export function liveSession(opts) {
       if (bound) base = lastSaved;
       bound = false;
       resuming = false;
+      offlineChanges = null;
       made = confirmed = 0;
       useDoc(new Y.Doc({ guid: d.guid }));
-    } else if (bound) {
-      // Only commit the net edits made while offline. An edit and its undo must not reinsert a collaborator's text.
-      editorToDoc(diffChanges(ytext().toString(), view.state.doc.toString()));
-    }
+    } else if (bound) commitOfflineChanges();
     send(frame(SYNC_STEP1, Y.encodeStateVector(doc)));
     if (keepNext) send(JSON.stringify({ t: 'keep' }));
     keepNext = false;
@@ -501,12 +516,17 @@ export function liveSession(opts) {
       useDoc(restored);
       bound = resuming = true;
       made = 1;
+      offlineChanges = opts.resume.changes;
     }
     if (started) queueMicrotask(connect);
     return {
       update(u) {
-        if (bound && connected && !destroyed) {
-          for (const tr of u.transactions) if (tr.docChanged && !tr.annotation(fromDoc)) editorToDoc(tr.changes);
+        if (bound && !destroyed) {
+          for (const tr of u.transactions) {
+            if (!tr.docChanged || tr.annotation(fromDoc)) continue;
+            if (connected) editorToDoc(tr.changes);
+            else offlineChanges = offlineChanges ? offlineChanges.compose(tr.changes) : tr.changes;
+          }
         }
         if (u.docChanged || u.selectionSet) schedulePresence();
         if (u.docChanged && (!bound || !connected)) status();
@@ -517,7 +537,7 @@ export function liveSession(opts) {
 
   return {
     extension: [peopleField, remoteSelections, remoteCarets, editable.of([]), plugin],
-    snapshot: () => bound ? { guid: doc.guid, state: Y.encodeStateAsUpdate(doc), text: view.state.doc.toString() } : null,
+    snapshot: () => bound ? { guid: doc.guid, state: Y.encodeStateAsUpdate(doc), text: view.state.doc.toString(), changes: offlineChanges } : null,
     /** Connects now (with `start: false`): `base` is the file as it was just saved. */
     start(next) {
       if (started) return;

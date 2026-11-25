@@ -321,6 +321,38 @@ test('undoing an offline edit before Back does not resurrect text a collaborator
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
+test('an offline deletion keeps its position across Back when two lines are identical', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  const repeated = 'Same line\n';
+  const before = original + '\n' + repeated + repeated + 'End';
+  current = { ...current, content: before };
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const first = before.indexOf(repeated);
+  const second = first + repeated.length;
+  socket.close();
+  socket.onclose();
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  liveView.dispatch({ changes: { from: first, to: second } });
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(original + '\n' + repeated + 'End');
+
+  const replacement = 'Edited second line\n';
+  room.transact(() => {
+    room.getText('t').delete(second, repeated.length);
+    room.getText('t').insert(second, replacement);
+  });
+  await tick();
+  current = { ...current, hash: 'collaborator', content: original + '\n' + repeated + replacement + 'End' };
+  hello({ reuseRoom: true });
+  await tick();
+  expect(room.getText('t').toString()).toBe(original + '\n' + replacement + 'End');
+});
+
 test('cached text matching a revert from a newer revision does not erase the draft', async () => {
   useLive = true;
   liveStream();
