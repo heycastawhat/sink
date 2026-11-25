@@ -121,6 +121,7 @@ export function renderPeople(el, people) {
  * - socket(url): makes the socket, if not a browser WebSocket (the Android app's goes through its bridge). Something
  *   WebSocket-like: readyState, send, close, onmessage, onclose; on close, `status` is the HTTP status if it never opened.
  * - base: { text, hash }: what the editor was loaded with, so typing before the socket is up isn't lost
+ * - resume: the live document snapshot for a restored draft from this tab
  * - onStatus(text, kind), onPeople(people), onSaved(hash), onGone(), onMoved(path), onReadOnly(), onRefused(message)
  * - onUnavailable(): live editing can't be had here (an older server); the caller saves the old way
  * - start: false to wait for `start(base)` (a new note has no file to edit together until its first save)
@@ -145,6 +146,7 @@ export function liveSession(opts) {
   let lastPresence = '';
   /** The editor and the document hold the same text (once the first sync has settled what that is). */
   let bound = false;
+  let resuming = false;
   /** On the first sync: the text the editor started from, so what was typed before it can be worked out and kept. */
   let base = opts.base.text;
   /** Our changes made and those the server has confirmed (in order: one ack per update it took). */
@@ -334,7 +336,16 @@ export function liveSession(opts) {
     if (d.t === 'hello') hello(d);
     else if (d.t === 'ack') {
       if (inFlight.length) confirmed = Math.max(confirmed, inFlight.shift());
-      if (!unconfirmed()) schedulePresence();
+      if (!unconfirmed()) {
+        schedulePresence();
+        if (resuming) {
+          resuming = false;
+          if (!serverDirty) {
+            lastSaved = ytext().toString();
+            opts.onSaved?.(hash);
+          }
+        }
+      }
       status();
       wake();
     } else if (d.t === 'presence') showPeople(d.people);
@@ -369,6 +380,7 @@ export function liveSession(opts) {
       // the server's, keeping what we have that it may not: the next sync puts it back on top (see bind).
       if (bound) base = lastSaved;
       bound = false;
+      resuming = false;
       made = confirmed = 0;
       useDoc(new Y.Doc({ guid: d.guid }));
     }
@@ -479,6 +491,15 @@ export function liveSession(opts) {
   let started = opts.start !== false;
   const plugin = ViewPlugin.define((v) => {
     view = v;
+    if (opts.resume) {
+      const restored = new Y.Doc({ guid: opts.resume.guid });
+      Y.applyUpdate(restored, opts.resume.state);
+      if (restored.getText('t').toString() === view.state.doc.toString()) {
+        useDoc(restored);
+        bound = resuming = true;
+        made = 1;
+      } else restored.destroy();
+    }
     if (started) queueMicrotask(connect);
     return {
       update(u) {
@@ -493,6 +514,7 @@ export function liveSession(opts) {
 
   return {
     extension: [peopleField, remoteSelections, remoteCarets, editable.of([]), plugin],
+    snapshot: () => bound ? { guid: doc.guid, state: Y.encodeStateAsUpdate(doc) } : null,
     /** Connects now (with `start: false`): `base` is the file as it was just saved. */
     start(next) {
       if (started) return;

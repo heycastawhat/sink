@@ -165,10 +165,12 @@ function toClient(msg) {
 function liveStream() {
   globalThis.WebSocket = FakeSocket;
 }
-function hello() {
-  room = new Y.Doc();
-  room.getText('t').insert(0, current.content.replace(/\r\n?/g, '\n'));
-  room.on('update', (update, origin) => origin !== 'client' && toClient(frame(2, update)));
+function hello({ reuseRoom = false } = {}) {
+  if (!reuseRoom) {
+    room = new Y.Doc();
+    room.getText('t').insert(0, current.content.replace(/\r\n?/g, '\n'));
+    room.on('update', (update, origin) => origin !== 'client' && toClient(frame(2, update)));
+  }
   socket.readyState = 1;
   toClient({ t: 'hello', guid: room.guid, hash: current.hash, dirty: false, editor: true });
   toClient(frame(0, Y.encodeStateVector(room)));
@@ -212,6 +214,223 @@ test('a newly saved plain live note leaves no draft when Android later saves off
   expect(notes.openNoteInfo().text).toBe(current.content);
   expect(copies).toHaveLength(0);
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
+test('offline reopen keeps the last live save and its unsaved draft through Back until reconnect', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const added = '\nSaved while live';
+  remoteInsert(original.length, added);
+  await tick();
+  current = { ...current, content: original + added, hash: 'live-save' };
+  toClient({ t: 'saved', hash: current.hash, dirty: false });
+  await tick();
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  socket.close();
+  socket.onclose();
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(current.content);
+
+  const mine = current.content + '\nTyped offline';
+  editor.setText(mine);
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(mine);
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(mine);
+  expect(JSON.parse(storage.get('sink:unsaved:' + path))).toMatchObject({ base: current.hash, text: mine });
+
+  hello();
+  await tick();
+  expect(room.getText('t').toString()).toBe(mine);
+  toClient({ t: 'saved', hash: 'after-reconnect', dirty: false });
+  await tick();
+  expect(copies).toHaveLength(0);
+  expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
+test('offline reopen keeps pin and colour saved while live', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  api.noteMeta = async (_path, changes) => {
+    current = { ...current, ...changes, hash: changes.pinned ? 'pin' : 'teal' };
+    current.content = '---\npinned: true\n' + (current.color ? 'color: teal\n' : '') + '---\n' + original;
+    const text = room.getText('t');
+    room.transact(() => {
+      text.delete(0, text.length);
+      text.insert(0, current.content);
+    });
+    toClient({ t: 'saved', hash: current.hash, dirty: false });
+    return current;
+  };
+  await notes.setOpenMeta({ pinned: true });
+  await notes.setOpenMeta({ color: 'teal' });
+  expect(notes.openNoteInfo()).toMatchObject({ pinned: true, color: 'teal', text: current.content });
+  expect(statuses.at(-1)).toBe('Saved');
+
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  socket.close();
+  socket.onclose();
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo()).toMatchObject({ pinned: true, color: 'teal', text: current.content });
+});
+
+test('replaying a body draft made before the first live sync keeps a saved pin', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  await notes.setOpenMeta({ pinned: true });
+  liveView.dispatch({ changes: { from: liveView.state.doc.length, insert: '\nTyped before first sync' } });
+  const expected = current.content + '\nTyped before first sync';
+
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  socket.close();
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo()).toMatchObject({ pinned: true, text: expected });
+  hello();
+  await tick();
+  expect(room.getText('t').toString()).toBe(expected);
+  expect(notes.openNoteInfo()).toMatchObject({ pinned: true, text: expected });
+  expect(copies).toHaveLength(0);
+});
+
+test('offline reopen keeps a live body draft when a pin saves after the socket drops', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const accepted = '\nAccepted before disconnect';
+  liveView.dispatch({ changes: { from: original.length, insert: accepted } });
+  await tick();
+  expect(room.getText('t').toString()).toBe(original + accepted);
+  socket.close();
+  socket.onclose();
+  const draft = '\nOffline live draft';
+  liveView.dispatch({ changes: { from: liveView.state.doc.length, insert: draft } });
+  api.noteMeta = async () => {
+    current = { ...current, content: pinned + accepted, hash: 'pinned', pinned: true };
+    return current;
+  };
+  await notes.setOpenMeta({ pinned: true });
+  room.getText('t').insert(0, pinned.slice(0, -original.length));
+
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().pinned).toBe(true);
+  expect(notes.openNoteInfo().text).toContain(draft);
+  const more = '\nTyped after reopening';
+  liveView.dispatch({ changes: { from: liveView.state.doc.length, insert: more } });
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toContain(draft + more);
+  hello({ reuseRoom: true });
+  await tick();
+  const expected = pinned + accepted + draft + more;
+  expect(room.getText('t').toString()).toBe(expected);
+  expect(notes.openNoteInfo().text).toBe(expected);
+  expect(copies).toHaveLength(0);
+});
+
+test('a note deleted on the server does not reopen from a previously saved revision', async () => {
+  const { api, ApiError } = await import('./api.js');
+  await notes.openNote(path);
+  await notes.closeNote();
+  api.note = async () => { throw new ApiError(404); };
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().open).toBe(false);
+  expect(messages.at(-1)).toBe('That note is gone');
+});
+
+test('reopening a draft offline does not replay a live edit the server already saved', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  liveView.dispatch({ changes: { from: original.length, insert: '\nAlready accepted' } });
+  socket.close();
+  socket.onclose();
+  const accepted = original + '\nAlready accepted';
+  expect(room.getText('t').toString()).toBe(accepted);
+  current = { ...current, hash: 'accepted', content: accepted };
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(accepted);
+  const suffix = '\nAdded after reopen';
+  liveView.dispatch({ changes: { from: accepted.length, insert: suffix } });
+  hello({ reuseRoom: true });
+  await tick();
+  expect(room.getText('t').toString()).toBe(accepted + suffix);
+  expect(copies).toHaveLength(0);
+});
+
+test('cached text matching a revert from a newer revision does not erase the draft', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  const fetchNote = api.note;
+  await notes.openNote(path);
+  await notes.closeNote();
+
+  current = { ...current, hash: 'newer', content: original + '\nNewer server text' };
+  const key = 'sink:unsaved:' + path;
+  const draft = JSON.stringify({ base: current.hash, text: original });
+  storage.set(key, draft);
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(original);
+  expect(storage.get(key)).toBe(draft);
+  hello();
+  await tick();
+  expect(notes.openNoteInfo().text).toBe(current.content);
+  expect(storage.get(key)).toBe(draft);
+
+  api.note = fetchNote;
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().text).toBe(original);
+  hello({ reuseRoom: true });
+  await tick();
+  expect(room.getText('t').toString()).toBe(original);
+  expect(copies).toHaveLength(0);
+});
+
+test('a note moved online reopens offline at its new path without refetching first', async () => {
+  const { api } = await import('./api.js');
+  const moved = 'Archive/' + path;
+  api.moveNote = async (from, to) => {
+    expect(from).toBe(path);
+    expect(to).toBe(moved);
+    current = { ...current, path: to };
+    return { path: to };
+  };
+  await notes.openNote(path);
+  await notes.moveOpenNote('Archive');
+  await notes.closeNote();
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  await notes.openNote(moved);
+  expect(notes.openNoteInfo()).toMatchObject({ open: true, path: moved, text: original });
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().open).toBe(false);
 });
 
 test('leaving a newly saved live note before the first connection keeps no saved draft', async () => {
