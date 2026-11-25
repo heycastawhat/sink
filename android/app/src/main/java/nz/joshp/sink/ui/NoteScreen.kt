@@ -183,6 +183,7 @@ private const val SAVE_DELAY_MS = 700L
 // A new note's file is named on its first save, so give the first line time to be written.
 private const val DRAFT_DELAY_MS = 3000L
 private const val POLL_MS = 30_000L
+private const val DELETED_ELSEWHERE = "Deleted elsewhere"
 private const val EDITOR_URL = "https://appassets.androidplatform.net/editor.html"
 
 /** The editor page's callbacks (see web/src/embed-editor.js). They arrive on a binder thread. */
@@ -224,6 +225,8 @@ private class Bridge(
 /** The page's live-editing socket and what it last said about live editing (see [LiveSocket]). */
 private class LiveLink {
     @Volatile var socket: LiveSocket? = null
+    var connection = 0
+    var canResume = false
     var state = LiveState()
     var flushReply: ((LiveState) -> Unit)? = null
 }
@@ -332,6 +335,7 @@ fun NoteScreen(
     suspend fun api(): Api? = vm.api()
 
     fun closeLive() {
+        live.connection++
         live.socket?.close()
         live.socket = null
     }
@@ -438,7 +442,7 @@ fun NoteScreen(
         while (true) {
             val edit = ed.pendingEdit()
             if (edit == null) {
-                if (ed.loaded && !ed.dirty) status = "Saved"
+                if (ed.loaded && !ed.dirty) status = if (ed.deletedLiveNote) DELETED_ELSEWHERE else "Saved"
                 return
             }
             status = "Saving…"
@@ -500,15 +504,18 @@ fun NoteScreen(
     // ---- live editing: while `ed.liveMode`, the page syncs every edit with the server itself and nothing here saves.
 
     fun liveOpen(p: String) {
-        live.socket?.close()
-        live.socket = null
+        closeLive()
+        val connection = live.connection
         scope.launch {
-            val a = api() ?: return@launch js("window.sink.live.closed(0)").let { }
+            val a = api()
+            if (connection != live.connection || ed.closed) return@launch
+            if (a == null) return@launch js("window.sink.live.closed(0)").let { }
             live.socket = LiveSocket(a, p, object : LiveSocket.Listener {
-                override fun opened() = main.post { js("window.sink.live.opened()") }.let { }
-                override fun text(text: String) = main.post { js("window.sink.live.text(${JsonPrimitive(text)})") }.let { }
-                override fun binary(bytes: ByteString) = main.post { js("window.sink.live.binary('${bytes.base64()}')") }.let { }
-                override fun closed(status: Int) = main.post { js("window.sink.live.closed($status)") }.let { }
+                fun send(code: String) = main.post { if (connection == live.connection) js(code) }.let { }
+                override fun opened() = send("window.sink.live.opened()")
+                override fun text(text: String) = send("window.sink.live.text(${JsonPrimitive(text)})")
+                override fun binary(bytes: ByteString) = send("window.sink.live.binary('${bytes.base64()}')")
+                override fun closed(status: Int) = send("window.sink.live.closed($status)")
             })
         }
     }
@@ -521,16 +528,59 @@ fun NoteScreen(
         closeLive()
     }
 
+    // Edits made elsewhere show up while the note sits open and untouched: from the live stream or a slower poll.
+    suspend fun refreshOpen() {
+        val p = ed.path ?: return
+        fun canRefresh() = !ed.closed && !ed.liveMode && ed.loaded && ed.path == p && !ed.dirty &&
+            ed.queued == null && saveJob?.isActive != true && !saveLock.isLocked && store.pending(p) == null
+        if (!canRefresh() || (ed.deletedLiveNote && !live.canResume)) return
+        val hash = ed.hash
+        val n = runCatching { api()?.note(p) }.getOrNull() ?: return
+        if (!canRefresh() || ed.hash != hash) return
+        if (ed.deletedLiveNote) {
+            val args = buildJsonObject {
+                put("path", p)
+                put("saved", ed.saved)
+                hash?.let { put("hash", it) }
+            }
+            ed.liveMode = true
+            js("window.sink.resumeLive($args)")
+            return
+        }
+        if (n.hash == hash) return
+        readEditor(flush = false)
+        if (canRefresh() && ed.acceptRemote(n, hash)) {
+            store.saveNote(n)
+            applyMeta(n)
+            setEditorText(n.content)
+            status = "Updated ${relativeTime(n.mtime)}"
+        }
+    }
+
     fun onLive(raw: String) {
         val s = runCatching { json.decodeFromString<LiveState>(raw) }.getOrNull() ?: return
         live.state = s
         if (!ed.liveMode) return
-        if (s.gone || (s.unavailable && !s.bound)) {
+        if (s.gone) {
+            val firstGone = !ed.deletedLiveNote
+            ed.deletedLiveNote = true
+            live.canResume = s.canResume
+            status = DELETED_ELSEWHERE
+            exitLive()
+            scope.launch {
+                readEditor(flush = false)
+                if (!ed.liveMode && ed.dirty) scheduleSave()
+                else if (firstGone) refreshOpen()
+            }
+            return
+        }
+        if (s.unavailable && !s.bound) {
             exitLive()
             if (ed.dirty) scheduleSave()
             return
         }
-        if (s.status.isNotEmpty()) status = s.status
+        if (s.bound) ed.deletedLiveNote = false
+        if (!ed.deletedLiveNote && s.status.isNotEmpty()) status = s.status
         // Written by the server: the pair a fallback save (see flush) is checked against.
         if (s.saved != null && s.hash != null) {
             ed.hash = s.hash
@@ -751,22 +801,6 @@ fun NoteScreen(
         showLinks(p)
     }
 
-    // Edits made elsewhere show up while the note sits open and untouched: at once from the live stream, and by a
-    // slower poll in case that's down.
-    suspend fun refreshOpen() {
-        val p = ed.path ?: return
-        if (ed.liveMode || !ed.loaded || ed.dirty || saveJob?.isActive == true || store.pending(p) != null) return
-        val hash = ed.hash
-        val n = runCatching { api()?.note(p) }.getOrNull() ?: return
-        if (n.hash == hash) return
-        readEditor(flush = false)
-        if (saveJob?.isActive != true && store.pending(p) == null && ed.acceptRemote(n, hash)) {
-            store.saveNote(n)
-            applyMeta(n)
-            setEditorText(n.content)
-            status = "Updated ${relativeTime(n.mtime)}"
-        }
-    }
     LaunchedEffect(path, pageReady) {
         while (pageReady) {
             delay(POLL_MS)
@@ -1015,7 +1049,7 @@ fun NoteScreen(
                     onChanged = { text ->
                         if (ed.loaded) {
                             ed.current = text
-                            if (!ed.liveMode) {
+                            if (!ed.liveMode && (!ed.deletedLiveNote || ed.dirty)) {
                                 status = "Editing…"
                                 scheduleSave()
                             }
@@ -1096,12 +1130,12 @@ fun NoteScreen(
                         Text(
                             listOf(where, status).filter { it.isNotEmpty() }.joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (status == DELETED_ELSEWHERE || status.startsWith("Offline") || status.startsWith("Can't")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    IconButton(onClick = {
+                    IconButton(enabled = !ed.deletedLiveNote, onClick = {
                         haptics.toggle(!pinned)
                         scope.launch { setMeta(pin = !pinned) }
                     }) {
@@ -1111,7 +1145,7 @@ fun NoteScreen(
                             tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    FilledTonalIconButton(onClick = { haptics.tick(); menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
+                    FilledTonalIconButton(enabled = !ed.deletedLiveNote, onClick = { haptics.tick(); menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                 }
             }
         }
@@ -1123,7 +1157,7 @@ fun NoteScreen(
       }
     }
 
-    if (menu) {
+    if (menu && !ed.deletedLiveNote) {
         NoteActionsSheet(
             board = board,
             color = color,

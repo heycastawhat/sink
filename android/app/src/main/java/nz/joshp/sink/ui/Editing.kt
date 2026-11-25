@@ -16,6 +16,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     var loaded = false
     /** The page is editing live (web/src/live.js) and syncs every edit itself: nothing here saves it. */
     var liveMode = false
+    var deletedLiveNote = false
     val key get() = path ?: draftKey
     val dirty get() = loaded && current != saved
     /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */
@@ -24,7 +25,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
 
     fun pendingEdit(): PendingEdit? =
         if (dirty && (path != null || current.isNotBlank())) {
-            PendingEdit(key, path, folder, hash, current, at = System.currentTimeMillis())
+            PendingEdit(key, path, folder, hash, current, at = System.currentTimeMillis(), conflictCopy = deletedLiveNote)
         } else null
 
     fun matchesConflict(outcome: QueuedSave.Conflict): Boolean =
@@ -37,6 +38,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
         val copy = result.copy
         if (copy != null && (theirs == null || current != result.savedText)) {
             path = copy.path
+            deletedLiveNote = false
             hash = copy.hash
             saved = result.savedText
         } else if (theirs != null) {
@@ -56,7 +58,7 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     }
 
     fun acceptRemote(note: Note, requestedHash: String?): Boolean {
-        if (!loaded || dirty || path != note.path || hash != requestedHash || note.hash == hash) return false
+        if (!loaded || dirty || deletedLiveNote || path != note.path || hash != requestedHash || note.hash == hash) return false
         hash = note.hash
         saved = note.content
         current = note.content

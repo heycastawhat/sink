@@ -62,6 +62,7 @@ internal data class LiveState(
     val pending: Boolean = true,
     val unavailable: Boolean = false,
     val gone: Boolean = false,
+    val canResume: Boolean = false,
     val hash: String? = null,
     val saved: String? = null,
 )

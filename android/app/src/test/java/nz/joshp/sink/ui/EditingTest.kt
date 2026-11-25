@@ -1,8 +1,10 @@
 package nz.joshp.sink.ui
 
 import nz.joshp.sink.data.Note
+import nz.joshp.sink.data.NoteMeta
 import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.QueuedSave
+import nz.joshp.sink.data.SaveResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -52,5 +54,23 @@ class EditingTest {
         assertTrue(editor.dirty)
         assertFalse(editor.acceptRemote(remote, ack.hash))
         assertEquals("Offline edit plus new typing", editor.current)
+    }
+
+    @Test
+    fun deletedEditorDoesNotAdoptOrSaveOverAReplacementAtItsPath() {
+        val editor = offlineEditor("Original text").apply {
+            queued = null
+            deletedLiveNote = true
+        }
+        assertFalse(editor.acceptRemote(remote, edit.baseHash))
+        assertNull(editor.pendingEdit())
+
+        editor.current = "Kept typing after deletion"
+        assertTrue(editor.pendingEdit()!!.conflictCopy)
+        val copy = NoteMeta("Scratch (conflict).md", "Scratch (conflict)", hash = "copy")
+        editor.adoptConflict(SaveResult.Conflict(null, copy, editor.current))
+        assertEquals(copy.path, editor.path)
+        assertFalse(editor.deletedLiveNote)
+        assertFalse(editor.dirty)
     }
 }

@@ -33,6 +33,7 @@
 //   sink.retireLive()   stop live editing here (the app saves the text itself from now on)
 // Images (`![[x.png]]`) load from https://sink.attachment/<name>, which the app serves with its token.
 
+import { Compartment } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { backlinksHtml, mentionsHtml, onLinkMention } from './backlinks.js';
 import { createEditor } from './editor.js';
@@ -70,6 +71,7 @@ const loadEmbed = (target) =>
 let editor = null;
 let session = null;
 let liveSocket = null;
+const liveExtension = new Compartment();
 const loadingText = deferredEditorText();
 let links = [];
 let timer = null;
@@ -95,6 +97,7 @@ window.sink = {
     editor?.destroy();
     session?.destroy();
     liveGone = false;
+    deletedGuid = null;
     session = live && path && bridge.liveOpen ? startLive(path, live) : null;
     let sourceText = loadingText.take(text);
     let editorText;
@@ -103,7 +106,7 @@ window.sink = {
     const markdown = createEditor({
       parent: document.getElementById('editor'),
       doc: sourceText,
-      extensions: session?.extension,
+      extensions: [liveExtension.of(session?.extension ?? [])],
       onChange: (t) => {
         clearTimeout(timer);
         timer = setTimeout(() => bridge.changed(preserveUnchangedText(t)), 250);
@@ -197,7 +200,14 @@ window.sink = {
   retireLive() {
     session?.destroy();
     session = null;
-    report();
+    editor?.view?.dispatch({ effects: liveExtension.reconfigure([]) });
+  },
+  resumeLive({ path, saved, hash }) {
+    // The app's last changed notification can lag behind the text on screen.
+    if (session || !deletedGuid || editor?.getText() !== saved) return report();
+    liveGone = false;
+    session = startLive(path, { saved, hash, expectedGuid: deletedGuid });
+    editor.view.dispatch({ effects: liveExtension.reconfigure(session.extension) });
   },
   // The app's live socket, coming back in.
   live: {
@@ -235,9 +245,10 @@ window.sink = {
 };
 
 /** Live editing for the note (live.js), over a socket the app keeps to the server. */
-function startLive(path, { saved, hash }) {
+function startLive(path, { saved, hash, expectedGuid }) {
   return liveSession({
     base: { text: saved, hash },
+    expectedGuid,
     url: () => `/api/live?path=${encodeURIComponent(path)}`,
     // Renamed or moved (here or elsewhere): reconnect to it where it is now.
     onMoved: (to) => (path = to),
@@ -268,13 +279,15 @@ function startLive(path, { saved, hash }) {
     onUnavailable: () => report(),
     onGone: () => {
       liveGone = true;
-      report();
+      deletedGuid = session?.guid ?? expectedGuid ?? null;
+      report('Deleted elsewhere', 'error');
     },
   });
 }
 
 let lastStatus = { text: '', kind: '' };
 let liveGone = false;
+let deletedGuid = null;
 function liveState() {
   const pending = !session || session.pending();
   return {
@@ -284,12 +297,14 @@ function liveState() {
     connected: !!session?.connected,
     pending,
     gone: liveGone,
+    canResume: !!deletedGuid,
     unavailable: !session || session.unavailable,
     hash: session?.hash ?? null,
     saved: !pending && session?.bound && editor ? editor.getText() : null,
   };
 }
 function report(text = lastStatus.text, kind = '') {
+  if (session?.bound) deletedGuid = null;
   lastStatus = { text, kind };
   bridge.live?.(JSON.stringify(liveState()));
 }
