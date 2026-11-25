@@ -241,6 +241,24 @@ test('offline deletion keeps its position when a collaborator edits an identical
   expect(notes.openNoteInfo().text).toBe(expected);
 });
 
+for (const before of [true, false]) {
+  test('offline text inserted ' + (before ? 'before' : 'after') + ' a deletion stays on that side of a concurrent insertion', async () => {
+    await disconnectLive();
+    const from = original.indexOf('Original');
+    const to = from + 'Original'.length;
+    const local = before ? 'Prefix ' : ' Suffix';
+    liveView.dispatch({ changes: { from: before ? from : to, insert: local } });
+    const shift = before ? local.length : 0;
+    liveView.dispatch({ changes: { from: from + shift, to: to + shift } });
+    room.getText('t').insert(from + 4, 'Collaborator');
+    await reconnectLive();
+    const replacement = before ? local + 'Collaborator' : 'Collaborator' + local;
+    const expected = original.replace('Original', replacement);
+    expect(room.getText('t').toString()).toBe(expected);
+    expect(notes.openNoteInfo().text).toBe(expected);
+  });
+}
+
 test('offline replacement of an emoji preserves the whole surrogate pair', async () => {
   const from = original.length;
   current.content = original + '🙂';

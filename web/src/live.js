@@ -46,19 +46,34 @@ function splitsSurrogate(text, at) {
 }
 
 function netOfflineChanges(changes, before, after) {
+  const groups = [];
+  // Compare adjacent sections together to recognize undo, but keep each surviving insertion's original anchor.
+  changes.iterChanges((from, to, start, end, insert) => {
+    const last = groups.at(-1);
+    if (last && last.to === from && last.end === start) {
+      Object.assign(last, { to, end });
+      if (splitsSurrogate(before, from) || splitsSurrogate(after, start)) last.parts = null;
+      else last.parts?.push({ from, to, insert });
+    } else groups.push({ from, to, start, end, parts: [{ from, to, insert }] });
+  }, true);
   const ranges = [];
-  // Adjacent deletion and reinsertion sections can be an undo. Compare them together without rediffing their positions.
-  changes.iterChanges((from, to, start, end) => {
-    if (splitsSurrogate(before, from) || splitsSurrogate(after, start)) { from--; start--; }
-    if (splitsSurrogate(before, to) || splitsSurrogate(after, end)) { to++; end++; }
+  for (const group of groups) {
+    if (splitsSurrogate(before, group.from) || splitsSurrogate(after, group.start)) {
+      group.from--; group.start--; group.parts = null;
+    }
+    if (splitsSurrogate(before, group.to) || splitsSurrogate(after, group.end)) {
+      group.to++; group.end++; group.parts = null;
+    }
     const last = ranges.at(-1);
-    if (last && from <= last.to) Object.assign(last, { to, end });
-    else ranges.push({ from, to, start, end });
-  });
+    if (last && group.from <= last.to) Object.assign(last, { to: group.to, end: group.end, parts: null });
+    else ranges.push(group);
+  }
   const specs = [];
-  for (const { from, to, start, end } of ranges) {
+  for (const { from, to, start, end, parts } of ranges) {
     const insert = after.slice(start, end);
-    if (before.slice(from, to) !== insert) specs.push({ from, to, insert });
+    if (before.slice(from, to) === insert) continue;
+    if (parts) for (const part of parts) specs.push(part);
+    else specs.push({ from, to, insert });
   }
   return ChangeSet.of(specs, before.length);
 }
@@ -252,7 +267,7 @@ export function liveSession(opts) {
   }
   useDoc(new Y.Doc());
 
-  function editorToDoc(changes) {
+  function editorToDoc(changes, individual = false) {
     doc.transact(() => {
       let shift = 0;
       changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
@@ -260,7 +275,7 @@ export function liveSession(opts) {
         if (toA > fromA) ytext().delete(at, toA - fromA);
         if (inserted.length) ytext().insert(at, inserted.toString());
         shift += inserted.length - (toA - fromA);
-      });
+      }, individual);
     }, LOCAL);
   }
 
@@ -400,7 +415,7 @@ export function liveSession(opts) {
       useDoc(new Y.Doc({ guid: d.guid }));
     } else if (edits) {
       const changes = netOfflineChanges(edits, ytext().toString(), view.state.doc.toString());
-      if (!changes.empty) editorToDoc(changes);
+      if (!changes.empty) editorToDoc(changes, true);
     }
     send(frame(SYNC_STEP1, Y.encodeStateVector(doc)));
     if (keepNext) send(JSON.stringify({ t: 'keep' }));
