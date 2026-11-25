@@ -26,7 +26,7 @@ app, and an MCP server so AI assistants can read and write your notes.
   databases as tables with each row's properties in its page's frontmatter.
 - **Web clipper:** New → Clip a web page, a bookmarklet from Settings, or Share → Sink on Android saves a page's article as a
   markdown note with its source address. Sink fetches public pages only, never anything on your own network.
-- **Todos:** every `- [ ]` in `Todo.md`, plus those elsewhere with a date, priority, repeat or `#todo` tag, in one list, with due dates and reminders (Obsidian Tasks syntax).
+- **Todos:** every `- [ ]` in every note, in one list (dated first), with due dates and reminders (Obsidian Tasks syntax).
   Recurring todos (`🔁 every week`) add their next copy when ticked; tick with Undo, tap to edit, reschedule in a tap.
   Quick add reads dates off the end ("call mum tomorrow 6pm", "bins every tuesday"); priorities sort and show,
   start dates (`🛫`) keep a todo out of the way until then, and the Todos tab counts what's overdue or due today.

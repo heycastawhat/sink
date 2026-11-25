@@ -441,6 +441,10 @@ export const migrations: string[] = [
   `
   CREATE TABLE live_docs (path TEXT PRIMARY KEY, guid TEXT NOT NULL, state BLOB NOT NULL, hash TEXT NOT NULL, updated_at INTEGER NOT NULL);
   `,
+  // Every open checkbox in every note is a todo again, not just Todo.md's and dated ones (see todos.ts); mtime 0 re-reads every note.
+  `
+  UPDATE notes SET mtime = 0;
+  `,
 ];
 
 export function openDb(path: string): Database {

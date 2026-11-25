@@ -6,7 +6,7 @@ import { localIso, localTime } from "./time";
 import { VaultError, type Vault } from "./notes";
 
 /**
- * Todos are checkbox lines in notes, written the way Obsidian's Tasks plugin writes them, so both apps read the same file:
+ * Todos are checkbox lines in notes (every `- [ ]` in every note counts, dated or not), written the way Obsidian's Tasks plugin writes them, so both apps read the same file:
  *   - [ ] Pay rates 📅 2026-11-02 ⏫
  *   - [x] Book flights ✅ 2026-10-20
  *   - [ ] Call mum (@2026-10-30 18:00)        <- reminder time, the Obsidian Reminder plugin's syntax
@@ -83,13 +83,6 @@ export function parseTodos(content: string, timeZone: string): Todo[] {
   }
   return out;
 }
-
-/**
- * Whether a task line goes on the Todos list: all of Todo.md, and elsewhere only lines that say they're todos (a date,
- * reminder, priority, repeat or #todo tag), so a checklist in a note stays a checklist.
- */
-export const listed = (path: string, t: Todo) =>
-  path === TODO_FILE || !!t.due || !!t.start || t.priority !== 3 || /🔁|(?:^|\s)#todo\b/u.test(t.raw);
 
 /** Sets a task line's status, with the `✅ date` (done) or `❌ date` (cancelled) Tasks writes. */
 export function setStatus(raw: string, status: "open" | "done" | "cancelled", today: string): string {
@@ -483,8 +476,7 @@ export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
     const { path = TODO_FILE, natural, ...given } = body.data;
     const { text, due, time, every }: { text: string; due?: string; time?: string; every?: string } =
       natural && !given.due ? parseQuick(given.text, today()) : given;
-    // Undated in another note, it'd be a plain checkbox; the tag keeps it on the list.
-    const line = todoLine(text, due, time, every) + (path !== TODO_FILE && !due && !every ? " #todo" : "");
+    const line = todoLine(text, due, time, every);
     try {
       for (let attempt = 0; ; attempt++) {
         const note = await vault.read(path).catch((err) => {

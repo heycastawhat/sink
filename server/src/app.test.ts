@@ -442,7 +442,7 @@ describe("mcp", () => {
       "update_todo",
     ]);
 
-    const created = await call(token, "save_note", { title: "Packing list", folder: "Trips", content: "# Packing list\n\n- [ ] passport 🔽\n" });
+    const created = await call(token, "save_note", { title: "Packing list", folder: "Trips", content: "# Packing list\n\n- [ ] passport\n" });
     expect(created.data.created.path).toBe("Trips/Packing list.md");
     const found = await call(token, "search_notes", { query: "passport" });
     expect(found.data.results.map((r: any) => r.path)).toEqual(["Trips/Packing list.md"]);
@@ -458,7 +458,7 @@ describe("mcp", () => {
     expect(noHash.result.isError).toBe(true);
     const stale = await call(token, "save_note", { path: "Trips/Packing list.md", hash: "0".repeat(64), content: "x" });
     expect(stale.result.isError).toBe(true);
-    const edited = await call(token, "save_note", { path: "Trips/Packing list.md", hash: read.data.hash, content: read.result.content[1].text + "- [ ] charger 🔽\n" });
+    const edited = await call(token, "save_note", { path: "Trips/Packing list.md", hash: read.data.hash, content: read.result.content[1].text + "- [ ] charger\n" });
     expect(edited.data.saved.title).toBe("Packing list");
 
     const added = await call(token, "add_todo", { text: "call the bank", due: "2026-11-02", time: "09:30" });
@@ -472,7 +472,7 @@ describe("mcp", () => {
     expect((await call(token, "list_todos")).data.todos.map((t: any) => t.text)).toEqual(["passport", "charger"]);
     const passport = (await call(token, "list_todos")).data.todos[0];
     const moved = await call(token, "update_todo", { path: passport.path, line: passport.line, raw: passport.raw, due: "2026-12-01" });
-    expect(moved.data.updated).toBe("- [ ] passport 🔽 📅 2026-12-01");
+    expect(moved.data.updated).toBe("- [ ] passport 📅 2026-12-01");
   });
 
   test("clip_url goes through the clip API and refuses private addresses", async () => {
@@ -1648,7 +1648,7 @@ describe("notes", () => {
     const token = await login();
     expect((await send(token, "POST", "/api/notes/folders", { path: "Projects/Empty" })).status).toBe(201);
     expect(((await (await get(token, "/api/notes")).json()) as any).folders).toEqual(["Projects", "Projects/Empty"]);
-    await send(token, "POST", "/api/notes", { folder: "Projects/Sink", title: "Plan", content: "# Plan\n- [ ] ship #todo" });
+    await send(token, "POST", "/api/notes", { folder: "Projects/Sink", title: "Plan", content: "# Plan\n- [ ] ship" });
     await send(token, "POST", "/api/notes", { folder: "Projects/Sink/Ideas", title: "Later", content: "# Later" });
     expect((await send(token, "POST", "/api/notes/move", { from: "Projects/Sink", to: "Work/Sink" })).status).toBe(200);
     const trashed = (await (await send(token, "DELETE", q("Work"))).json()) as any;
@@ -1764,9 +1764,59 @@ describe("todos", () => {
     expect(todoLine("  milk  ", "2026-11-01", "08:30")).toBe("- [ ] milk 📅 2026-11-01 (@2026-11-01 08:30)");
   });
 
+  test("every open checkbox in any note is a todo, undated ones after the dated", async () => {
+    const token = await login();
+    // A project note with plain checkboxes and no dates, nested and numbered ones, and a done one.
+    await send(token, "POST", "/api/notes", {
+      folder: "Projects",
+      title: "Website",
+      content: "# Website\n\n- [ ] write copy\n  - [ ] pick fonts\n1. [ ] buy domain\n- [x] sketch layout\n",
+    });
+    await send(token, "POST", "/api/notes", { title: "Chores", content: "# Chores\n\n- [ ] bins\n- [ ] rates 📅 2026-12-01\n" });
+    let open = ((await (await get(token, "/api/todos")).json()) as any).todos;
+    expect(open.map((t: any) => t.text)).toEqual(["rates", "bins", "write copy", "pick fonts", "buy domain"]);
+    expect(open.every((t: any) => t.status === "open")).toBe(true);
+    expect(((await (await get(token, "/api/todos?view=done")).json()) as any).todos.map((t: any) => t.text)).toEqual(["sketch layout"]);
+
+    // Editing a plain checkbox's note re-indexes it; ticking one works like any other todo.
+    const pick = open.find((t: any) => t.text === "pick fonts");
+    const ticked = await send(token, "POST", "/api/todos/toggle", { path: pick.path, line: pick.line, raw: pick.raw, done: true });
+    expect(ticked.status).toBe(200);
+    open = ((await (await get(token, "/api/todos")).json()) as any).todos;
+    expect(open.map((t: any) => t.text)).not.toContain("pick fonts");
+  });
+
+  test("assistants see plain checkboxes through list_todos, except in private notes", async () => {
+    const owner = await login();
+    await send(owner, "POST", "/api/notes", { folder: "Projects", title: "Plan", content: "# Plan\n\n- [ ] scope it\n- [ ] ship it 📅 2026-12-01\n" });
+    await send(owner, "POST", "/api/notes", { title: "Secret", content: "---\nprivate: true\n---\n- [ ] hidden\n" });
+    const mcpToken = setup.auth.issueToken("assistant", "abc123", "mcp");
+    const res = await setup.app.request("/mcp", {
+      method: "POST",
+      headers: { authorization: `Bearer ${mcpToken}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_todos", arguments: {} } }),
+    });
+    const body = (await res.json()) as any;
+    expect(JSON.parse(body.result.content[0].text).todos.map((t: any) => t.text)).toEqual(["ship it", "scope it"]);
+  });
+
+  test("upgrading re-reads every note so plain checkboxes come back", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "sink-migrate-")), "sink.db");
+    const old = new Database(path, { create: true, strict: true });
+    // The database as it was before this migration, with a note already indexed.
+    const last = migrations.length - 1;
+    for (const m of migrations.slice(0, last)) old.exec(m);
+    old.exec(`PRAGMA user_version = ${last}`);
+    old.exec("INSERT INTO notes (path, title, tags, body, hash, size, mtime, indexed_at) VALUES ('Plan.md', 'Plan', '[]', '', 'h', 1, 12345, 1)");
+    old.close();
+    const db = openDb(path);
+    expect(db.query<{ mtime: number }, []>("SELECT mtime FROM notes").get()!.mtime).toBe(0);
+    db.close();
+  });
+
   test("list, tick, untick, quick add, and they follow their note", async () => {
     const token = await login();
-    await send(token, "POST", "/api/notes", { folder: "Trips", title: "Japan", content: "# Japan\n\n- [ ] passport 📅 2026-11-20\n- [ ] yen 🔽\n" });
+    await send(token, "POST", "/api/notes", { folder: "Trips", title: "Japan", content: "# Japan\n\n- [ ] passport 📅 2026-11-20\n- [ ] yen\n" });
     const added = (await (await send(token, "POST", "/api/todos", { text: "milk", due: "2026-11-01" })).json()) as any;
     expect(added).toMatchObject({ path: "Todo.md", raw: "- [ ] milk 📅 2026-11-01" });
     await send(token, "POST", "/api/todos", { text: "bread" });
@@ -1793,12 +1843,10 @@ describe("todos", () => {
 
     await send(token, "POST", "/api/notes/move", { from: "Trips", to: "Travel" });
     open = ((await (await get(token, "/api/todos")).json()) as any).todos;
-    // The jr pass line added above is a plain checkbox, not a todo.
-    expect(open.filter((t: any) => t.path === "Travel/Japan.md").map((t: any) => t.text)).toEqual(["passport", "yen"]);
     const elsewhere = (await (await send(token, "POST", "/api/todos", { text: "visa", path: "Travel/Japan.md" })).json()) as any;
-    expect(elsewhere.raw).toBe("- [ ] visa #todo");
+    expect(elsewhere.raw).toBe("- [ ] visa");
     open = ((await (await get(token, "/api/todos")).json()) as any).todos;
-    expect(open.filter((t: any) => t.path === "Travel/Japan.md")).toHaveLength(3);
+    expect(open.filter((t: any) => t.path === "Travel/Japan.md")).toHaveLength(4);
     await send(token, "DELETE", "/api/notes/file?path=Travel");
     open = ((await (await get(token, "/api/todos")).json()) as any).todos;
     expect(open.map((t: any) => t.text)).toEqual(["milk", "bread"]);
