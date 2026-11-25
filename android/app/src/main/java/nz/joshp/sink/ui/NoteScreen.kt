@@ -764,6 +764,7 @@ fun NoteScreen(
         val start = pending?.let {
             ed.hash = it.baseHash
             ed.queued = it
+            ed.deletedLiveNote = it.conflictCopy
             it.text
         } ?: ed.saved
         ed.current = start
