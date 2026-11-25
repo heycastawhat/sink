@@ -123,6 +123,7 @@ export function renderPeople(el, people) {
  * - base: { text, hash }: what the editor was loaded with, so typing before the socket is up isn't lost
  * - onStatus(text, kind), onPeople(people), onSaved(hash), onGone(), onMoved(path), onReadOnly(), onRefused(message)
  * - onUnavailable(): live editing can't be had here (an older server); the caller saves the old way
+ * - expectedGuid: only reconnect to this document; another document at the path is treated as gone
  * - start: false to wait for `start(base)` (a new note has no file to edit together until its first save)
  */
 export function liveSession(opts) {
@@ -300,7 +301,7 @@ export function liveSession(opts) {
   }
 
   function judge(code) {
-    if (code === 404 && everConnected) return gone();
+    if (code === 404 && (everConnected || opts.expectedGuid)) return gone();
     if (code >= 400 && code < 500 && code !== 426 && code !== 429) return giveUp(code);
     retry();
   }
@@ -312,6 +313,7 @@ export function liveSession(opts) {
   }
 
   function giveUp(code) {
+    if (opts.expectedGuid && !everConnected) return gone();
     console.warn(`[live] not available here (${code}); saving the usual way`);
     unavailable = true;
     opts.onUnavailable?.(code);
@@ -362,6 +364,7 @@ export function liveSession(opts) {
   }
 
   function hello(d) {
+    if (opts.expectedGuid && d.guid !== opts.expectedGuid) return gone();
     serverDirty = d.dirty;
     hash = d.hash;
     if (d.guid !== doc.guid) {
@@ -514,6 +517,9 @@ export function liveSession(opts) {
     },
     get hash() {
       return hash;
+    },
+    get guid() {
+      return everConnected ? doc.guid : null;
     },
     /** In step with the server's document (since the first sync), so edits sync from here, not by saving. */
     get bound() {

@@ -1130,7 +1130,7 @@ const screen = {
   private: false,
   failures: 0,
   live: null, // the live co-editing session (live.js), while the note is open on the server for it
-  deletedElsewhere: false,
+  deletedGuid: null,
   retainedDraft: null, // the stash of a conflict copy that failed on opening, kept while live saves clear the rest
   restoredLiveDraft: undefined, // after a restore, only clear drafts this session wrote
 };
@@ -1233,8 +1233,8 @@ export async function newBoard() {
  * Live co-editing for the open note: everyone with it open (here, in other tabs and devices, on its share link) types
  * into the same copy and sees each other's cursors. The server saves; a new note joins once its first save makes a file.
  */
-function startLive({ restoring = false } = {}) {
-  screen.restoredLiveDraft = restoring ? null : undefined;
+function startLive({ expectedGuid, restored } = {}) {
+  screen.restoredLiveDraft = expectedGuid ? null : undefined;
   const stash = screen.path && readUnsaved(screen.path);
   // A failed conflict copy belongs to another version, not to the editor joining this session: it stays for the next
   // open to retry, until typing here stashes over it.
@@ -1242,9 +1242,10 @@ function startLive({ restoring = false } = {}) {
   const session = liveSession({
     start: !!screen.path,
     base: { text: screen.saved, hash: screen.hash },
+    expectedGuid,
     url: () => `/api/live?path=${encodeURIComponent(screen.path)}`,
     onStatus: (text, kind) => {
-      if (screen.live === session) setStatus(text, kind);
+      if (screen.live === session && (!expectedGuid || session.bound)) setStatus(text, kind);
     },
     onPeople: (people) => {
       if (screen.live === session) renderPeople($('note-people'), people);
@@ -1252,9 +1253,15 @@ function startLive({ restoring = false } = {}) {
     onSaved: (hash) => {
       if (screen.live !== session) return;
       screen.hash = hash;
+      screen.deletedGuid = null;
       if (!session.pending()) {
         screen.saved = screen.editor.getText();
         clearLiveDraft();
+        if (restored?.hash === hash) {
+          Object.assign(screen, { pinned: restored.pinned, private: restored.private, color: restored.color });
+          restored = null;
+          applyLook();
+        }
       }
     },
     onGone: () => {
@@ -1262,10 +1269,11 @@ function startLive({ restoring = false } = {}) {
       // Keep the last saved text as the baseline so an untouched editor can pick up a restore.
       // Actual edits still use the regular conflict-copy fallback if the note stays gone.
       screen.live = null;
-      screen.deletedElsewhere = true;
+      screen.deletedGuid = session.guid ?? expectedGuid ?? null;
       renderPeople($('note-people'), []);
       setStatus('Deleted elsewhere', 'error');
-      refreshOpenNote();
+      // If this was a rejected restore probe, wait for the next change or poll before trying again.
+      if (session.guid) refreshOpenNote();
     },
     onUnavailable: () => {
       if (screen.live !== session) return;
@@ -1799,6 +1807,7 @@ async function doSave() {
   }
   const text = screen.editor.getText();
   if (text === screen.saved) return setStatus('Saved');
+  if (screen.deletedGuid) return resolveConflict(text, null);
   // A draft becomes a file only once it has some words.
   if (!screen.path && blank(text)) return setStatus('');
   setStatus('Saving…');
@@ -1870,7 +1879,7 @@ async function resolveConflict(mine, current) {
     } else {
       // The original was deleted, or more text arrived while creating the copy. Keep editing the copy.
       if (location.hash.split('?')[0] === noteHash(path)) history.replaceState(history.state, '', noteHash(copy.path));
-      Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine, pinned: copy.pinned, private: copy.private, color: copy.color, deletedElsewhere: false });
+      Object.assign(screen, { path: copy.path, hash: copy.hash, saved: mine, pinned: copy.pinned, private: copy.private, color: copy.color, deletedGuid: null });
     }
     applyLook();
     toast(`Changed somewhere else. Your version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
@@ -1888,20 +1897,21 @@ async function resolveConflict(mine, current) {
 async function refreshOpenNote() {
   // Live, the server sends changes as they happen.
   if (live() || !screen.editor || !screen.path || dirty() || screen.saving || document.hidden) return;
-  const { editor, path, hash, deletedElsewhere } = screen;
+  const { editor, path, hash, deletedGuid } = screen;
   try {
     const note = await api.note(path);
     // Only if nothing happened meanwhile: another note opened, a save landed, or typing started.
-    if (screen.editor !== editor || screen.path !== path || screen.hash !== hash ||
-        screen.deletedElsewhere !== deletedElsewhere || screen.saving || dirty()) return;
-    if (!deletedElsewhere && note.hash === hash) return;
-    const content = normalizeLineEndings(note.content);
-    Object.assign(screen, { hash: note.hash, saved: content, pinned: note.pinned, private: note.private, color: note.color, deletedElsewhere: false });
-    if (deletedElsewhere) {
-      // A restore can have the very same hash. Rejoin without rebuilding the editor or replaying its old text.
-      screen.live = startLive({ restoring: true });
+    if (live() || screen.editor !== editor || screen.path !== path || screen.hash !== hash ||
+        screen.deletedGuid !== deletedGuid || screen.saving || dirty()) return;
+    if (deletedGuid) {
+      // A different note can occupy this path. Don't show or edit it unless the live document matches.
+      screen.live = startLive({ expectedGuid: deletedGuid, restored: note });
       editor.view.dispatch({ effects: liveExtension.reconfigure(screen.live.extension) });
+      return;
     }
+    if (note.hash === hash) return;
+    const content = normalizeLineEndings(note.content);
+    Object.assign(screen, { hash: note.hash, saved: content, pinned: note.pinned, private: note.private, color: note.color });
     if (editor.getText() !== content) editor.setText(content);
     applyLook();
     setStatus(`Updated ${relative(note.mtime)}`);
@@ -1952,7 +1962,7 @@ export function listenForChanges() {
     refreshSoon();
   });
   document.addEventListener('visibilitychange', () => {
-    if (screen.deletedElsewhere && !document.hidden) refreshOpenNote();
+    if (screen.deletedGuid && !document.hidden) refreshOpenNote();
   });
 }
 /** The grid and todos refresh after a change; a burst of autosaves is one refresh. */
@@ -2020,7 +2030,7 @@ async function closeEditor() {
   clearTimeout(screen.timer);
   screen.live?.destroy();
   screen.live = null;
-  screen.deletedElsewhere = false;
+  screen.deletedGuid = null;
   renderPeople($('note-people'), []);
   screen.editor.destroy();
   screen.editor = null;
@@ -2362,6 +2372,7 @@ function wireScreen() {
       return stashUnsaved();
     }
     stashUnsaved();
+    if (screen.deletedGuid) return;
     api.saveNote(screen.path, screen.editor.getText(), screen.hash, { keepalive: true }).catch(() => {});
   });
 }

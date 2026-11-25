@@ -136,6 +136,8 @@ beforeEach(async () => {
     current = { ...current, content: pinned, hash: 'pinned', pinned: true };
     return current;
   };
+  const { setHaptics } = await import('./haptics.js');
+  setHaptics(false);
   api.createNote = async (input) => {
     if (failCopy) throw new Error('offline');
     if (firstCreate) {
@@ -184,14 +186,15 @@ class FakeSocket {
 const frame = (type, payload) => new Uint8Array([type, ...payload]);
 // Delivered in order, after whatever is running now (as a socket would).
 function toClient(msg) {
+  const target = socket;
   const data = msg instanceof Uint8Array ? msg.slice().buffer : JSON.stringify(msg);
-  queueMicrotask(() => socket.readyState === 1 && socket.onmessage({ data }));
+  queueMicrotask(() => target.readyState === 1 && target.onmessage({ data }));
 }
 function liveStream() {
   globalThis.WebSocket = FakeSocket;
 }
-function hello() {
-  room = new Y.Doc();
+function hello(guid) {
+  room = new Y.Doc({ guid });
   room.getText('t').insert(0, current.content.replace(/\r\n?/g, '\n'));
   room.on('update', (update, origin) => origin !== 'client' && toClient(frame(2, update)));
   socket.readyState = 1;
@@ -237,6 +240,7 @@ for (const changed of [false, true]) {
     await tick();
     const existingEditor = editor;
     const oldSocket = socket;
+    const guid = room.guid;
     const status = document.getElementById('note-status');
     api.note = async () => { throw new ApiError(404); };
     toClient({ t: 'gone' });
@@ -258,10 +262,11 @@ for (const changed of [false, true]) {
     await tick();
     expect(editor).toBe(existingEditor);
     expect(socket).not.toBe(oldSocket);
-    expect(notes.openNoteInfo().text).toBe(current.content);
-    hello();
+    expect(notes.openNoteInfo().text).toBe(original);
+    hello(guid);
     await tick();
     expect(status.textContent).toBe('Saved');
+    expect(notes.openNoteInfo().text).toBe(current.content);
     expect(storage.get('sink:unsaved:' + path)).toBe(otherTabDraft);
     remoteInsert(current.content.length, '\nLive after restore');
     await tick();
@@ -271,11 +276,39 @@ for (const changed of [false, true]) {
   });
 }
 
+test('a replacement at the same path cannot take over the deleted editor', async () => {
+  useLive = true;
+  liveStream();
+  const { api, ApiError } = await import('./api.js');
+  const reads = api.note;
+  notes.listenForChanges();
+  await notes.openNote(path);
+  hello();
+  await tick();
+  api.note = async () => { throw new ApiError(404); };
+  toClient({ t: 'gone' });
+  await tick();
+
+  // Same content and hash, but the server's Yjs document is an unrelated note.
+  api.note = reads;
+  noteCreated();
+  await tick();
+  hello();
+  await tick();
+  expect(socket.readyState).toBe(3);
+  expect(document.getElementById('note-status').textContent).toBe('Deleted elsewhere');
+  expect(notes.openNoteInfo().text).toBe(original);
+  expect(room.getText('t').toString()).toBe(current.content);
+  const mine = original + '\nKept in a copy, not saved to the replacement';
+  editor.setText(mine);
+  expect(await notes.saveForReload()).toBe(true);
+  expect(copies.map((copy) => copy.content)).toEqual([mine]);
+  expect(current.content).toBe(original);
+});
+
 test('typing while a restore check is in flight still uses the conflict-copy fallback', async () => {
   useLive = true;
   liveStream();
-  const { setHaptics } = await import('./haptics.js');
-  setHaptics(false);
   const { api, ApiError } = await import('./api.js');
   notes.listenForChanges();
   await notes.openNote(path);
@@ -289,7 +322,6 @@ test('typing while a restore check is in flight still uses the conflict-copy fal
   current = { ...current, content: latest, hash: 'restored' };
   let restored;
   api.note = () => new Promise((resolve) => { restored = resolve; });
-  api.saveNote = async () => { throw new ApiError(409, { current }); };
   noteCreated();
   const mine = original + '\nUnsaved local edit';
   editor.setText(mine);
@@ -300,8 +332,8 @@ test('typing while a restore check is in flight still uses the conflict-copy fal
 
   expect(await notes.saveForReload()).toBe(true);
   expect(copies.map((copy) => copy.content)).toEqual([mine]);
-  expect(notes.openNoteInfo().text).toBe(latest);
-  setHaptics(true);
+  expect(notes.openNoteInfo().path).toBe(copies[0].path);
+  expect(current.content).toBe(latest);
 });
 
 test('a newly saved plain live note leaves no draft when Android later saves offline edits', async () => {
