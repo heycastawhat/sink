@@ -321,6 +321,26 @@ test('cached text matching a revert from a newer revision does not erase the dra
   expect(copies).toHaveLength(0);
 });
 
+test('a note moved online reopens offline at its new path without refetching first', async () => {
+  const { api } = await import('./api.js');
+  const moved = 'Archive/' + path;
+  api.moveNote = async (from, to) => {
+    expect(from).toBe(path);
+    expect(to).toBe(moved);
+    current = { ...current, path: to };
+    return { path: to };
+  };
+  await notes.openNote(path);
+  await notes.moveOpenNote('Archive');
+  await notes.closeNote();
+  api.note = async () => { throw new TypeError('Failed to fetch'); };
+  await notes.openNote(moved);
+  expect(notes.openNoteInfo()).toMatchObject({ open: true, path: moved, text: original });
+  await notes.closeNote();
+  await notes.openNote(path);
+  expect(notes.openNoteInfo().open).toBe(false);
+});
+
 test('leaving a newly saved live note before the first connection keeps no saved draft', async () => {
   useLive = true;
   firstCreate = true;

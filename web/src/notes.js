@@ -664,6 +664,9 @@ async function moveFolderTo(folder, to) {
   if (to === folder) return;
   try {
     const { path } = await api.moveNote(folder, to);
+    for (const notePath of [...recentRevisions.keys()]) {
+      if (notePath.startsWith(folder + '/')) repathRevision(notePath, path + notePath.slice(folder.length));
+    }
     await loadNotes();
     if (state.folder === folder || state.folder.startsWith(folder + '/')) navigate(folderHash(path + state.folder.slice(folder.length)));
     return path;
@@ -748,7 +751,7 @@ async function moveNoteTo(path, folder) {
   const to = (folder ? folder + '/' : '') + path.split('/').pop();
   try {
     const moved = await api.moveNote(path, to);
-    recentRevisions.delete(path);
+    repathRevision(path, moved.path);
     clearUnsaved(path);
     opened.rename(path, moved.path);
     return moved.path;
@@ -1141,6 +1144,13 @@ function rememberRevision(mtime = Date.now()) {
   recentRevisions.delete(path);
   recentRevisions.set(path, { path, hash, content, pinned, private: isPrivate, color, mtime });
   if (recentRevisions.size > 20) recentRevisions.delete(recentRevisions.keys().next().value);
+}
+
+function repathRevision(from, to) {
+  const revision = recentRevisions.get(from);
+  if (!revision || from === to) return;
+  recentRevisions.delete(from);
+  recentRevisions.set(to, { ...revision, path: to });
 }
 
 /** The live session, once it's started and unless the server turned it down: then the server saves, not us. */
@@ -1955,7 +1965,7 @@ export function listenForChanges() {
       return;
     }
     if (change.type === 'note.deleted') recentRevisions.delete(change.path);
-    if (change.type === 'note.moved') recentRevisions.delete(change.from);
+    if (change.type === 'note.moved') repathRevision(change.from, change.path);
     // Moved elsewhere (another tab, the phone, Obsidian): follow it, or the next save would hit the old path.
     if (screen.path && change.type === 'note.moved' && change.from === screen.path) {
       opened.rename(screen.path, change.path);
@@ -2272,12 +2282,13 @@ function wireScreen() {
     const ext = isBoardPath(screen.path) ? '.excalidraw.md' : '.md';
     const name = await askText({ title: 'Rename', value: screen.path.split('/').pop().slice(0, -ext.length), action: 'Rename' });
     if (!name) return;
+    const from = screen.path;
     const to = (screen.folder ? screen.folder + '/' : '') + name.replace(/(\.excalidraw)?\.md$/i, '') + ext;
-    if (to === screen.path) return;
+    if (to === from) return;
     try {
-      const { path } = await api.moveNote(screen.path, to);
-      recentRevisions.delete(screen.path);
-      clearUnsaved(screen.path);
+      const { path } = await api.moveNote(from, to);
+      repathRevision(from, path);
+      clearUnsaved(from);
       relocate(path);
     } catch (err) {
       toast(err.status === 409 ? `There's already a note called “${name}” here` : err.status === 400 ? 'Names can’t start with a dot or contain \\ : * ? " < > |' : err.message);
