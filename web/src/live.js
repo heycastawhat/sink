@@ -1,7 +1,7 @@
 // Live co-editing: everyone with a note open edits the same document and sees the others' typing and cursors as it
 // happens (server/src/live.ts). The document is Yjs, a CRDT: this tab keeps its own copy, the editor and the copy are
 // kept in step, and the copy swaps updates with the server's over a WebSocket. Edits made while the connection is down
-// stay in the copy and sync when it's back, merged with everyone else's however they interleave. The server writes
+// are composed before going into the copy on reconnect, then merge with everyone else's. The server writes
 // the file; this only talks to it.
 
 import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, StateEffect, StateField, Transaction } from '@codemirror/state';
@@ -38,6 +38,44 @@ function diffChanges(a, b) {
     } else specs.push({ from: pos, insert: text });
   }
   return ChangeSet.of(specs, a.length);
+}
+
+function splitsSurrogate(text, at) {
+  const left = text.charCodeAt(at - 1), right = text.charCodeAt(at);
+  return left >= 0xd800 && left <= 0xdbff && right >= 0xdc00 && right <= 0xdfff;
+}
+
+function netOfflineChanges(changes, before, after) {
+  const groups = [];
+  // Compare adjacent sections together to recognize undo, but keep each surviving insertion's original anchor.
+  changes.iterChanges((from, to, start, end, insert) => {
+    const last = groups.at(-1);
+    if (last && last.to === from && last.end === start) {
+      Object.assign(last, { to, end });
+      if (splitsSurrogate(before, from) || splitsSurrogate(after, start)) last.parts = null;
+      else last.parts?.push({ from, to, insert });
+    } else groups.push({ from, to, start, end, parts: [{ from, to, insert }] });
+  }, true);
+  const ranges = [];
+  for (const group of groups) {
+    if (splitsSurrogate(before, group.from) || splitsSurrogate(after, group.start)) {
+      group.from--; group.start--; group.parts = null;
+    }
+    if (splitsSurrogate(before, group.to) || splitsSurrogate(after, group.end)) {
+      group.to++; group.end++; group.parts = null;
+    }
+    const last = ranges.at(-1);
+    if (last && group.from <= last.to) Object.assign(last, { to: group.to, end: group.end, parts: null });
+    else ranges.push(group);
+  }
+  const specs = [];
+  for (const { from, to, start, end, parts } of ranges) {
+    const insert = after.slice(start, end);
+    if (before.slice(from, to) === insert) continue;
+    if (parts) for (const part of parts) specs.push(part);
+    else specs.push({ from, to, insert });
+  }
+  return ChangeSet.of(specs, before.length);
 }
 
 // ---- other people's cursors
@@ -145,6 +183,7 @@ export function liveSession(opts) {
   let lastPresence = '';
   /** The editor and the document hold the same text (once the first sync has settled what that is). */
   let bound = false;
+  let offlineChanges = null;
   /** On the first sync: the text the editor started from, so what was typed before it can be worked out and kept. */
   let base = opts.base.text;
   /** Our changes made and those the server has confirmed (in order: one ack per update it took). */
@@ -158,7 +197,8 @@ export function liveSession(opts) {
 
   const ytext = () => doc.getText('t');
   const unconfirmed = () => made > confirmed;
-  const pending = () => unconfirmed() || serverDirty;
+  const pending = () => unconfirmed() || serverDirty ||
+    (offlineChanges != null && view.state.doc.toString() !== ytext().toString());
   const wake = () => {
     for (const w of [...waiters]) w();
   };
@@ -213,7 +253,7 @@ export function liveSession(opts) {
   function onUpdate(update, origin) {
     if (origin === REMOTE) return;
     made++;
-    sendChanges(UPDATE, update);
+    if (connected) sendChanges(UPDATE, update);
     status();
   }
   function useDoc(next) {
@@ -227,15 +267,15 @@ export function liveSession(opts) {
   }
   useDoc(new Y.Doc());
 
-  function editorToDoc(tr) {
+  function editorToDoc(changes, individual = false) {
     doc.transact(() => {
       let shift = 0;
-      tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+      changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
         const at = fromA + shift;
         if (toA > fromA) ytext().delete(at, toA - fromA);
         if (inserted.length) ytext().insert(at, inserted.toString());
         shift += inserted.length - (toA - fromA);
-      });
+      }, individual);
     }, LOCAL);
   }
 
@@ -364,6 +404,8 @@ export function liveSession(opts) {
   function hello(d) {
     serverDirty = d.dirty;
     hash = d.hash;
+    const edits = offlineChanges;
+    offlineChanges = null;
     if (d.guid !== doc.guid) {
       // Not the server's document: ours is from before it lost track (or this is the first connection). Start from
       // the server's, keeping what we have that it may not: the next sync puts it back on top (see bind).
@@ -371,6 +413,9 @@ export function liveSession(opts) {
       bound = false;
       made = confirmed = 0;
       useDoc(new Y.Doc({ guid: d.guid }));
+    } else if (edits) {
+      const changes = netOfflineChanges(edits, ytext().toString(), view.state.doc.toString());
+      if (!changes.empty) editorToDoc(changes, true);
     }
     send(frame(SYNC_STEP1, Y.encodeStateVector(doc)));
     if (keepNext) send(JSON.stringify({ t: 'keep' }));
@@ -482,10 +527,21 @@ export function liveSession(opts) {
     if (started) queueMicrotask(connect);
     return {
       update(u) {
-        if (bound && !destroyed) for (const tr of u.transactions) if (tr.docChanged && !tr.annotation(fromDoc)) editorToDoc(tr);
+        if (bound && !destroyed) {
+          for (const tr of u.transactions) {
+            if (!tr.docChanged || tr.annotation(fromDoc)) continue;
+            if (connected) editorToDoc(tr.changes);
+            else {
+              const edits = offlineChanges ? offlineChanges.compose(tr.changes) : tr.changes;
+              // Remove restored ranges before a later edit at the same boundary can join them.
+              offlineChanges = tr.isUserEvent('undo')
+                ? netOfflineChanges(edits, ytext().toString(), tr.newDoc.toString())
+                : edits;
+            }
+          }
+        }
         if (u.docChanged || u.selectionSet) schedulePresence();
-        // Typed before the first sync (or with no file yet): not in the document, but not saved either.
-        if (u.docChanged && !bound) status();
+        if (u.docChanged && (!bound || !connected)) status();
       },
       destroy,
     };
