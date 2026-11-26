@@ -175,8 +175,9 @@ export async function startBrowser(sink: Sink) {
 }
 
 /**
- * One server and browser for a file's tests. `it` is `test` that leaves screenshots in e2e/test-results when it fails,
- * and closes the pages the test opened. Every test in a file shares the vault, so each uses notes of its own.
+ * One server and browser for a file's tests. `it` is `test` that leaves screenshots in e2e/test-results when it fails.
+ * The pages tests open stay open until the file's `afterAll` closes the browser. Every test in a file shares the vault,
+ * so each uses notes of its own.
  */
 export function suite() {
   let sink!: Sink;
