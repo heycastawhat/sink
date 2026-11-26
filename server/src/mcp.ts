@@ -55,9 +55,8 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
     {
       instructions:
         "Sink is the user's notes app: markdown files in their vault (Obsidian-compatible, organised in folders), plus " +
-        "todos, which are `- [ ]` checkbox lines in Todo.md, or in other notes when they carry a date, reminder, priority, " +
-        "repeat or `#todo` tag (Tasks plugin syntax: `📅 YYYY-MM-DD` due date, `(@YYYY-MM-DD HH:mm)` reminder); other " +
-        "checkboxes are plain checklists. Search first (by words, folder, tag or date), then read_note for the full " +
+        "todos, which are `- [ ]` checkbox lines inside notes, dated or not (Tasks plugin syntax: `📅 YYYY-MM-DD` due " +
+        "date, `(@YYYY-MM-DD HH:mm)` reminder). Search first (by words, folder, tag or date), then read_note for the full " +
         "text. save_note creates or replaces a note, " +
         "clip_url saves a web page as one; add_todo appends a todo to Todo.md, complete_todo ticks one off and update_todo changes or reschedules one. Notes and folders can be moved, " +
         "renamed and trashed; the trash keeps them for the user to restore, so nothing is ever deleted for good from here.",
@@ -328,9 +327,10 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
       annotations: { readOnlyHint: true },
     },
     safe(async ({ done }) => {
-      const { todos, today } = await json<{ todos: Todo[]; today: string }>(await api(`/api/todos?view=${done ? "done" : "open"}`));
+      const { todos, today, truncated } = await json<{ todos: Todo[]; today: string; truncated?: boolean }>(await api(`/api/todos?view=${done ? "done" : "open"}`));
       return text({
         today,
+        ...(truncated ? { truncated: `Only the first ${todos.length} are listed; ask the user to tidy old checkboxes, or search the notes for more.` } : {}),
         todos: todos.map((t) => ({
           text: t.text,
           due: t.due,
