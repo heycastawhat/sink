@@ -42,7 +42,9 @@ import nz.joshp.sink.data.fillTemplate
 import nz.joshp.sink.data.note
 import nz.joshp.sink.data.duplicateNote
 import nz.joshp.sink.data.moveNote
-import nz.joshp.sink.data.noteMeta
+import nz.joshp.sink.data.MetaChange
+import nz.joshp.sink.data.MetaResult
+import nz.joshp.sink.data.NoteSaver
 import nz.joshp.sink.data.restoreFolder
 import nz.joshp.sink.data.trashNote
 import nz.joshp.sink.data.notes
@@ -369,14 +371,20 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Pin or colour from the card; the card changes at once rather than after the round trip. */
     suspend fun setCardMeta(path: String, pin: Boolean? = null, color: String? = null, clearColor: Boolean = false): String? {
-        val before = _state.value.notes
-        return cardChange(path) { api ->
-            _state.update { s ->
-                s.copy(notes = s.notes.map { if (it.path == path) it.copy(pinned = pin ?: it.pinned, color = if (clearColor) null else color ?: it.color) else it })
+        val api = api() ?: return "Signed out"
+        val before = _state.value.notes.find { it.path == path }
+        _state.update { s ->
+            s.copy(notes = s.notes.map { if (it.path == path) it.copy(pinned = pin ?: it.pinned, color = if (clearColor) null else color ?: it.color) else it })
+        }
+        return when (val result = NoteSaver.changeMeta(getApplication(), api, path, MetaChange(pin, color, clearColor))) {
+            MetaResult.Offline -> "Pin or colour change will sync when connected"
+            is MetaResult.Saved -> { refresh(); null }
+            is MetaResult.Failed -> {
+                if (before != null) _state.update { s ->
+                    s.copy(notes = s.notes.map { if (it.path == path) it.copy(pinned = before.pinned, color = before.color) else it })
+                }
+                result.message
             }
-            // Offline, refresh() can't fix the list, so put the card back as it was.
-            runCatching { api.noteMeta(path, pin, color, clearColor) }.onFailure { _state.update { s -> s.copy(notes = before) }; throw it }
-            store.saveNote(api.note(path))
         }
     }
 

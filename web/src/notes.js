@@ -21,11 +21,106 @@ export const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purp
 const SAVE_DELAY = 700;
 // The open note is checked this often too, in case the live change stream is down.
 const POLL_MS = 30_000;
-const draftKey = (path) => `sink:unsaved:${path}`;
+const draftKey = (path, owner = draftOwner) =>
+  owner == null ? `sink:unsaved:${path}` : 'sink:account-unsaved:' + JSON.stringify([owner, path]);
 let draftOwner = null;
 const newDraftPrefix = 'sink:new-draft:';
 const newDraftKey = (id) => newDraftPrefix + JSON.stringify([draftOwner, id]);
 const validDraftId = (id) => /^\d+-[a-z0-9]+$/.test(id ?? '');
+const metaQueueKey = (owner) => 'sink:pending-meta:' + owner;
+let metaWrites = Promise.resolve();
+let metaRetry;
+
+function pendingMeta(owner) {
+  return new Map(JSON.parse(localStorage.getItem(metaQueueKey(owner)) ?? '[]'));
+}
+
+function savePendingMeta(owner, queue) {
+  if (queue.size) localStorage.setItem(metaQueueKey(owner), JSON.stringify([...queue]));
+  else localStorage.removeItem(metaQueueKey(owner));
+}
+
+function pendingLook(path) {
+  if (draftOwner != null && path) {
+    try {
+      return pendingMeta(draftOwner).get(path);
+    } catch {}
+  }
+}
+
+function redrawPin(path) {
+  renderGrid();
+  if (path === screen.path && screen.editor) applyLook();
+}
+
+function serializeMeta(task) {
+  const run = metaWrites.then(task);
+  metaWrites = run.catch(() => {});
+  return run;
+}
+
+const retryableMeta = (err) => err instanceof TypeError || (err instanceof ApiError && (err.status >= 500 || err.status === 409));
+const isQueuedMeta = (changes) => Object.keys(changes).every((key) => key === 'pinned' || key === 'color');
+
+function scheduleMetaRetry() {
+  if (changes && !metaRetry) metaRetry = setTimeout(retryPendingMeta, POLL_MS);
+}
+
+async function sendQueuedMeta(owner, path, changes) {
+  if (owner !== draftOwner) return;
+  try {
+    if (!(await writeMeta(path, changes, owner))) return;
+  } catch (err) {
+    if (retryableMeta(err) || err instanceof Unauthorized || (err instanceof ApiError && err.status === 412)) return;
+    toast(err.message);
+  }
+  const queue = pendingMeta(owner);
+  if (JSON.stringify(queue.get(path)) === JSON.stringify(changes)) {
+    queue.delete(path);
+    savePendingMeta(owner, queue);
+    if ('pinned' in changes) redrawPin(path);
+  }
+}
+
+function retryPendingMeta() {
+  clearTimeout(metaRetry);
+  metaRetry = null;
+  const owner = draftOwner;
+  if (owner == null) return;
+  void serializeMeta(async () => {
+    if (owner !== draftOwner) return;
+    for (const [path, changes] of pendingMeta(owner)) {
+      if (screen.path === path) await flush();
+      await sendQueuedMeta(owner, path, changes);
+    }
+    if (pendingMeta(owner).size) scheduleMetaRetry();
+  }).catch((err) => toast(err.message));
+}
+
+function changeMeta(path, changes, toggle = false) {
+  const owner = draftOwner;
+  return serializeMeta(async () => {
+    if (owner !== draftOwner) return;
+    if (owner == null || (!toggle && !isQueuedMeta(changes))) {
+      if (toggle) changes = { pinned: !(screen.path === path ? screen.pinned : noteOf(path)?.pinned) };
+      return writeMeta(path, changes);
+    }
+    const queue = pendingMeta(owner);
+    if (toggle) {
+      const pinned = queue.get(path)?.pinned ?? (screen.path === path ? screen.pinned : noteOf(path)?.pinned);
+      changes = { pinned: !pinned };
+    }
+    const next = { ...queue.get(path), ...changes };
+    queue.set(path, next);
+    savePendingMeta(owner, queue);
+    if ('pinned' in changes) redrawPin(path);
+    await sendQueuedMeta(owner, path, next);
+    if (pendingMeta(owner).has(path)) {
+      toast('Pin or colour change will sync when connected');
+      scheduleMetaRetry();
+    }
+  }).catch((err) => toast(err.message));
+}
 
 export function setDraftOwner(subject) {
   draftOwner = subject;
@@ -371,7 +466,14 @@ function renderGrid() {
       : prefs.hideFoldered
         ? folderOf(n.path) === state.folder
         : !state.folder || n.path.startsWith(state.folder + '/');
-  const list = (state.results ?? state.notes).filter(inFolder);
+  let queue;
+  try {
+    if (draftOwner != null) queue = pendingMeta(draftOwner);
+  } catch {}
+  const list = (state.results ?? state.notes).filter(inFolder).map((n) => {
+    const pinned = queue?.get(n.path)?.pinned;
+    return pinned === undefined ? n : { ...n, pinned };
+  });
   const docs = (state.results ? (state.fileResults ?? []) : state.files).filter(inFolder);
 
   renderFolderBar();
@@ -927,12 +1029,7 @@ const desk = () => $('app').classList.contains('desk');
 /** Pin or colour a card's note. The open note goes through setMeta, so its editor keeps the new hash. */
 async function cardMeta(path, changes) {
   if (screen.path === path) return setMeta(changes);
-  try {
-    await api.noteMeta(path, changes);
-    await loadNotes();
-  } catch (err) {
-    toast(err.message);
-  }
+  await changeMeta(path, changes);
 }
 
 async function archiveCard(path) {
@@ -992,6 +1089,7 @@ async function trashCard(path) {
 function openCardMenu(path, x, y, { colours = false } = {}) {
   const n = noteOf(path) ?? fileOf(path);
   if (!n) return;
+  const pinned = pendingLook(path)?.pinned ?? n.pinned;
   const menu = $('card-menu');
   const item = (act, icon, label, cls = '') => `<button class="new-item${cls}" role="menuitem" data-card-act="${act}">${ic(icon)}<span>${label}</span></button>`;
   if (isPdf(path)) colours = false;
@@ -1011,7 +1109,7 @@ function openCardMenu(path, x, y, { colours = false } = {}) {
     : item('open', 'open_in_new', 'Open') +
       item('window', 'tab', 'Open in new window') +
       '<hr class="menu-divider" />' +
-      item('pin', 'push_pin', n.pinned ? 'Unpin' : 'Pin') +
+      item('pin', 'push_pin', pinned ? 'Unpin' : 'Pin') +
       `<div class="new-item card-menu-label">${ic('palette')}<span>Colour</span></div>` +
       swatches +
       item('move', 'drive_file_move', 'Move to folder…') +
@@ -1050,7 +1148,10 @@ async function runCardAct(act, path, from) {
   }
   if (act === 'open') openFromApp(noteHash(path));
   if (act === 'window') window.open(noteHash(path), '_blank', 'noopener');
-  if (act === 'pin') cardMeta(path, { pinned: !n.pinned });
+  if (act === 'pin') {
+    if (screen.path === path) toggleOpenPin();
+    else changeMeta(path, {}, true);
+  }
   if (act === 'move') moveCard(path);
   if (act === 'copy') copyCard(path);
   if (act === 'archive') archiveCard(path);
@@ -1080,8 +1181,11 @@ function wireCardActions() {
     if (!card || !desk() || acts.parentNode === card) return;
     if (isPdf(card.dataset.path)) return acts.remove();
     const n = noteOf(card.dataset.path);
-    acts.querySelector('[data-card-act="pin"] m3e-icon').toggleAttribute('filled', !!n?.pinned);
-    acts.querySelector('[data-card-act="pin"]').title = n?.pinned ? 'Unpin' : 'Pin';
+    const pinned = pendingLook(card.dataset.path)?.pinned ?? n?.pinned;
+    const pin = acts.querySelector('[data-card-act="pin"]');
+    pin.querySelector('m3e-icon').toggleAttribute('filled', !!pinned);
+    pin.title = pinned ? 'Unpin' : 'Pin';
+    pin.setAttribute('aria-label', pin.title);
     card.append(acts);
   });
   acts.addEventListener('click', (e) => {
@@ -1252,6 +1356,11 @@ function startLive() {
       screen.hash = hash;
       if (!session.pending()) {
         screen.saved = screen.editor.getText();
+        const pinned = pinnedInText(screen.saved);
+        if (screen.pinned !== pinned) {
+          screen.pinned = pinned;
+          applyLook();
+        }
         clearLiveDraft();
       }
     },
@@ -1358,23 +1467,71 @@ function stashUnsaved() {
     localStorage.setItem(draftKey(screen.path), JSON.stringify({ base: screen.hash, text: screen.editor.getText(), at: Date.now() }));
   } catch {}
 }
-function clearUnsaved(path) {
+function clearUnsaved(path, owner = draftOwner) {
   try {
-    localStorage.removeItem(draftKey(path));
+    const hadDraft = rawUnsaved(path, owner) != null;
+    localStorage.removeItem(draftKey(path, owner));
+    if (hadDraft && owner != null && owner === draftOwner && pendingMeta(owner).has(path)) retryPendingMeta();
   } catch {}
 }
-function readUnsaved(path) {
+function parseUnsaved(raw) {
   try {
-    return JSON.parse(rawUnsaved(path));
+    const draft = JSON.parse(raw);
+    return typeof draft?.text === 'string' ? draft : null;
   } catch {
     return null;
   }
 }
-function rawUnsaved(path) {
+function readUnsaved(path) {
+  return parseUnsaved(rawUnsaved(path));
+}
+function rawUnsaved(path, owner = draftOwner) {
   try {
-    return localStorage.getItem(draftKey(path));
+    return localStorage.getItem(draftKey(path, owner));
   } catch {
     return null;
+  }
+}
+async function recoverLegacyDraft(note, seq) {
+  const owner = draftOwner;
+  if (owner == null) return;
+  const { path } = note;
+  const raw = rawUnsaved(path, null);
+  const draft = parseUnsaved(raw);
+  if (!draft) return;
+  if (normalizeLineEndings(draft.text) === note.content) return clearUnsaved(path, null);
+  if (draft.base === note.hash && rawUnsaved(path, owner) == null) {
+    try {
+      localStorage.setItem(draftKey(path, owner), raw);
+      clearUnsaved(path, null);
+    } catch {}
+    return;
+  }
+  const recover = await askConfirm({
+    title: 'Recover an older unsaved draft?',
+    body: 'This browser kept a draft for this path without recording its account. Save a separate copy in the current account only if the draft belongs here. Cancelling keeps it in this browser.',
+    action: 'Save a copy',
+  });
+  if (!recover || seq !== openSeq || owner !== draftOwner || rawUnsaved(path, null) !== raw) return;
+  if (!(await saveDraftCopy(path, raw, null, owner))) {
+    toast("Couldn't save the copy. Your draft is still in this browser.");
+  }
+}
+
+async function saveDraftCopy(path, raw, owner, expectedSubject = owner) {
+  const stash = parseUnsaved(raw);
+  try {
+    const copy = await api.createNote({
+      folder: folderOf(path), title: conflictTitle(path), content: stash.text,
+      ...(expectedSubject == null ? {} : { expected_subject: expectedSubject }),
+    });
+    if (rawUnsaved(path, owner) === raw) clearUnsaved(path, owner);
+    toast(`Changed somewhere else. Your unsaved version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
+    loadNotes();
+    return true;
+  } catch (err) {
+    if (err instanceof Unauthorized) throw err;
+    return false;
   }
 }
 function clearLiveDraft() {
@@ -1383,9 +1540,10 @@ function clearLiveDraft() {
 
 function applyLook() {
   const el = $('note-screen');
+  const pinned = pendingLook(screen.path)?.pinned ?? screen.pinned;
   el.className = `note-screen${screen.color ? ` c-${screen.color}` : ''}${isBoardPath(screen.path) ? ' board' : ''}${el.classList.contains('expanded') ? ' expanded' : ''}`;
-  $('note-pin').innerHTML = ic('push_pin', '', screen.pinned ? ' filled' : '');
-  $('note-pin').setAttribute('aria-label', screen.pinned ? 'Unpin' : 'Pin');
+  $('note-pin').innerHTML = ic('push_pin', '', pinned ? ' filled' : '');
+  $('note-pin').setAttribute('aria-label', pinned ? 'Unpin' : 'Pin');
   const archived = /^archive\//i.test(screen.path ?? '');
   $('note-archive').querySelector('m3e-icon').setAttribute('name', archived ? 'unarchive' : 'archive');
   $('note-archive').querySelector('span').textContent = archived ? 'Unarchive' : 'Archive';
@@ -1410,7 +1568,7 @@ export const openNoteInfo = () => ({
   path: screen.path,
   folder: screen.folder,
   color: screen.color,
-  pinned: screen.pinned,
+  pinned: pendingLook(screen.path)?.pinned ?? screen.pinned,
   board: isBoardPath(screen.path),
   text: screen.editor?.getText() ?? '',
 });
@@ -1418,6 +1576,7 @@ export const allNotes = () => state.notes;
 export const allFolders = () => state.folders.filter(shownFolder);
 export const currentFolder = () => state.folder;
 export const setOpenMeta = (changes) => setMeta(changes);
+export const toggleOpenPin = () => setMeta({}, true);
 export const goToLine = (line) => screen.editor?.goToLine(line);
 export const formatNote = (kind) => screen.editor?.format?.(kind);
 export const insertImages = (files) => screen.editor?.insertFiles?.(files);
@@ -1463,11 +1622,15 @@ export async function openNote(path, { line } = {}) {
     const note = await api.note(path);
     if (seq !== openSeq) return;
     note.content = normalizeLineEndings(note.content);
+    await recoverLegacyDraft(note, seq);
+    if (seq !== openSeq) return;
     Object.assign(screen, { path: note.path, folder: folderOf(note.path), hash: note.hash, saved: note.content, pinned: note.pinned, private: note.private, color: note.color, fresh: false });
     opened.touch(note.path);
     let text = note.content;
     // Unsaved edits from last time, made on this exact version: bring them back.
-    const stash = readUnsaved(note.path);
+    const owner = draftOwner;
+    const raw = rawUnsaved(note.path, owner);
+    const stash = parseUnsaved(raw);
     if (stash && normalizeLineEndings(stash.text) !== note.content) {
       if (stash.base === note.hash) {
         text = normalizeLineEndings(stash.text);
@@ -1475,14 +1638,7 @@ export async function openNote(path, { line } = {}) {
       } else {
         // The note changed elsewhere since: keep them as a sibling note, like a conflict.
         // If that fails too (still offline), the stash stays for next time and the note opens anyway.
-        try {
-          const copy = await api.createNote({ folder: folderOf(note.path), title: conflictTitle(note.path), content: stash.text });
-          clearUnsaved(note.path);
-          toast(`Changed somewhere else. Your unsaved version was saved as “${fileName(copy.path)}”.`, { duration: 8000 });
-          loadNotes();
-        } catch (err) {
-          if (err instanceof Unauthorized) throw err;
-        }
+        await saveDraftCopy(note.path, raw, owner);
       }
     } else if (stash) clearUnsaved(note.path);
     if (seq !== openSeq) return;
@@ -1911,6 +2067,7 @@ let changes = null;
 export function listenForChanges() {
   if (changes || typeof EventSource === 'undefined') return;
   const source = (changes = new EventSource('/api/events'));
+  window.addEventListener('online', retryPendingMeta);
   source.addEventListener('change', (e) => {
     let change;
     try {
@@ -1933,6 +2090,7 @@ export function listenForChanges() {
   // in between was never sent: catch up on everything shown.
   let connected = false;
   source.addEventListener('ready', () => {
+    retryPendingMeta();
     if (!connected) return void (connected = true);
     if (screen.path) refreshOpenNote();
     refreshSoon();
@@ -2030,7 +2188,7 @@ export async function closeNote() {
 
 export const noteIsOpen = () => opening || !$('note-screen').hidden;
 
-async function setMeta(changes) {
+async function setMeta(changes, toggle = false) {
   await flush();
   if (!screen.path) {
     // A draft gets saved first so there's a file to pin.
@@ -2038,11 +2196,38 @@ async function setMeta(changes) {
     await save();
     if (!screen.path) return;
   }
+  await changeMeta(screen.path, changes, toggle);
+}
+
+async function writeMeta(path, changes, owner) {
+  if (screen.path === path && screen.saving) await screen.saving;
+  // Don't invalidate an unsaved body draft, but a stale stash whose text is already saved is not an edit.
+  const raw = owner === undefined ? null : rawUnsaved(path, owner);
+  const draft = parseUnsaved(raw);
+  if (draft) {
+    if (screen.path === path && dirty()) return false;
+    const note = await api.note(path);
+    if (normalizeLineEndings(draft.text) !== normalizeLineEndings(note.content) || rawUnsaved(path, owner) !== raw) return false;
+  }
+  const clearSavedDraft = () => {
+    if (draft && rawUnsaved(path, owner) === raw) clearUnsaved(path, owner);
+  };
+  const patch = owner === undefined ? changes : { ...changes, expected_subject: owner };
+  if (screen.path !== path) {
+    await api.noteMeta(path, patch);
+    clearSavedDraft();
+    await loadNotes();
+    return true;
+  }
+  if (screen.saving || (isQueuedMeta(changes) && dirty())) return false;
   // Hold autosave until the new hash is in, or a save with the old one would be a conflict.
   clearTimeout(screen.timer);
+  const editor = screen.editor;
   const run = (async () => {
-    const meta = await api.noteMeta(screen.path, changes);
+    const meta = await api.noteMeta(path, patch);
+    clearSavedDraft();
     const note = await api.note(meta.path);
+    if (screen.editor !== editor || screen.path !== path) return;
     note.content = normalizeLineEndings(note.content);
     // Live, the new frontmatter arrives like anyone's change.
     if (live()) {
@@ -2056,14 +2241,24 @@ async function setMeta(changes) {
     if (text !== current) loadingText.replace(screen.editor, text);
     applyLook();
   })();
-  screen.saving = run.catch((err) => toast(err.message)).finally(() => (screen.saving = null));
-  await screen.saving;
-  if (dirty()) save();
+  screen.saving = run.catch(() => {}).finally(() => (screen.saving = null));
+  try {
+    await run;
+    return true;
+  } finally {
+    if (dirty()) save();
+  }
 }
 
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/;
 const frontmatterOf = (text) => FRONTMATTER.exec(text)?.[0] ?? '';
 const bodyOf = (text) => text.slice(frontmatterOf(text).length);
+function pinnedInText(text) {
+  const yaml = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)?.[1];
+  const pin = yaml?.split(/\r?\n/).findLast((line) => line.startsWith('pinned:'));
+  const value = pin?.slice('pinned:'.length).trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+  return /^(true|yes|1)$/i.test(value ?? '');
+}
 
 function wireScreen() {
   const back = () => {
@@ -2111,7 +2306,7 @@ function wireScreen() {
       flush();
     }
   });
-  $('note-pin').addEventListener('click', () => setMeta({ pinned: !screen.pinned }));
+  $('note-pin').addEventListener('click', toggleOpenPin);
   // Private: assistants (MCP) and the browser extension can't see the note, its todos or what only it embeds.
   $('note-private').addEventListener('click', async () => {
     const hide = !screen.private;

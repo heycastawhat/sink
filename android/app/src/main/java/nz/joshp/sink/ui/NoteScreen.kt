@@ -163,6 +163,8 @@ import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.NoteSaver
 import nz.joshp.sink.data.LiveSocket
 import nz.joshp.sink.data.LiveState
+import nz.joshp.sink.data.MetaChange
+import nz.joshp.sink.data.MetaResult
 import okio.ByteString
 import okio.ByteString.Companion.decodeBase64
 import nz.joshp.sink.data.NoteStore
@@ -173,7 +175,6 @@ import nz.joshp.sink.data.cachedAttachment
 import nz.joshp.sink.data.json
 import nz.joshp.sink.data.moveNote
 import nz.joshp.sink.data.note
-import nz.joshp.sink.data.noteMeta
 import nz.joshp.sink.data.trashNote
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -364,6 +365,11 @@ fun NoteScreen(
         pinned = n.pinned
         color = n.color
         shownPath = n.path
+    }
+
+    fun applyPendingMeta(change: MetaChange) {
+        pinned = change.pinned ?: pinned
+        color = if (change.clearColor) null else change.color ?: color
     }
 
     /**
@@ -712,6 +718,7 @@ fun NoteScreen(
             return@LaunchedEffect
         }
         if (fresh.getOrNull() == null) status = "Offline copy"
+        api()?.let { store.pendingMeta(it, path) }?.let(::applyPendingMeta)
         // Unsaved edits from before: show them, and save (a stale base becomes a conflict copy, never an overwrite).
         val start = pending?.let {
             ed.hash = it.baseHash
@@ -799,6 +806,12 @@ fun NoteScreen(
                 }
             }
             if (acknowledged) refreshOpen()
+        }
+    }
+    LaunchedEffect(ed) {
+        NoteSaver.metaCompleted.collect { note ->
+            if (note.path != ed.path || !ed.loaded) return@collect
+            if (ed.liveMode) applyMeta(note) else refreshOpen()
         }
     }
 
@@ -990,39 +1003,36 @@ fun NoteScreen(
         readEditor()
         save()
         val p = ed.path ?: return snackbar.showSnackbar("Write something first").let { }
-        if (ed.liveMode) {
-            // Written first, then the server changes the frontmatter, and that comes back to the page like anyone's edit.
-            liveFlush()
-            runCatching {
-                val api = api()!!
-                api.noteMeta(p, pin, newColor, clearColor)
-                val n = api.note(p)
-                store.saveNote(n)
-                applyMeta(n)
-                vm.refresh()
-            }.onFailure { snackbar.showSnackbar(it.message ?: "Couldn't change it") }
-            return
-        }
-        runCatching {
-            val api = api()!!
-            api.noteMeta(p, pin, newColor, clearColor)
-            val n = api.note(p)
-            store.saveNote(n)
-            // Anything typed or drawn while the change was on its way is kept, not replaced by the server's text.
-            readEditor()
-            // Decided before `saved` moves on: compared after, an untouched editor looked edited, kept the old
-            // frontmatter, and its next save put the old pin and colour back.
-            val text = textAfterMeta(ed.current, ed.saved, n.content)
-            ed.hash = n.hash
-            ed.saved = n.content
-            if (text != ed.current) {
-                ed.current = text
-                setEditorText(text)
+        val api = api() ?: return
+        val change = MetaChange(pin, newColor, clearColor)
+        val message = saveLock.withLock {
+            when (val result = NoteSaver.changeMeta(context, api, p, change)) {
+                MetaResult.Offline -> {
+                    applyPendingMeta(change)
+                    "Pin or colour change will sync when connected"
+                }
+                is MetaResult.Failed -> result.message
+                is MetaResult.Saved -> {
+                    val n = result.note
+                    if (!ed.liveMode) {
+                        // Keep anything typed while the server rewrote the frontmatter.
+                        readEditor()
+                        val text = textAfterMeta(ed.current, ed.saved, n.content)
+                        ed.hash = n.hash
+                        ed.saved = n.content
+                        if (text != ed.current) {
+                            ed.current = text
+                            setEditorText(text)
+                        }
+                    }
+                    applyMeta(n)
+                    vm.refresh()
+                    null
+                }
             }
-            applyMeta(n)
-            vm.refresh()
-        }.onFailure { snackbar.showSnackbar(it.message ?: "Couldn't change it") }
+        }
         if (ed.dirty) scheduleSave()
+        if (message != null) snackbar.showSnackbar(message)
     }
 
     val paper = noteTint(color, MaterialTheme.colorScheme.surfaceContainerLowest, 0.16f)

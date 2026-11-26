@@ -201,6 +201,29 @@ test('connected live updates and saved notifications still replace the note with
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
+test('a live pin from another device is the starting state for the next toggle', async () => {
+  useLive = true;
+  liveStream();
+  const { api } = await import('./api.js');
+  const writes = [];
+  api.noteMeta = async (name, changes) => {
+    writes.push([name, changes]);
+    return (current = { ...current, pinned: changes.pinned, content: original, hash: 'unpinned' });
+  };
+  notes.setDraftOwner('scratch');
+  await notes.openNote(path);
+  hello();
+  await tick();
+  const frontmatter = "\uFEFF---\npinned: false\npinned: 'YES'\n---  \n";
+  current = { ...current, pinned: true, content: frontmatter + original, hash: 'remote-pin' };
+  remoteInsert(0, frontmatter);
+  toClient({ t: 'saved', hash: current.hash, dirty: false });
+  await tick();
+  expect(notes.openNoteInfo().pinned).toBe(true);
+  await notes.toggleOpenPin();
+  expect(writes).toEqual([[path, { pinned: false, expected_subject: 'scratch' }]]);
+});
+
 test('a newly saved plain live note leaves no draft when Android later saves offline edits', async () => {
   useLive = true;
   firstCreate = true;
@@ -416,6 +439,108 @@ test('pin then leave and reopen after an Android edit does not resurrect a saved
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
 });
 
+test('replays queued pin and colour for the signed-in account when the stream reconnects', async () => {
+  const { api } = await import('./api.js');
+  const writes = [];
+  api.noteMeta = async () => { throw new TypeError('Failed to fetch'); };
+  notes.setDraftOwner('scratch');
+  await notes.openNote(path);
+  await notes.setOpenMeta({ pinned: true });
+  await notes.setOpenMeta({ color: 'blue' });
+  await notes.setOpenMeta({ color: null });
+  expect(current.content).toBe(original);
+  expect(messages.at(-1)).toContain('will sync');
+  await notes.closeNote();
+
+  const ownDraftKey = 'sink:account-unsaved:' + JSON.stringify(['scratch', path]);
+  const otherDraftKey = 'sink:account-unsaved:' + JSON.stringify(['another account', path]);
+  storage.set(ownDraftKey, JSON.stringify({ base: 'before-server-save', text: original.replaceAll('\n', '\r\n') }));
+  storage.set(otherDraftKey, JSON.stringify({ base: 'different-vault', text: 'Other account draft' }));
+
+  const before = { window: globalThis.window, EventSource: globalThis.EventSource };
+  const stream = new EventTarget();
+  globalThis.window = new EventTarget();
+  globalThis.EventSource = class { constructor() { return stream; } };
+  api.noteMeta = async (name, changes) => {
+    writes.push([name, changes]);
+    current = { ...current, ...changes, content: pinned, hash: 'new' };
+    return current;
+  };
+  try {
+    notes.setDraftOwner('another account');
+    notes.listenForChanges();
+    stream.dispatchEvent(new Event('ready'));
+    await tick();
+    expect(writes).toEqual([]);
+    notes.setDraftOwner('scratch');
+    // An installed PWA also gets this event when Chrome goes back online.
+    window.dispatchEvent(new Event('online'));
+    await tick();
+    expect(writes).toEqual([[path, { pinned: true, color: null, expected_subject: 'scratch' }]]);
+    expect(storage.has('sink:pending-meta:scratch')).toBe(false);
+    expect(storage.has(ownDraftKey)).toBe(false);
+    expect(storage.has(otherDraftKey)).toBe(true);
+    await notes.openNote(path);
+    expect(notes.openNoteInfo().pinned).toBe(true);
+    expect(notes.openNoteInfo().text).toBe(pinned);
+  } finally {
+    Object.assign(globalThis, before);
+  }
+});
+
+test('two offline pin taps toggle the queued value rather than the old server value', async () => {
+  const { api } = await import('./api.js');
+  api.noteMeta = async () => { throw new TypeError('Failed to fetch'); };
+  notes.setDraftOwner('scratch');
+  await notes.openNote(path);
+  await notes.toggleOpenPin();
+  expect(notes.openNoteInfo().pinned).toBe(true);
+  await notes.toggleOpenPin();
+  expect(notes.openNoteInfo().pinned).toBe(false);
+  expect(JSON.parse(storage.get('sink:pending-meta:scratch'))).toEqual([[path, { pinned: false }]]);
+});
+
+test('a queued pin waits for a closed note’s offline body draft before changing its hash', async () => {
+  const { api } = await import('./api.js');
+  const mine = original + '\nOffline body edit';
+  let online = false;
+  api.saveNote = async (_path, text, hash) => {
+    if (!online) throw new TypeError('Failed to fetch');
+    expect(hash).toBe('original');
+    return (current = { ...current, content: text, hash: 'body' });
+  };
+  api.noteMeta = async () => {
+    if (!online) throw new TypeError('Failed to fetch');
+    expect(current.hash).toBe('body');
+    return (current = { ...current, pinned: true, content: '---\npinned: true\n---\n' + current.content, hash: 'pin' });
+  };
+  notes.setDraftOwner('scratch');
+  await notes.openNote(path);
+  editor.setText(mine);
+  await notes.setOpenMeta({ pinned: true });
+  await notes.closeNote();
+
+  const before = { window: globalThis.window, EventSource: globalThis.EventSource };
+  const stream = new EventTarget();
+  globalThis.window = new EventTarget();
+  globalThis.EventSource = class { constructor() { return stream; } };
+  try {
+    online = true;
+    notes.listenForChanges();
+    stream.dispatchEvent(new Event('ready'));
+    await tick();
+    expect(current.hash).toBe('original');
+    expect(storage.has('sink:pending-meta:scratch')).toBe(true);
+    await notes.openNote(path);
+    await tick();
+    expect(copies).toHaveLength(0);
+    expect(current).toMatchObject({ pinned: true, content: '---\npinned: true\n---\n' + mine });
+    expect(storage.has('sink:pending-meta:scratch')).toBe(false);
+  } finally {
+    Object.assign(globalThis, before);
+  }
+});
+
 test('a genuinely edited stale draft still becomes a conflict copy', async () => {
   const mine = original + '\nUnsaved local edit';
   storage.set('sink:unsaved:' + path, JSON.stringify({ base: 'original', text: mine }));
@@ -436,6 +561,49 @@ test('a failed conflict copy keeps the genuine draft for retry', async () => {
   expect(copies).toHaveLength(0);
   expect(notes.openNoteInfo().text).toBe(latest);
   expect(storage.get('sink:unsaved:' + path)).toBe(stash);
+});
+
+test('a stale legacy draft survives until the signed-in user saves a conflict copy', async () => {
+  const key = 'sink:unsaved:' + path;
+  const mine = original + '\nUnsaved before the upgrade';
+  const stash = JSON.stringify({ base: 'original', text: mine });
+  storage.set(key, stash);
+  current = { ...current, content: latest, hash: 'android' };
+  notes.setDraftOwner('scratch');
+  let confirmed = false;
+  document.getElementById('theme').append = () => {};
+  document.createElement = () => {
+    const actions = {};
+    return {
+      classList: { contains: () => false, add() {} },
+      querySelector: (selector) => ({ addEventListener: (_, action) => { actions[selector] = action; } }),
+      querySelectorAll: () => [],
+      addEventListener() {},
+      showModal: () => actions[confirmed ? '[data-ok]' : '[data-cancel]'](),
+      close() {},
+      remove() {},
+    };
+  };
+
+  await notes.openNote(path);
+  expect(copies).toHaveLength(0);
+  expect(storage.get(key)).toBe(stash);
+  await notes.closeNote();
+
+  confirmed = true;
+  failCopy = true;
+  await notes.openNote(path);
+  expect(copies).toHaveLength(0);
+  expect(storage.get(key)).toBe(stash);
+  expect(messages.at(-1)).toContain('still in this browser');
+  await notes.closeNote();
+
+  failCopy = false;
+  await notes.openNote(path);
+  expect(copies).toHaveLength(1);
+  expect(copies[0]).toMatchObject({ content: mine, expected_subject: 'scratch' });
+  expect(notes.openNoteInfo().text).toBe(latest);
+  expect(storage.has(key)).toBe(false);
 });
 
 test('reverting an edit to saved text removes the draft, including an empty note', async () => {
