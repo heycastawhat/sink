@@ -524,19 +524,23 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
      * Adds a todo; the server reads a date off the end of the text when none is picked ("call mum tomorrow 6pm").
      * Returns what to tell the user: an error, "Added for Sat 31 Oct, 18:00" when a date was read, else null.
      */
-    suspend fun addTodo(text: String, due: String?, time: String?): String? {
-        val api = api() ?: return "Signed out"
+    suspend fun addTodo(text: String, due: String?, time: String?): String? =
+        tryAddTodo(text, due, time).fold({ it }, { it.message })
+
+    /** [addTodo] with failure told apart from success: the error, or the note to show (null when there's nothing to add to "Added"). */
+    suspend fun tryAddTodo(text: String, due: String?, time: String?): Result<String?> {
+        val api = api() ?: return Result.failure(Exception("Signed out"))
         val added = runCatching { api.addTodo(text, due, time) }
         loadTodos()
         if (added.getOrNull()?.due != null) ReminderSync.now(getApplication())
         return added.fold(
             { a ->
-                a.due?.takeIf { due == null }?.let { d ->
+                Result.success(a.due?.takeIf { due == null }?.let { d ->
                     val day = runCatching { java.time.LocalDate.parse(d).format(java.time.format.DateTimeFormatter.ofPattern("EEE d MMM")) }.getOrDefault(d)
                     "Added for $day" + (a.time?.let { ", $it" } ?: "")
-                }
+                })
             },
-            { it.message ?: "Couldn't add" },
+            { Result.failure(Exception(it.message ?: "Couldn't add")) },
         )
     }
 

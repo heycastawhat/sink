@@ -162,25 +162,34 @@ fun NewMenuFab(
 
 /** A quick todo: its text and an optional due date. It goes to Todo.md. */
 @Composable
-fun TodoDialog(onAdd: (text: String, due: String?) -> Unit, onDismiss: () -> Unit) {
+fun TodoDialog(
+    onAdd: (text: String, due: String?) -> Unit,
+    onDismiss: () -> Unit,
+    /** Set while the todo is being sent: it can't be added twice or dismissed, so a failure still has its text to come back to. */
+    busy: Boolean = false,
+    error: String? = null,
+) {
     val haptics = rememberHaptics()
     var pickDate by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf("") }
     var due by remember { mutableStateOf<LocalDate?>(null) }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("New todo") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(text, { text = it }, label = { Text("Todo") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                TextButton(onClick = { pickDate = true }) {
+                OutlinedTextField(
+                    text, { text = it }, label = { Text("Todo") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    isError = error != null, supportingText = error?.let { { Text(it) } },
+                )
+                TextButton(onClick = { pickDate = true }, enabled = !busy) {
                     Icon(Icons.Outlined.Event, null)
                     Text(due?.let { "  Due $it" } ?: "  Add a due date")
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { haptics.confirm(); onAdd(text.trim(), due?.toString()) }, enabled = text.isNotBlank()) { Text("Add") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = { haptics.confirm(); onAdd(text.trim(), due?.toString()) }, enabled = text.isNotBlank() && !busy) { Text("Add") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
     )
     if (pickDate) SinkDatePickerDialog(due ?: LocalDate.now(), onPick = { due = it; pickDate = false }, onDismiss = { pickDate = false })
 }

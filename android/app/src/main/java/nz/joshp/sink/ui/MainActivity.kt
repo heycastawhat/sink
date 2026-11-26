@@ -171,7 +171,11 @@ class MainActivity : ComponentActivity() {
                 if (session != Loading) firstScreenReady = true
                 when (val s = session) {
                     Loading -> Unit
-                    null -> LoginScreen(settings, lastServer, signingIn.value, signInError.value)
+                    null -> {
+                        // Asked for while signed out (a tile or widget): not to pop up after the next sign-in.
+                        LaunchedEffect(addingTodo.value) { addingTodo.value = false }
+                        LoginScreen(settings, lastServer, signingIn.value, signInError.value)
+                    }
                     else -> LoggedIn(s, openSettings)
                 }
             }
@@ -227,6 +231,32 @@ class MainActivity : ComponentActivity() {
 
     // The new-todo dialog, asked for by the Add todo tile or widget.
     private val addingTodo = mutableStateOf(false)
+    private val addTodoBusy = mutableStateOf(false)
+    private val addTodoError = mutableStateOf<String?>(null)
+
+    /**
+     * Sends the new todo. The dialog stays up until the server has it, and on failure keeps its text and says why. It runs in
+     * the app's scope: a rotation mid-request would cancel it with the activity, leaving a todo that may or may not exist.
+     */
+    private fun addTodo(vm: NotesViewModel, text: String, due: String?) {
+        if (addTodoBusy.value) return
+        addTodoBusy.value = true
+        addTodoError.value = null
+        val app = application as SinkApp
+        app.appScope.launch {
+            val result = vm.tryAddTodo(text, due, null)
+            addTodoBusy.value = false
+            // The activity was recreated meanwhile (so the dialog has gone): a toast is the only place left to say so.
+            val gone = isDestroyed || isFinishing
+            result.onSuccess {
+                addingTodo.value = false
+                android.widget.Toast.makeText(app, it ?: "Added to Todo.md", android.widget.Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                if (gone) android.widget.Toast.makeText(app, "Couldn't add todo: ${it.message}", android.widget.Toast.LENGTH_LONG).show()
+                else addTodoError.value = it.message
+            }
+        }
+    }
 
     // The quick switcher, open over whatever screen is showing.
     private val switching = mutableStateOf(false)
@@ -602,15 +632,10 @@ class MainActivity : ComponentActivity() {
 
         if (addingTodo.value) {
             TodoDialog(
-                // lifecycleScope, not a composition scope: the dialog leaves the composition as it's answered.
-                onAdd = { text, due ->
-                    addingTodo.value = false
-                    lifecycleScope.launch {
-                        val told = notesVm.addTodo(text, due, null) ?: "Added to Todo.md"
-                        android.widget.Toast.makeText(this@MainActivity, told, android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                },
-                onDismiss = { addingTodo.value = false },
+                onAdd = { text, due -> addTodo(notesVm, text, due) },
+                onDismiss = { addingTodo.value = false; addTodoError.value = null },
+                busy = addTodoBusy.value,
+                error = addTodoError.value,
             )
         }
 
