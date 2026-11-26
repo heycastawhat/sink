@@ -1,0 +1,11 @@
+<resources>
+    <!-- The widget's colours: the app's own Material 3 scheme (ui/theme/Color.kt), light. API 31+ takes the wallpaper's
+         palette instead (values-v31), and values-night has the dark ones. Notes use the primary container, todos the
+         tertiary one, as the app's two tabs' accents do. -->
+    <color name="widget_surface">#F2ECF4</color>
+    <color name="widget_ripple">#33000000</color>
+    <color name="widget_note_container">#E9DDFF</color>
+    <color name="widget_note_content">#4D3D75</color>
+    <color name="widget_todo_container">#FFD9E3</color>
+    <color name="widget_todo_content">#633B48</color>
+</resources>

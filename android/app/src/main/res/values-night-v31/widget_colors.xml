@@ -1,0 +1,8 @@
+<resources>
+    <color name="widget_surface">@android:color/system_neutral1_900</color>
+    <color name="widget_ripple">#33FFFFFF</color>
+    <color name="widget_note_container">@android:color/system_accent1_700</color>
+    <color name="widget_note_content">@android:color/system_accent1_100</color>
+    <color name="widget_todo_container">@android:color/system_accent3_700</color>
+    <color name="widget_todo_content">@android:color/system_accent3_100</color>
+</resources>

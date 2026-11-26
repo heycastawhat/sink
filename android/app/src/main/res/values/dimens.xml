@@ -1,0 +1,7 @@
+<resources>
+    <!-- The home-screen widget. API 31+ uses the launcher's own radii (values-v31). -->
+    <dimen name="widget_radius">28dp</dimen>
+    <dimen name="widget_inner_radius">20dp</dimen>
+    <dimen name="widget_padding">8dp</dimen>
+    <dimen name="widget_gap">8dp</dimen>
+</resources>

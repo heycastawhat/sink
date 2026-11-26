@@ -1,0 +1,9 @@
+<resources>
+    <!-- Material You: tones of the wallpaper's accent and neutral palettes, as Material 3 maps them. -->
+    <color name="widget_surface">@android:color/system_neutral2_50</color>
+    <color name="widget_ripple">#33000000</color>
+    <color name="widget_note_container">@android:color/system_accent1_100</color>
+    <color name="widget_note_content">@android:color/system_accent1_900</color>
+    <color name="widget_todo_container">@android:color/system_accent3_100</color>
+    <color name="widget_todo_content">@android:color/system_accent3_900</color>
+</resources>

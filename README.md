@@ -118,8 +118,8 @@ Or let [Obtainium](https://github.com/ImranR98/Obtainium) install and update it:
   phones), and boards in the same Excalidraw.
 - Edits made offline are saved on the phone and sent when you're back online.
 - Todo reminders arrive as notifications, with Done, 1 hour and Tomorrow buttons.
-- "New note" Quick Settings tile, and "Share → Sink" from any app turns text into a note, or photos and PDFs into a
-  note with them attached. A shared link on its own is clipped as a web page.
+- "Take a note" and "Add todo" Quick Settings tiles and a home-screen widget with the same two buttons, and
+  "Share → Sink" from any app turns text into a note, or photos and PDFs into a note with them attached. A shared link on its own is clipped as a web page.
 
 On iPhone or anywhere else, the web app works on phones too. Install it (Add to Home Screen) and turn on Settings →
 Todo reminders to get reminders there as notifications too (Web Push; on iPhone only from the installed app). It's
