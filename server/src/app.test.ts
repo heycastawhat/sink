@@ -14,7 +14,7 @@ import { pageText } from "./html";
 import { readdirSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
-import { Vault, cardText, sha256, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery, firstImage } from "./notes";
+import { Vault, cardText, sha256, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery, parseSearch, firstImage } from "./notes";
 import { localIso, localTime, utcOffset } from "./time";
 import { editTodo, listed, nextDate, nextOccurrence, parseQuick, parseTodos, setDone, setStatus, TODO_LIMIT, todoLine } from "./todos";
 
@@ -543,6 +543,11 @@ describe("mcp", () => {
     expect(paths(await call(token, "search_notes", { modified_before: "2026-02-01" }))).toEqual(["Garden/Soil.md"]);
     expect(paths(await call(token, "search_notes", { query: "compost", modified_after: "2026-02-01" }))).toEqual(["Budget.md"]);
     expect(paths(await call(token, "search_notes", { query: "compost", sort: "modified" }))).toEqual(["Budget.md", "Garden/Soil.md"]);
+    // The query takes the app's own filters, which narrow like the folder and tag arguments.
+    expect(paths(await call(token, "search_notes", { query: "compost in:Garden" }))).toEqual(["Garden/Soil.md"]);
+    expect(paths(await call(token, "search_notes", { query: "compost #money" }))).toEqual(["Budget.md"]);
+    expect(paths(await call(token, "search_notes", { query: "in:Garden #garden/beds" }))).toEqual(["Garden/Soil.md"]);
+    expect(paths(await call(token, "search_notes", { query: "compost in:Garden", folder: "Trips" }))).toEqual([]);
   });
 
   test("every assistant edit keeps what it replaced, to read back or undo", async () => {
@@ -737,6 +742,80 @@ describe("notes", () => {
     expect((await send(owner, "POST", "/api/notes/move", { from: path, to: "Leak.md" })).status).toBe(400);
     expect(existsSync(file("Leak.md"))).toBe(false);
     expect((await setup.app.request("/api/public/pages/sam/note?path=Leak.md")).status).toBe(404);
+  });
+
+  test("search combines words with in:, #tag and is:todo", async () => {
+    const token = await login();
+    const make = (folder: string, title: string, content: string) => send(token, "POST", "/api/notes", { folder, title, content });
+    await make("Garden", "Soil", "# Soil\n\ncompost heap #garden/beds\n- [ ] turn the compost 📅 2026-01-01\n");
+    await make("Garden", "Seeds", "# Seeds\n\ncompost tea #garden\n- [x] order seeds 📅 2026-01-01\n");
+    await make("Garden/Sheds", "Tools", "# Tools\n\ncompost bin #Garden #tools\n- [ ] oil the spade 📅 2026-02-01\n");
+    await make("", "Budget", "# Budget\n\ncompost costs #money\n- [ ] pay the bill 📅 2026-01-05\n- [ ] a plain checklist item\n");
+    await make("Kitchen", "Soup", "# Soup\n\nno such word here #money\n");
+    const search = async (query: string) => {
+      const res = await get(token, `/api/notes?q=${encodeURIComponent(query)}`);
+      expect(res.status).toBe(200);
+      return (((await res.json()) as any).items as { path: string }[]).map((n) => n.path).sort();
+    };
+
+    // A folder includes the folders below it; the folder's own name isn't a word to find.
+    expect(await search("compost in:Garden")).toEqual(["Garden/Seeds.md", "Garden/Sheds/Tools.md", "Garden/Soil.md"]);
+    expect(await search("compost in:garden/sheds")).toEqual(["Garden/Sheds/Tools.md"]);
+    expect(await search("compost in:Garden in:Kitchen")).toEqual(["Garden/Seeds.md", "Garden/Sheds/Tools.md", "Garden/Soil.md"]);
+    expect(await search("compost in:Gard")).toEqual([]);
+    expect(await search("compost in:Nope")).toEqual([]);
+    // A tag takes its nested tags with it, in any case, and several must all be there.
+    expect(await search("compost #garden")).toEqual(["Garden/Seeds.md", "Garden/Sheds/Tools.md", "Garden/Soil.md"]);
+    expect(await search("compost #garden/beds")).toEqual(["Garden/Soil.md"]);
+    expect(await search("compost #garden #tools")).toEqual(["Garden/Sheds/Tools.md"]);
+    expect(await search("compost #money")).toEqual(["Budget.md"]);
+    // is:todo: an open todo on the Todos list (a finished one or a plain checklist item doesn't count).
+    expect(await search("compost is:todo")).toEqual(["Budget.md", "Garden/Sheds/Tools.md", "Garden/Soil.md"]);
+    expect(await search("compost is:todo in:Garden #garden/beds")).toEqual(["Garden/Soil.md"]);
+    expect(await search("spade is:todo")).toEqual(["Garden/Sheds/Tools.md"]);
+    expect(await search("seeds is:todo")).toEqual([]);
+    // The words still have to match.
+    expect(await search("zanzibar in:Garden")).toEqual([]);
+
+    // With no words, every note that passes, newest first, with what a card shows.
+    expect(await search("in:Garden #tools")).toEqual(["Garden/Sheds/Tools.md"]);
+    expect(await search("is:todo")).toEqual(["Budget.md", "Garden/Sheds/Tools.md", "Garden/Soil.md"]);
+    const only = (await (await get(token, "/api/notes?q=" + encodeURIComponent("in:Kitchen"))).json()) as any;
+    expect(only.items).toEqual([expect.objectContaining({ path: "Kitchen/Soup.md", title: "Soup", tags: ["money"], excerpt: expect.stringContaining("no such word") })]);
+    expect(only.files).toEqual([]);
+
+    // The limit applies after the filters, so they don't eat it.
+    const limited = (await (await get(token, "/api/notes?limit=1&q=" + encodeURIComponent("compost in:Garden/Sheds"))).json()) as any;
+    expect(limited.items.map((n: any) => n.path)).toEqual(["Garden/Sheds/Tools.md"]);
+    // Plain searches are as before, filters in a word's place are just words when they're not whole.
+    expect(await search("compost")).toHaveLength(4);
+    expect((await get(token, "/api/notes?q=" + encodeURIComponent("in:"))).status).toBe(200);
+  });
+
+  test("search filters leave out private notes for assistants, and cover PDFs by folder", async () => {
+    const owner = await login();
+    const mcp = setup.auth.issueToken("assistant", "abc123", "mcp");
+    await send(owner, "POST", "/api/notes", { folder: "Diary", title: "Day", content: "---\nprivate: true\n---\n# Day\n\nsecret #diary\n- [ ] hide it 📅 2026-01-01\n" });
+    await send(owner, "POST", "/api/notes", { folder: "Diary", title: "Open", content: "# Open\n\nsecret #diary\n" });
+    const search = async (token: string, query: string) =>
+      (((await (await get(token, "/api/notes?q=" + encodeURIComponent(query))).json()) as any).items as { path: string }[]).map((n) => n.path).sort();
+    expect(await search(owner, "in:Diary")).toEqual(["Diary/Day.md", "Diary/Open.md"]);
+    expect(await search(mcp, "in:Diary")).toEqual(["Diary/Open.md"]);
+    expect(await search(mcp, "secret #diary")).toEqual(["Diary/Open.md"]);
+    expect(await search(owner, "is:todo")).toEqual(["Diary/Day.md"]);
+    expect(await search(mcp, "is:todo")).toEqual([]);
+
+    // A PDF is in a folder, but has no tags or todos.
+    const form = new FormData();
+    form.append("file", new File(["%PDF-1.4"], "Lease.pdf", { type: "application/pdf" }));
+    form.append("folder", "Home");
+    expect((await setup.app.request("/api/notes/attachments", { method: "POST", headers: { authorization: `Bearer ${owner}` }, body: form })).status).toBe(201);
+    const files = async (query: string) =>
+      (((await (await get(owner, "/api/notes?q=" + encodeURIComponent(query))).json()) as any).files as { path: string }[]).map((f) => f.path);
+    expect(await files("in:Home")).toEqual(["Home/Lease.pdf"]);
+    expect(await files("in:Diary")).toEqual([]);
+    expect(await files("in:Home #tag")).toEqual([]);
+    expect(await files("in:Home is:todo")).toEqual([]);
   });
 
   test("folders with emoji names move, trash and purge with everything in them", async () => {
@@ -2109,6 +2188,23 @@ describe("helpers", () => {
     expect(db.query("SELECT subject, dir FROM users").all()).toEqual([{ subject: "me", dir: "" }]);
     expect(db.query("SELECT DISTINCT subject FROM tokens").all()).toEqual([{ subject: "me" }]);
     db.close();
+  });
+
+  test("a search's in:, #tag and is:todo are split from its words", () => {
+    expect(parseSearch("soup")).toEqual({ text: "soup", filters: null });
+    expect(parseSearch("in:Projects #Work is:todo invoice")).toEqual({
+      text: "invoice",
+      filters: { folders: ["projects"], tags: ["work"], todo: true },
+    });
+    // Anywhere in the search, in any case, with a quoted folder for spaces and nested paths.
+    expect(parseSearch('wifi IN:"My Notes/Home" IS:TODO #a/b #c').filters).toEqual({ folders: ["my notes/home"], tags: ["a/b", "c"], todo: true });
+    expect(parseSearch("in:A in:/B/ x").filters?.folders).toEqual(["a", "b"]);
+    expect(parseSearch("#school #école").filters?.tags).toEqual(["school", "école"]);
+    // Only whole words count; anything else stays text.
+    for (const plain of ["in:", "in:\"\"", "is:done", "foo#bar", "#tag,", "again:x", "thin:x"]) expect(parseSearch(plain).filters).toBeNull();
+    expect(parseSearch("is:done in:").text).toBe("is:done in:");
+    // Only filters leaves no words.
+    expect(parseSearch("  #a  ").text).toBe("");
   });
 
   test("fts query is sanitized", () => {

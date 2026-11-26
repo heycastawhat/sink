@@ -21,6 +21,9 @@ app, and an MCP server so AI assistants can read and write your notes.
   `pdftoppm` (poppler-utils, in the Docker image).
 - **Search inside attachments:** words in embedded PDFs and photos (OCR) find their note. Runs in the background;
   outside Docker it needs `pdftotext` (poppler-utils) and `tesseract` with English data, and skips what's missing.
+- **Search filters:** mix words with `in:Folder` (`in:"Two Words"`; subfolders count), `#tag` (nested tags too) and
+  `is:todo` (notes with an open todo), e.g. `invoice in:Projects #work is:todo`. Assistants get the same in `search_notes`.
+  A note opened from a search lights up its words.
 - **Leaving Keep:** import your Google Takeout zip from Settings: checklists, labels, colours, pins and images come too.
 - **Leaving Notion:** import its Markdown & CSV export from Settings: the page tree, links between pages, images, and
   databases as tables with each row's properties in its page's frontmatter.

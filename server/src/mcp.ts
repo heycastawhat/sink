@@ -93,7 +93,9 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
       description:
         "Search the user's markdown notes by words (title, text, tags, path), best match first. Leave query empty to " +
         "list notes, most recently modified first, plus the folder list. folder, tag and the modified dates narrow " +
-        "either; sort=modified puts the newest matches first. Use read_note for a note's full text.",
+        "either; sort=modified puts the newest matches first. The query takes the app's own filters too, mixed with " +
+        'words: in:Folder (in:"Two Words" for spaces), #tag, and is:todo (notes with an open todo), e.g. ' +
+        '"in:Projects #work is:todo invoice". Use read_note for a note\'s full text.',
       inputSchema: {
         query: z.string().max(200).optional(),
         folder: z.string().max(1024).optional().describe('Only notes in this folder and below, e.g. "Projects"'),

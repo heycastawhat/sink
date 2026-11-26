@@ -20,6 +20,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion } 
 import { tags as t } from '@lezer/highlight';
 import './editor.css';
 import { buzz } from './haptics.js';
+import { pasteHtmlImage } from './paste-image.js';
 import { inlineHtml, tableCells } from './util.js';
 import { registry } from './plugin-api.js';
 import { cellSpans, nextCell, prevCell, tableEditing, tableEnter } from './table-edit.js';
@@ -534,6 +535,44 @@ function noteEmbedsDeco(state, opts) {
 
 const redrawEmbeds = StateEffect.define();
 
+// Words of the search the note was opened from, lit up in the text (a word that starts with one, as the search matches).
+const setHits = StateEffect.define();
+const searchHits = (initial) => {
+  const hit = Decoration.mark({ class: 'cm-search-hit' });
+  const terms = StateField.define({
+    create: () => initial,
+    update: (value, tr) => tr.effects.reduce((v, e) => (e.is(setHits) ? e.value : v), value),
+  });
+  const build = (view) => {
+    const list = view.state.field(terms);
+    const builder = new RangeSetBuilder();
+    if (!list.length) return builder.finish();
+    for (const { from, to } of view.visibleRanges) {
+      const start = view.state.doc.lineAt(from).from;
+      const text = view.state.sliceDoc(start, view.state.doc.lineAt(to).to);
+      for (const m of text.matchAll(/[\p{L}\p{N}]+/gu)) {
+        const word = m[0].toLowerCase();
+        if (list.some((t) => word.startsWith(t))) builder.add(start + m.index, start + m.index + m[0].length, hit);
+      }
+    }
+    return builder.finish();
+  };
+  return [
+    terms,
+    ViewPlugin.fromClass(
+      class {
+        constructor(view) {
+          this.decorations = build(view);
+        }
+        update(u) {
+          if (u.docChanged || u.viewportChanged || u.transactions.some((t) => t.effects.some((e) => e.is(setHits)))) this.decorations = build(u.view);
+        }
+      },
+      { decorations: (v) => v.decorations },
+    ),
+  ];
+};
+
 // One fetch per note for the whole page (`opts.embedCache`), embeds within embeds included. `redrawEmbeds` draws
 // every embed again, from the cache as it is then.
 function noteEmbeds(opts) {
@@ -987,6 +1026,7 @@ function pasteLink(e, view) {
  *  resolveEmbed(name) -> url     for ![[image.png]]; or a Promise of one, the same object for the same name
  *  resolveImage(src) -> url      for ![](relative/path.png); likewise
  *  loadEmbed(name) -> Promise<{path, title, content, resolveEmbed?, resolveImage?} | null>  for ![[Note]]
+ *  highlight                     words (lower case) to light up, from the search the note was opened from
  *  path                          this note's path (so an embed never shows it inside itself)
  *  linkTargets() -> [{label, detail}]  for [[ completion
  *  uploadFile(file) -> Promise<string>  pasted/dropped file; returns the text to insert
@@ -1051,15 +1091,19 @@ export function createEditor(opts) {
     };
   };
 
+  // An embed on a line of its own at `pos` (the cursor by default).
+  const insertEmbed = (view, text, pos) => {
+    const at = pos ?? view.state.selection.main.head;
+    const line = view.state.doc.lineAt(at);
+    const insert = (line.length && at === line.to ? '\n' : '') + text + '\n';
+    view.dispatch({ changes: { from: at, insert }, selection: { anchor: at + insert.length } });
+  };
+
   const insertFiles = async (view, files, pos) => {
     if (!opts.uploadFile || !files.length) return false;
     for (const file of files) {
       try {
-        const text = await opts.uploadFile(file);
-        const at = pos ?? view.state.selection.main.head;
-        const line = view.state.doc.lineAt(at);
-        const insert = (line.length && at === line.to ? '\n' : '') + text + '\n';
-        view.dispatch({ changes: { from: at, insert }, selection: { anchor: at + insert.length } });
+        insertEmbed(view, await opts.uploadFile(file), pos);
       } catch (err) {
         opts.onError?.(err);
       }
@@ -1086,6 +1130,7 @@ export function createEditor(opts) {
         indentOnInput(),
         closeBrackets(),
         highlightSelectionMatches(),
+        searchHits(opts.highlight ?? []),
         EditorView.lineWrapping,
         // Room to keep clear when scrolling the cursor into view (the Android app's toolbar floats over the page bottom).
         EditorView.scrollMargins.of(() => ({ bottom: opts.bottomMargin?.() ?? 0 })),
@@ -1162,7 +1207,11 @@ export function createEditor(opts) {
           paste(e, view) {
             const files = [...(e.clipboardData?.files ?? [])];
             // Without an uploader (an older Android app) leave the paste to the browser rather than swallow the image.
-            if (!files.length || !opts.uploadFile) return pasteLink(e, view);
+            if (!files.length || !opts.uploadFile) {
+              // An image copied from a web page arrives as HTML with no file: fetch it and upload it like a pasted one.
+              if (pasteHtmlImage(e, { uploadFile: opts.uploadFile, insert: (text) => insertEmbed(view, text), onError: opts.onError })) return true;
+              return pasteLink(e, view);
+            }
             e.preventDefault();
             insertFiles(view, files);
             return true;
@@ -1226,6 +1275,8 @@ export function createEditor(opts) {
       else FORMATS[kind]?.(view);
       view.focus();
     },
+    /** Lights up these words instead (the search changed; none clears them). */
+    setHighlight: (words) => view.dispatch({ effects: setHits.of(words) }),
     /** Uploads files and puts their embeds at the cursor, as a paste or drop does. */
     insertFiles: (files) => insertFiles(view, files),
     destroy: () => view.destroy(),

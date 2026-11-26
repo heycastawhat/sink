@@ -133,6 +133,29 @@ export function toFtsQuery(q: string): string | null {
   return words.map((w) => `"${w}"*`).join(" ");
 }
 
+/** What a search narrows to besides its words: `in:Folder` (and below), `#tag` (and nested ones), `is:todo`. */
+export type SearchFilters = { folders: string[]; tags: string[]; todo: boolean };
+
+/**
+ * Splits `in:Folder`, `in:"Two Words"`, `#tag` and `is:todo` out of a search; the rest is what to look for. Only
+ * whole words count, so `#tag,` or `in:` alone stay ordinary text. `filters` is null when the search has none.
+ */
+export function parseSearch(q: string): { text: string; filters: SearchFilters | null } {
+  const filters: SearchFilters = { folders: [], tags: [], todo: false };
+  const text = q.replace(/(^|\s)(?:in:(?:"([^"]*)"|(\S+))|(is:todo)|#([\p{L}\p{N}_/-]+))(?=\s|$)/giu, (all, space: string, quoted, folder, todo, tag) => {
+    if (todo) filters.todo = true;
+    else if (tag) filters.tags.push(tag.toLowerCase());
+    else {
+      const name = (quoted ?? folder).trim().replace(/^\/+|\/+$/g, "").toLowerCase();
+      // `in:""` names no folder: left out rather than matching nothing.
+      if (name) filters.folders.push(name);
+    }
+    return space;
+  });
+  const any = filters.folders.length > 0 || filters.tags.length > 0 || filters.todo;
+  return { text: text.trim(), filters: any ? filters : null };
+}
+
 /** Length as SQLite's substr() counts it: characters, where JS counts an emoji as two. */
 const chars = (s: string) => [...s].length;
 
@@ -629,14 +652,39 @@ export class Vault {
 
   // ---- reading
 
+  /**
+   * Whether a note passes a search's filters: in one of the folders (or below), has every tag (or one nested under
+   * it), and with `is:todo` has an open todo on the Todos list. Compared in JS: SQLite's lower() is ASCII only.
+   */
+  private keeper(filters: SearchFilters | undefined): (r: { path: string; tags: string }) => boolean {
+    if (!filters) return () => true;
+    const open = filters.todo ? new Set(this.db.query<{ path: string }, []>("SELECT DISTINCT path FROM todos WHERE status = 'open'").all().map((t) => t.path)) : null;
+    return (r) => {
+      const path = r.path.toLowerCase();
+      if (filters.folders.length && !filters.folders.some((f) => path.startsWith(f + "/"))) return false;
+      if (open && !open.has(r.path)) return false;
+      if (!filters.tags.length) return true;
+      const tags = (JSON.parse(r.tags) as string[]).map((t) => t.toLowerCase());
+      return filters.tags.every((want) => tags.some((t) => t === want || t.startsWith(want + "/")));
+    };
+  }
+
+  /** Documents (PDFs) in the folders a search names; none when it asks for tags or todos, which a PDF has none of. */
+  documentsIn<D extends { path: string }>(filters: SearchFilters, docs: D[]): D[] {
+    if (filters.tags.length || filters.todo) return [];
+    return docs.filter((d) => !filters.folders.length || filters.folders.some((f) => d.path.toLowerCase().startsWith(f + "/")));
+  }
+
   /** Every note, pinned first then newest, each with the start of its text and its first image for a card preview. */
-  list(): { notes: (NoteMeta & { excerpt: string; image: string | null })[]; folders: string[] } {
+  list(filters?: SearchFilters): { notes: (NoteMeta & { excerpt: string; image: string | null })[]; folders: string[] } {
+    const keep = this.keeper(filters);
     const notes = this.db
       .query<Row & { excerpt: string; head: string }, []>(
         `SELECT path, title, tags, mtime, size, hash, pinned, color, publish, searchable, private, substr(body, 1, 600) AS excerpt, substr(body, 1, 4000) AS head
          FROM notes n WHERE ${this.shown} ORDER BY pinned DESC, mtime DESC`,
       )
       .all()
+      .filter(keep)
       .map(({ head, ...r }) => ({ ...meta(r), excerpt: cardText(r.excerpt, r.title), image: isBoard(r.path) ? null : firstImage(head) }));
     return { notes, folders: [...this.folders].sort((a, b) => a.localeCompare(b)) };
   }
@@ -798,7 +846,10 @@ export class Vault {
    * Notes whose own text matches, then notes embedding (`![[file]]`) a PDF or image whose text matches. Those name
    * the attachment, and their snippet starts with its file name so every client shows where the words were.
    */
-  search(fts: string, limit: number) {
+  search(fts: string, limit: number, filters?: SearchFilters) {
+    // Filtering happens after the query, so with filters it isn't cut to the limit first (a vault's matches are few).
+    const sqlLimit = filters ? -1 : limit;
+    const keep = this.keeper(filters);
     const items: (NoteMeta & { snippet: string; attachment?: string })[] = this.db
       .query<Row & { snippet: string }, [string, number]>(
         `SELECT n.path, n.title, n.tags, n.mtime, n.size, n.hash, n.pinned, n.color, n.publish, n.searchable, n.private,
@@ -806,7 +857,9 @@ export class Vault {
          FROM notes_fts JOIN notes n ON n.rowid = notes_fts.rowid
          WHERE notes_fts MATCH ? AND ${this.shown} ORDER BY bm25(notes_fts, 2.0, 5.0, 1.0, 3.0) LIMIT ?`,
       )
-      .all(fts, limit)
+      .all(fts, sqlLimit)
+      .filter(keep)
+      .slice(0, limit)
       .map((r) => ({ ...meta(r), snippet: r.snippet }));
     const seen = new Set(items.map((i) => i.path));
     const hits = this.db
@@ -817,7 +870,8 @@ export class Vault {
            JOIN links l ON l.target IN (a.name, a.lpath) JOIN notes n ON n.path = l.src
          WHERE attachment_fts MATCH ? AND ${this.shown} ORDER BY bm25(attachment_fts) LIMIT ?`,
       )
-      .all(fts, limit);
+      .all(fts, sqlLimit)
+      .filter(keep);
     for (const { attachment, snippet, ...r } of hits) {
       if (items.length >= limit || seen.has(r.path)) continue;
       seen.add(r.path);

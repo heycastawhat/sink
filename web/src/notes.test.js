@@ -8,7 +8,10 @@ let livePlugin;
 let liveView;
 
 let editor;
+let editorOptions;
+let highlights;
 const create = (options) => {
+  editorOptions = options;
   let text = EditorState.create({ doc: options.doc }).doc.toString();
   if (useLive) {
     liveView = {
@@ -30,6 +33,7 @@ const create = (options) => {
       options.onChange?.(value);
     },
     focus() {},
+    setHighlight: (words) => highlights.push(words),
     destroy() { if (useLive) livePlugin.destroy(); },
   };
   return editor;
@@ -64,6 +68,7 @@ const pinned = '---\npinned: true\n---\n' + original;
 const latest = pinned + '\nLATESTFROMANDROID';
 
 beforeEach(async () => {
+  highlights = [];
   useLive = false;
   firstCreate = false;
   statuses = [];
@@ -440,4 +445,22 @@ test('reverting an edit to saved text removes the draft, including an empty note
   expect(storage.has('sink:unsaved:' + path)).toBe(true);
   editor.setText('');
   expect(storage.has('sink:unsaved:' + path)).toBe(false);
+});
+
+test('a note opened from a search lights up its words, and the lit words follow the search', async () => {
+  const { api } = await import('./api.js');
+  api.searchNotes = async () => ({ items: [], files: [] });
+  await notes.setQuery('in:Journal #home Compost tea is:todo');
+  await notes.openNote(path);
+  // The filters aren't words in the note.
+  expect(editorOptions.highlight).toEqual(['compost', 'tea']);
+  await notes.setQuery('garden');
+  expect(highlights).toEqual([['garden']]);
+  await notes.setQuery('');
+  expect(highlights.at(-1)).toEqual([]);
+});
+
+test('a note opened with no search lights up nothing', async () => {
+  await notes.openNote(path);
+  expect(editorOptions.highlight).toEqual([]);
 });
