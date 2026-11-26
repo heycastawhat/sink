@@ -1,5 +1,6 @@
 package nz.joshp.sink.ui
 
+import nz.joshp.sink.data.LiveState
 import nz.joshp.sink.data.Note
 import nz.joshp.sink.data.PendingEdit
 import nz.joshp.sink.data.QueuedSave
@@ -21,6 +22,8 @@ internal class Editing(var path: String?, val draftKey: String, var folder: Stri
     /** Flushes still reading the page, and whether the screen has gone: the page is destroyed after the last. */
     var flushing = 0
     var closed = false
+
+    fun needsLiveFallback(state: LiveState): Boolean = liveMode && state.pending
 
     fun pendingEdit(): PendingEdit? =
         if (dirty && (path != null || current.isNotBlank())) {
