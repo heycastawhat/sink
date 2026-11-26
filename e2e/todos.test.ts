@@ -4,8 +4,7 @@ import { eventually, suite } from "./harness";
 
 const s = suite();
 
-// A checkbox in a note is only on the Todos list if it says it's a todo (a #todo tag, a due date, a priority or a
-// repeat), so an ordinary checklist stays a checklist. Everything in Todo.md is listed.
+// Every open checkbox in every note is on the Todos list, dated or not (dated ones first), except blank ones.
 
 const row = (page: Page, text: string) => page.locator("#todo-list .todo", { hasText: text });
 const openTodos = async (path = "#/todos") => {
@@ -15,7 +14,7 @@ const openTodos = async (path = "#/todos") => {
 };
 
 s.it("checkbox todos written in notes show up in the todo list, with their note", async () => {
-  await s.sink.note("Todos/Trip.md", "# Trip\n\n- [ ] book the ferry #todo\n- [x] renew passport #todo\n- [ ] pack socks\n- not a todo\n");
+  await s.sink.note("Todos/Trip.md", "# Trip\n\n- [ ] book the ferry #todo\n- [x] renew passport #todo\n- [ ] pack socks\n- [ ] \n- not a todo\n");
   await s.sink.note("Todos/Home.md", "# Home\n\n- [ ] fix the gate 📅 2031-01-01\n");
   const page = await openTodos();
 
@@ -24,8 +23,12 @@ s.it("checkbox todos written in notes show up in the todo list, with their note"
   // Done ones wait under "Show done", and plain bullets never appear.
   expect(await row(page, "renew passport").count()).toBe(0);
   expect(await page.locator("#todo-list").innerText()).not.toContain("not a todo");
-  // An undated, untagged checkbox is a checklist item, not a todo.
-  expect(await page.locator("#todo-list").innerText()).not.toContain("pack socks");
+  // A plain checkbox is a todo too, listed after the dated ones.
+  await row(page, "pack socks").waitFor();
+  const listed = await page.locator("#todo-list .todo").allInnerTexts();
+  expect(listed.findIndex((t) => t.includes("fix the gate"))).toBeLessThan(listed.findIndex((t) => t.includes("pack socks")));
+  // A blank checkbox has nothing to show.
+  expect(await page.locator("#todo-list .todo").count()).toBe(3);
   expect(await row(page, "book the ferry").locator(".todo-note").innerText()).toContain("Trip");
 
   await page.locator("#todo-done-toggle").click();
