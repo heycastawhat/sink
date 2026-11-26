@@ -20,6 +20,7 @@ database loses nothing a rescan can't rebuild.
 | `android/` | Kotlin + Jetpack Compose (Material 3 Expressive). The note editor is the web editor in a WebView. |
 | `obsidian/` | Obsidian plugin that syncs a local vault with the server over the API (Bun build, TypeScript, `bun test` against an in-process server). See `obsidian/README.md`. |
 | `extension/` | Chrome extension (Manifest V3, plain JS, Bun build): a side panel hosting `web/src/editor.js` for quick notes and todos, plus a clipper that sends the page's HTML to `/api/clip`. See `extension/README.md`. |
+| `e2e/` | Playwright browser tests (`playwright-core` under `bun test`) against a real server with a scratch vault; `.github/workflows/e2e.yml`. See `e2e/README.md`. |
 | `docs/plugins.md`, `examples/plugins/` | Plugin API and an example plugin. |
 | `.github/workflows/` | `ci.yml` (server tests + web build), `docker.yml` (GHCR image), `android.yml` (APK; releases on `v*` tags). |
 
@@ -116,6 +117,7 @@ cd server && bun install && bun test            # 60+ tests; bunx tsc --noEmit -
 cd web && bun install && bun run build          # builds web/dist (the server serves it)
 cd web && bun run dev                           # Vite on :5173, proxies /api to :8787
 cd obsidian && bun install && bun test && bun run typecheck && bun run build   # plugin; its tests import ../server/src, so bun install there first
+cd e2e && bun install && bunx playwright-core install --with-deps chromium && bun run test   # browser tests; build web/ first
 # Android: build on CI, not locally (see below). gh workflow run android.yml --ref main
 ```
 
