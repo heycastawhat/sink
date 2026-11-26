@@ -16,7 +16,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
 import { Vault, cardText, sha256, parseNote, readFrontmatter, inlineTags, cleanPath, fileNameFor, toFtsQuery, firstImage } from "./notes";
 import { localIso, localTime, utcOffset } from "./time";
-import { editTodo, nextDate, nextOccurrence, parseQuick, parseTodos, setDone, setStatus, todoLine } from "./todos";
+import { editTodo, listed, nextDate, nextOccurrence, parseQuick, parseTodos, setDone, setStatus, TODO_LIMIT, todoLine } from "./todos";
 
 // A 1x1 PNG, for attachment uploads.
 const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
@@ -1784,6 +1784,56 @@ describe("todos", () => {
     expect(ticked.status).toBe(200);
     open = ((await (await get(token, "/api/todos")).json()) as any).todos;
     expect(open.map((t: any) => t.text)).not.toContain("pick fonts");
+  });
+
+  test("blank checkboxes, template placeholders, comments and indented code are not todos", async () => {
+    const md = [
+      "- [ ] real one",
+      "- [ ] ",
+      "- [ ] 📅 2026-11-02",
+      "- [ ] fill in {{title}}",
+      "- [ ] due {{date:YYYY-MM-DD}}",
+      "<!-- - [ ] commented out -->",
+      "<!--",
+      "- [ ] inside a long comment",
+      "-->",
+      "- [ ] after the comment",
+      "",
+      "Some text:",
+      "",
+      "    - [ ] indented code",
+      "",
+      "- parent",
+      "    - [ ] nested child, four spaces in",
+      "\t- [ ] tab-nested child",
+    ].join("\n");
+    expect(parseTodos(md, "UTC").filter((t) => listed("Plan.md", t)).map((t) => t.text)).toEqual([
+      "real one",
+      "after the comment",
+      "nested child, four spaces in",
+      "tab-nested child",
+    ]);
+    // A comment closed and another opened on one line still hides what follows.
+    expect(parseTodos("<!-- a --> <!-- b\n- [ ] hidden\n-->\n- [ ] shown", "UTC").map((t) => t.text)).toEqual(["shown"]);
+
+    // Everything in the Templates folder is a blank to fill in, placeholder or not.
+    const token = await login();
+    await send(token, "POST", "/api/notes", { folder: "Templates", title: "Project", content: "- [ ] kick off\n- [ ] {{title}} review\n" });
+    await send(token, "POST", "/api/notes", { title: "Mixed", content: "- [ ] keep me\n- [ ] \n- [ ] {{title}}\n<!-- - [ ] gone -->\n" });
+    const open = ((await (await get(token, "/api/todos")).json()) as any).todos;
+    expect(open.map((t: any) => t.text)).toEqual(["keep me"]);
+  });
+
+  test("a long list says it was cut short instead of quietly dropping the undated todos", async () => {
+    const token = await login();
+    const lines = Array.from({ length: TODO_LIMIT + 5 }, (_, i) => `- [ ] task ${i}`);
+    await send(token, "POST", "/api/notes", { title: "Big", content: lines.join("\n") + "\n" });
+    const res = (await (await get(token, "/api/todos")).json()) as any;
+    expect(res.todos).toHaveLength(TODO_LIMIT);
+    expect(res.truncated).toBe(true);
+    // A short list isn't marked.
+    const small = (await (await get(token, "/api/todos?view=done")).json()) as any;
+    expect(small.truncated).toBe(false);
   });
 
   test("assistants see plain checkboxes through list_todos, except in private notes", async () => {

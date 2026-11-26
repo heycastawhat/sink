@@ -36,11 +36,20 @@ export type Todo = {
 const PRIORITIES = ["🔺", "⏫", "🔼", "", "🔽", "⏬"];
 const dateField = (mark: string, rest: string) => new RegExp(`${mark}\\uFE0F?\\s*(${DATE})`, "u").exec(rest)?.[1] ?? null;
 
-/** Every task line in a note, skipping frontmatter and code blocks. Lines are 0-based. */
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
+
+/**
+ * Every task line in a note, skipping frontmatter, code (fenced, or indented four spaces outside a list) and HTML
+ * comments. Lines are 0-based.
+ */
 export function parseTodos(content: string, timeZone: string): Todo[] {
   const lines = content.split("\n");
   const out: Todo[] = [];
   let fence: string | null = null;
+  // Inside an `<!-- ... -->` that began on an earlier line.
+  let comment = false;
+  // Where the last list item sat, so a nested item four spaces in is a child, not an indented code block; -1 outside a list.
+  let listAt = -1;
   let i = 0;
   if (lines[0]?.trimEnd() === "---") {
     const end = lines.findIndex((l, n) => n > 0 && l.trimEnd() === "---");
@@ -56,6 +65,15 @@ export function parseTodos(content: string, timeZone: string): Todo[] {
       continue;
     }
     if (fence) continue;
+    const inComment = comment;
+    for (const mark of line.matchAll(/<!--|-->/g)) comment = mark[0] === "<!--";
+    if (inComment) continue;
+    const indent = /^ */.exec(line)![0].length;
+    const item = LIST_ITEM.test(line);
+    const code = indent >= 4 && listAt < 0;
+    if (item) listAt = indent;
+    else if (line.trim() && indent === 0) listAt = -1;
+    if (code) continue;
     const m = TASK.exec(line);
     if (!m) continue;
     const mark = m[2]!;
@@ -83,6 +101,15 @@ export function parseTodos(content: string, timeZone: string): Todo[] {
   }
   return out;
 }
+
+/** A `{{title}}`, `{{date}}` or `{{time:HH:mm}}` left in a template, to be filled in when a note is made from it. */
+const PLACEHOLDER = /\{\{\s*(?:title|date|time)\s*(?::[^}]*)?\}\}/i;
+
+/**
+ * Whether a task line goes on the Todos list: every one with something written on it, except those in the Templates
+ * folder and ones still holding a template placeholder, which are blanks to fill in and not things to do.
+ */
+export const listed = (path: string, t: Todo) => !!t.text && !/^templates\//i.test(path) && !PLACEHOLDER.test(t.raw);
 
 /** Sets a task line's status, with the `✅ date` (done) or `❌ date` (cancelled) Tasks writes. */
 export function setStatus(raw: string, status: "open" | "done" | "cancelled", today: string): string {
@@ -349,6 +376,8 @@ const addBody = z.object({
   // Read a date, time or repeat off the end of the text ("call mum tomorrow 6pm") when none is given.
   natural: z.boolean().optional(),
 });
+/** The most the Todos list returns; `truncated` says when there were more, so a long list isn't mistaken for the whole one. */
+export const TODO_LIMIT = 2000;
 const listQuery = z.object({ view: z.enum(["open", "done", "all"]).default("open") });
 
 export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
@@ -371,10 +400,11 @@ export function todoRoutes(db: Database, vault: Vault, timeZone: string) {
       .query<Row, []>(
         `SELECT t.path, t.line, t.raw, t.text, t.status, t.due, t.remind_at, t.done_on, t.priority, t.start, t.scheduled,
                 n.title AS note_title, n.mtime
-         FROM todos t JOIN notes n ON n.path = t.path WHERE ${where} AND ${shown(c)} ORDER BY ${order} LIMIT 500`,
+         FROM todos t JOIN notes n ON n.path = t.path WHERE ${where} AND ${shown(c)} ORDER BY ${order} LIMIT ${TODO_LIMIT + 1}`,
       )
       .all();
-    return c.json({ todos: rows, today: today() });
+    const truncated = rows.length > TODO_LIMIT;
+    return c.json({ todos: truncated ? rows.slice(0, TODO_LIMIT) : rows, today: today(), truncated });
   });
 
   // For the Todos tab's badge: open todos that are overdue or due today and have started.

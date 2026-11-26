@@ -327,9 +327,10 @@ function buildServer(api: ApiFetch, timeZone: string, extra: PluginTool[], origi
       annotations: { readOnlyHint: true },
     },
     safe(async ({ done }) => {
-      const { todos, today } = await json<{ todos: Todo[]; today: string }>(await api(`/api/todos?view=${done ? "done" : "open"}`));
+      const { todos, today, truncated } = await json<{ todos: Todo[]; today: string; truncated?: boolean }>(await api(`/api/todos?view=${done ? "done" : "open"}`));
       return text({
         today,
+        ...(truncated ? { truncated: `Only the first ${todos.length} are listed; ask the user to tidy old checkboxes, or search the notes for more.` } : {}),
         todos: todos.map((t) => ({
           text: t.text,
           due: t.due,

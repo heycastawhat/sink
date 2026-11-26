@@ -2429,7 +2429,10 @@ const todoState = { open: [], done: null, today: '' };
 
 export async function loadTodos() {
   try {
-    const { todos, today } = await api.todos('open');
+    const { todos, today, truncated } = await api.todos('open');
+    // Said once when the list first outgrows what the server returns, not at every refresh.
+    if (truncated && !todoState.truncated) toast(`Only the first ${todos.length} todos are shown`);
+    todoState.truncated = !!truncated;
     todoState.open = todos;
     todoState.today = today;
     if (todoState.done) todoState.done = (await api.todos('done')).todos;
