@@ -1,5 +1,6 @@
 package nz.joshp.sink.ui
 
+import android.os.Build
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.EnterExitState
@@ -98,6 +99,9 @@ val LocalNavScope = staticCompositionLocalOf<AnimatedVisibilityScope?> { null }
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
+    // Shared-bounds coordinate tracking makes every visible card part of the transition machinery. That is too
+    // costly on older devices, and toggling it as cards enter the viewport can make the staggered grid remeasure.
+    if (Build.VERSION.SDK_INT < 30) return this
     val morph = LocalCardMorph.current
     val nav = LocalNavScope.current
     if (nav == null) return this
@@ -142,6 +146,7 @@ fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
 /** Inside a note's [morphBounds]: lays the page out at its full size while the bounds grow, so it doesn't reflow. */
 @Composable
 fun Modifier.morphContent(): Modifier {
+    if (Build.VERSION.SDK_INT < 30) return this
     val morph = LocalCardMorph.current ?: return this
     return with(morph.shared) { this@morphContent.skipToLookaheadSize() }
 }
