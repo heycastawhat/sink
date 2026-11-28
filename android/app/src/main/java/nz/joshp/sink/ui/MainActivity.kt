@@ -146,7 +146,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         // A fresh start has the system splash to lift away (and an entrance to play under it); a recreation has neither.
-        if (savedInstanceState == null && Build.VERSION.SDK_INT >= 31) holdSplash() else Entrance.finish()
+        if (savedInstanceState == null && Build.VERSION.SDK_INT >= 31) SplashExit.hold(this) { firstScreenReady } else Entrance.finish()
         val settings = (application as SinkApp).settings
         val openSettings = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)
         handleSignIn(intent)
@@ -184,44 +184,6 @@ class MainActivity : ComponentActivity() {
 
     /** Whether we know yet who's signed in, so the splash can go to a real screen rather than a blank one. */
     @Volatile private var firstScreenReady = false
-
-    /**
-     * Keeps the splash up until its drop has landed (and we know which screen to show, for [SPLASH_MAX_MS] at most),
-     * then lifts it away: the drop swells as it fades and the splash clears as the app's entrance plays ([Entrance]).
-     */
-    @RequiresApi(31)
-    private fun holdSplash() {
-        val now = SystemClock.uptimeMillis()
-        // The drop starts falling as the splash window goes up, which for a cold start is about when the process did.
-        val processStart = android.os.Process.getStartUptimeMillis()
-        val start = if (now - processStart < SPLASH_MIN_MS) processStart else now
-        val content = findViewById<View>(android.R.id.content)
-        content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
-            override fun onPreDraw(): Boolean {
-                val shown = SystemClock.uptimeMillis() - start
-                if (!(firstScreenReady && shown >= SPLASH_MIN_MS) && shown < SPLASH_MAX_MS) return false
-                content.viewTreeObserver.removeOnPreDrawListener(this)
-                return true
-            }
-        })
-        splashScreen.setOnExitAnimationListener { view ->
-            Entrance.hide()
-            view.iconView?.animate()
-                ?.scaleX(1.6f)?.scaleY(1.6f)?.alpha(0f)
-                ?.setDuration(320)
-                ?.setInterpolator(AccelerateInterpolator(1.5f))
-                ?.start()
-            view.animate()
-                .alpha(0f)
-                .setStartDelay(80)
-                .setDuration(300)
-                .setInterpolator(DecelerateInterpolator())
-                .withEndAction { view.remove() }
-                .start()
-            // Once the splash has started to clear, so the entrance is seen.
-            view.postDelayed({ Entrance.play() }, 80)
-        }
-    }
 
     private val signingIn = mutableStateOf(false)
     private val signInError = mutableStateOf<String?>(null)
@@ -670,8 +632,50 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_NEW_NOTE = "new_note"
         const val EXTRA_NEW_TODO = "new_todo"
         private val Loading = Session("", "")
-        /** The splash's drop has landed and settled by now (see drawable/splash_icon_animated.xml). */
-        private const val SPLASH_MIN_MS = 800L
-        private const val SPLASH_MAX_MS = 2000L
+    }
+}
+
+/**
+ * Keeps the splash up until its drop has landed (and the first screen is known, for [SplashExit.SPLASH_MAX_MS] at most),
+ * then lifts it away as the app's entrance plays. Isolated because android.window.SplashScreen only exists on API 31;
+ * loading the listener's class on older Android fails verification even when the call is never made.
+ */
+@RequiresApi(31)
+private object SplashExit {
+    /** The splash's drop has landed and settled by now (see drawable/splash_icon_animated.xml). */
+    private const val SPLASH_MIN_MS = 800L
+    private const val SPLASH_MAX_MS = 2000L
+
+    fun hold(activity: ComponentActivity, firstScreenReady: () -> Boolean) {
+        val now = SystemClock.uptimeMillis()
+        // The drop starts falling as the splash window goes up, which for a cold start is about when the process did.
+        val processStart = android.os.Process.getStartUptimeMillis()
+        val start = if (now - processStart < SPLASH_MIN_MS) processStart else now
+        val content = activity.findViewById<View>(android.R.id.content)
+        content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                val shown = SystemClock.uptimeMillis() - start
+                if (!(firstScreenReady() && shown >= SPLASH_MIN_MS) && shown < SPLASH_MAX_MS) return false
+                content.viewTreeObserver.removeOnPreDrawListener(this)
+                return true
+            }
+        })
+        activity.splashScreen.setOnExitAnimationListener { view ->
+            Entrance.hide()
+            view.iconView?.animate()
+                ?.scaleX(1.6f)?.scaleY(1.6f)?.alpha(0f)
+                ?.setDuration(320)
+                ?.setInterpolator(AccelerateInterpolator(1.5f))
+                ?.start()
+            view.animate()
+                .alpha(0f)
+                .setStartDelay(80)
+                .setDuration(300)
+                .setInterpolator(DecelerateInterpolator())
+                .withEndAction { view.remove() }
+                .start()
+            // Once the splash has started to clear, so the entrance is seen.
+            view.postDelayed({ Entrance.play() }, 80)
+        }
     }
 }
