@@ -631,16 +631,21 @@ private fun NoteCard(
                 onOpen(n.path)
             },
     ) {
-        // The note's first image across the top, as Keep does; nothing until (unless) it loads.
+        // The note's first image across the top, as Keep does. The space exists before it loads: a card that
+        // grows after measurement makes the staggered grid re-pack lanes while scrolling.
         if (n.image != null && n.snippet == null) {
             val image by produceState<ImageBitmap?>(null, n.image) { value = loadImage(n.image) }
-            image?.let { Image(it, null, Modifier.fillMaxWidth().heightIn(max = 200.dp), contentScale = ContentScale.Crop) }
+            Box(Modifier.fillMaxWidth().height(160.dp)) {
+                image?.let { Image(it, null, Modifier.fillMaxWidth().height(160.dp), contentScale = ContentScale.Crop) }
+            }
         }
         // A PDF shows the top of its first page rather than its text; a search shows where it matched instead.
         if (loadPdfPage != null && n.snippet == null) {
             val page by produceState<ImageBitmap?>(null, n.path, n.mtime) { value = loadPdfPage(n) }
-            page?.let {
-                Image(it, null, Modifier.fillMaxWidth().heightIn(max = 200.dp).background(Color.White), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
+            Box(Modifier.fillMaxWidth().height(160.dp).background(Color.White)) {
+                page?.let {
+                    Image(it, null, Modifier.fillMaxWidth().height(160.dp), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
+                }
             }
         }
         Column(
