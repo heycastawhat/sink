@@ -1,5 +1,6 @@
 package nz.joshp.sink.ui
 
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.mutableIntStateOf
@@ -869,6 +870,12 @@ private fun cardLines(text: String): List<CardLine> {
 fun Excerpt(text: String, small: Boolean = false) {
     val lines = remember(text) { cardLines(text) }
     if (lines.isEmpty()) return
+    // A row and Text per markdown line is costly enough to jank older devices while cards scroll in. There the same
+    // lines are one styled Text; newer devices keep the richer layout.
+    if (Build.VERSION.SDK_INT < 30) {
+        CompactExcerpt(lines, small)
+        return
+    }
     val style = if (small) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val codeBg = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
@@ -929,6 +936,50 @@ fun Excerpt(text: String, small: Boolean = false) {
             }
         }
     }
+}
+
+/** The excerpt as one text layout for older devices: checkboxes and quote bars become glyphs, markdown spans stay. */
+@Composable
+private fun CompactExcerpt(lines: List<CardLine>, small: Boolean) {
+    val style = if (small) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val codeBg = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val markBg = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+    val body = remember(lines, style, muted, codeBg, markBg, small) {
+        buildAnnotatedString {
+            lines.forEachIndexed { i, line ->
+                if (i > 0) append('\n')
+                append("  ".repeat(line.depth))
+                fun inline(s: String) = inlineMarkdown(s, codeBg, markBg)
+                when (line) {
+                    is CardLine.Task -> {
+                        append(if (line.done) "☑ " else "☐ ")
+                        if (line.done) withStyle(SpanStyle(color = muted, textDecoration = TextDecoration.LineThrough)) { append(inline(line.text)) }
+                        else append(inline(line.text))
+                    }
+                    is CardLine.Item -> {
+                        append(line.marker)
+                        append(' ')
+                        append(inline(line.text))
+                    }
+                    is CardLine.Heading -> withStyle(
+                        SpanStyle(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = if (small || line.level > 2) style.fontSize else style.fontSize * (if (line.level == 1) 1.15f else 1.07f),
+                        ),
+                    ) { append(inline(line.text)) }
+                    is CardLine.Quote -> withStyle(SpanStyle(color = muted)) {
+                        append("▍ ")
+                        append(inline(line.text))
+                    }
+                    is CardLine.Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = style.fontSize * 0.9f, background = codeBg)) { append(line.text) }
+                    is CardLine.Row -> append(inline(line.cells.joinToString(" · ")))
+                    is CardLine.Plain -> append(inline(line.text))
+                }
+            }
+        }
+    }
+    Text(body, style = style, maxLines = if (small) 4 else 10, overflow = TextOverflow.Ellipsis, modifier = Modifier.heightIn(max = 220.dp))
 }
 
 /** A card's date: the time today, "Yesterday", the weekday within the last week, else "12 Oct" (with the year when it isn't this one). */
