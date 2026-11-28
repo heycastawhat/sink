@@ -189,6 +189,7 @@ class MainActivity : ComponentActivity() {
         val content = findViewById<View>(android.R.id.content)
         content.viewTreeObserver.addOnDrawListener(object : ViewTreeObserver.OnDrawListener {
             override fun onDraw() {
+                if (!firstScreenReady) return
                 content.viewTreeObserver.removeOnDrawListener(this)
                 window.setBackgroundDrawable(null)
             }
