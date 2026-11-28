@@ -105,6 +105,9 @@ import nz.joshp.sink.data.clipUrl
 import nz.joshp.sink.data.SignIn
 import nz.joshp.sink.ui.theme.SinkTheme
 import java.io.File
+import java.lang.reflect.InvocationHandler
+import java.lang.reflect.Method
+import java.lang.reflect.Proxy
 
 private val TABS = listOf(
     NavPlace("notes", "Notes", Icons.AutoMirrored.Outlined.StickyNote2, Icons.AutoMirrored.Filled.StickyNote2),
@@ -637,8 +640,9 @@ class MainActivity : ComponentActivity() {
 
 /**
  * Keeps the splash up until its drop has landed (and the first screen is known, for [SplashExit.SPLASH_MAX_MS] at most),
- * then lifts it away as the app's entrance plays. Isolated because android.window.SplashScreen only exists on API 31;
- * loading the listener's class on older Android fails verification even when the call is never made.
+ * then lifts it away as the app's entrance plays. android.window.SplashScreen only exists on API 31, and even a guarded
+ * implementation of its listener makes Android 9 verify the missing interface while the activity starts, so the API 31
+ * types are reached only by reflection here.
  */
 @RequiresApi(31)
 private object SplashExit {
@@ -660,22 +664,38 @@ private object SplashExit {
                 return true
             }
         })
-        activity.splashScreen.setOnExitAnimationListener { view ->
-            Entrance.hide()
-            view.iconView?.animate()
-                ?.scaleX(1.6f)?.scaleY(1.6f)?.alpha(0f)
-                ?.setDuration(320)
-                ?.setInterpolator(AccelerateInterpolator(1.5f))
-                ?.start()
-            view.animate()
-                .alpha(0f)
-                .setStartDelay(80)
-                .setDuration(300)
-                .setInterpolator(DecelerateInterpolator())
-                .withEndAction { view.remove() }
-                .start()
-            // Once the splash has started to clear, so the entrance is seen.
-            view.postDelayed({ Entrance.play() }, 80)
-        }
+
+        val splashClass = Class.forName("android.window.SplashScreen")
+        val viewClass = Class.forName("android.window.SplashScreenView")
+        val listenerClass = Class.forName("android.window.SplashScreen\$OnExitAnimationListener")
+        val iconView = viewClass.getMethod("getIconView")
+        val remove = viewClass.getMethod("remove")
+        val listener = Proxy.newProxyInstance(
+            activity.classLoader,
+            arrayOf(listenerClass),
+            object : InvocationHandler {
+                override fun invoke(proxy: Any?, method: Method?, args: Array<out Any>?): Any? {
+                    val view = args?.get(0) as? View ?: return null
+                    Entrance.hide()
+                    (iconView.invoke(view) as? View)?.animate()
+                        ?.scaleX(1.6f)?.scaleY(1.6f)?.alpha(0f)
+                        ?.setDuration(320)
+                        ?.setInterpolator(AccelerateInterpolator(1.5f))
+                        ?.start()
+                    view.animate()
+                        .alpha(0f)
+                        .setStartDelay(80)
+                        .setDuration(300)
+                        .setInterpolator(DecelerateInterpolator())
+                        .withEndAction { remove.invoke(view) }
+                        .start()
+                    // Once the splash has started to clear, so the entrance is seen.
+                    view.postDelayed({ Entrance.play() }, 80)
+                    return null
+                }
+            },
+        )
+        val splashScreen = activity.javaClass.getMethod("getSplashScreen").invoke(activity)
+        splashClass.getMethod("setOnExitAnimationListener", listenerClass).invoke(splashScreen, listener)
     }
 }
