@@ -432,6 +432,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
         // Only the search's keyboard counts: beside an open note (wide screens) the keyboard may be the note's.
         val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0 && searchFocused
         val showSearch = searchShown || keyboardUp || state.query.isNotEmpty() || list.isEmpty()
+        val snackbarClearance = toolbarClearance(extra = if (showSearch) 68.dp else 0.dp)
         // Notes fade out behind the search and toolbar instead of being cut off.
         if (!keyboardUp) SearchFade(showSearch, Modifier.align(Alignment.BottomCenter))
         // Full width just above the floating tabs; with the keyboard up it sits right on top of it instead.
@@ -505,7 +506,7 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                 modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM - 16.dp + 4.dp),
             )
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = fade))
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = snackbarClearance))
         PullUpDrawer(pullUp)
     }
 
