@@ -190,8 +190,11 @@ class MainActivity : ComponentActivity() {
         content.viewTreeObserver.addOnDrawListener(object : ViewTreeObserver.OnDrawListener {
             override fun onDraw() {
                 if (!firstScreenReady) return
-                content.viewTreeObserver.removeOnDrawListener(this)
-                window.setBackgroundDrawable(null)
+                // Android 9 throws if the listener is removed while observers are being dispatched.
+                content.post {
+                    content.viewTreeObserver.removeOnDrawListener(this)
+                    window.setBackgroundDrawable(null)
+                }
             }
         })
     }
