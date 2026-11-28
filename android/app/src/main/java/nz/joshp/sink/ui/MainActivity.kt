@@ -183,6 +183,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // The splash-coloured window background is only a launch placeholder. Left in place it is painted behind
+        // every frame, doubling the work under a screen Compose already fills.
+        val content = findViewById<View>(android.R.id.content)
+        content.viewTreeObserver.addOnDrawListener(object : ViewTreeObserver.OnDrawListener {
+            override fun onDraw() {
+                content.viewTreeObserver.removeOnDrawListener(this)
+                window.setBackgroundDrawable(null)
+            }
+        })
     }
 
     /** Whether we know yet who's signed in, so the splash can go to a real screen rather than a blank one. */
