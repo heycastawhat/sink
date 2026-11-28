@@ -435,15 +435,17 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
         val snackbarClearance = toolbarClearance(extra = if (showSearch) 68.dp else 0.dp)
         // Notes fade out behind the search and toolbar instead of being cut off.
         if (!keyboardUp) SearchFade(showSearch, Modifier.align(Alignment.BottomCenter))
-        // Full width just above the floating tabs; with the keyboard up it sits right on top of it instead.
+        // Just above the floating tabs, phone-wide but capped and centred on wide screens; with the keyboard up it
+        // sits right on top of it instead.
         AnimatedVisibility(
             visible = showSearch,
             enter = slideInVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) { it / 2 } + fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),
             exit = slideOutVertically(MaterialTheme.motionScheme.fastSpatialSpec()) { it / 2 } + fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
-            modifier = Modifier.align(Alignment.BottomStart),
+            modifier = Modifier.align(Alignment.BottomCenter),
         ) {
         Row(
             Modifier
+                .widthIn(max = 640.dp)
                 .fillMaxWidth()
                 .then(if (keyboardUp) Modifier.imePadding().padding(bottom = 8.dp) else Modifier.navigationBarsPadding().padding(bottom = TOOLBAR_BOTTOM + TOOLBAR_HEIGHT + 12.dp))
                 .padding(horizontal = 16.dp),
