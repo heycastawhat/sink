@@ -109,7 +109,7 @@ private fun render(renderer: PdfRenderer, i: Int, width: Int): ImageBitmap? = ru
     synchronized(renderer) {
         renderer.openPage(i).use { page ->
             val bitmap = Bitmap.createBitmap(width, (width.toLong() * page.height / page.width).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
-            bitmap.eraseColor(android.graphics.Color.WHITE)
+            android.graphics.Canvas(bitmap).drawColor(android.graphics.Color.WHITE)
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             bitmap.asImageBitmap()
         }

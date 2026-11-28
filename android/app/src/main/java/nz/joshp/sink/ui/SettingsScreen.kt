@@ -2,6 +2,7 @@ package nz.joshp.sink.ui
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -114,8 +115,10 @@ fun SettingsScreen(
                         ) { Text(label) }
                     }
                 }
-                ToggleRow(Icons.Outlined.Palette, "Use wallpaper colours", "Off keeps the Sink purple theme.", dynamicColor) {
-                    scope.launch { settings.setDynamicColor(it) }
+                if (Build.VERSION.SDK_INT >= 31) {
+                    ToggleRow(Icons.Outlined.Palette, "Use wallpaper colours", "Off keeps the Sink purple theme.", dynamicColor) {
+                        scope.launch { settings.setDynamicColor(it) }
+                    }
                 }
             }
 

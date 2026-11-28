@@ -1,5 +1,6 @@
 package nz.joshp.sink.ui.theme
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
@@ -23,9 +24,10 @@ fun SinkTheme(
         else -> isSystemInDarkTheme()
     }
     val context = LocalContext.current
+    // Wallpaper colours are Android 12+; below that the setting falls back to the Sink theme.
     val colors = when {
-        dynamicColor && dark -> dynamicDarkColorScheme(context)
-        dynamicColor -> dynamicLightColorScheme(context)
+        dynamicColor && Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(context)
+        dynamicColor && Build.VERSION.SDK_INT >= 31 -> dynamicLightColorScheme(context)
         dark -> DarkScheme
         else -> LightScheme
     }

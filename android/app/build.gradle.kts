@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "nz.joshp.sink"
-        minSdk = 30
+        minSdk = 28
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // CI sets these from the release tag (v1.2.3 -> 1.2.3, code from the run number).

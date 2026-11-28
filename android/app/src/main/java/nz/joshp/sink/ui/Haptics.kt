@@ -9,8 +9,8 @@ import androidx.compose.ui.platform.LocalView
 
 /**
  * The few haptic beats the app uses, so a screen asks for what happened ("confirm") and not which system constant
- * fits. Newer constants are used where the OS has them and a plain click stands in before that (minSdk is 30, so
- * only API 34's need a check). Like all view haptics they follow the system's touch feedback setting.
+ * fits. Newer constants are used where the OS has them and a plain click stands in before that. Like all view
+ * haptics they follow the system's touch feedback setting.
  */
 class Haptics internal constructor(private val view: View) {
     private fun buzz(constant: Int) {
@@ -21,10 +21,10 @@ class Haptics internal constructor(private val view: View) {
     fun tick() = buzz(if (Build.VERSION.SDK_INT >= 34) HapticFeedbackConstants.SEGMENT_TICK else HapticFeedbackConstants.CLOCK_TICK)
 
     /** Something got done: a todo ticked, a note pinned, an item saved. */
-    fun confirm() = buzz(HapticFeedbackConstants.CONFIRM)
+    fun confirm() = buzz(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.CONTEXT_CLICK)
 
     /** Something was refused or is destructive: delete, cancel todo, an error. */
-    fun reject() = buzz(HapticFeedbackConstants.REJECT)
+    fun reject() = buzz(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT else HapticFeedbackConstants.CONTEXT_CLICK)
 
     /** A switch or check flipping. */
     fun toggle(on: Boolean) = buzz(
