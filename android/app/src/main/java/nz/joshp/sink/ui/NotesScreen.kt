@@ -217,22 +217,24 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
     }
 
     val hideFoldered by vm.hideFoldered.collectAsStateWithLifecycle()
-    // Search covers everything; browsing can leave filed notes to their own folders (home and every folder alike).
-    val inFolder = { n: NoteMeta ->
-        when {
-            state.results != null || !hideFoldered -> state.folder.isEmpty() || n.path.startsWith(state.folder + "/")
-            else -> n.path.substringBeforeLast('/', "") == state.folder
-        }
-    }
     // PDFs go in among the notes by date.
     val all = remember(state.notes, state.files) { if (state.files.isEmpty()) state.notes else (state.notes + state.files).sortedByDescending { it.mtime } }
-    val list = (state.results ?: all).filter(inFolder)
     val searching = state.results != null
-    // The server sends newest first; search keeps its own order (best match first).
-    val ordered = if (byTitle && !searching) list.sortedBy { it.title.lowercase() } else list
-    val pinned = if (searching) emptyList() else ordered.filter { it.pinned }
-    val others = if (searching) ordered else ordered.filterNot { it.pinned }
     val inside = state.folder.isNotEmpty()
+    // Search covers everything; browsing can leave filed notes to their own folders (home and every folder alike).
+    // Remembered so chrome animating around the list doesn't refilter every note.
+    val list = remember(state.results, all, state.folder, hideFoldered, searching) {
+        (state.results ?: all).filter { n ->
+            when {
+                searching || !hideFoldered -> state.folder.isEmpty() || n.path.startsWith(state.folder + "/")
+                else -> n.path.substringBeforeLast('/', "") == state.folder
+            }
+        }
+    }
+    // The server sends newest first; search keeps its own order (best match first).
+    val ordered = remember(list, byTitle, searching) { if (byTitle && !searching) list.sortedBy { it.title.lowercase() } else list }
+    val pinned = remember(ordered, searching) { if (searching) emptyList() else ordered.filter { it.pinned } }
+    val others = remember(ordered, searching) { if (searching) ordered else ordered.filterNot { it.pinned } }
     // Subfolders right here, unless searching (results span every folder).
     val subfolders = remember(state.folders, state.folder) { childFolders(state.folders, state.folder) }
     val unfiledHome = hideFoldered && !inside && !searching
@@ -430,14 +432,8 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
         // Only the search's keyboard counts: beside an open note (wide screens) the keyboard may be the note's.
         val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0 && searchFocused
         val showSearch = searchShown || keyboardUp || state.query.isNotEmpty() || list.isEmpty()
-        val fade by animateDpAsState(toolbarClearance(extra = if (showSearch) 68.dp else 0.dp), MaterialTheme.motionScheme.defaultSpatialSpec(), label = "fade")
         // Notes fade out behind the search and toolbar instead of being cut off.
-        if (!keyboardUp) {
-            Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(fade)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f)))),
-            )
-        }
+        if (!keyboardUp) SearchFade(showSearch, Modifier.align(Alignment.BottomCenter))
         // Full width just above the floating tabs; with the keyboard up it sits right on top of it instead.
         AnimatedVisibility(
             visible = showSearch,
@@ -588,6 +584,17 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
             onDismiss = { moving = false },
         )
     }
+}
+
+/** The bottom fade's height animates when search hides or returns. Kept apart so those frames don't recompose the grid. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SearchFade(showSearch: Boolean, modifier: Modifier = Modifier) {
+    val fade by animateDpAsState(toolbarClearance(extra = if (showSearch) 68.dp else 0.dp), MaterialTheme.motionScheme.defaultSpatialSpec(), label = "fade")
+    Box(
+        modifier.fillMaxWidth().height(fade)
+            .background(Brush.verticalGradient(listOf(Color.Transparent, MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f)))),
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -804,6 +811,8 @@ private val TABLE_ROW = Regex("""^\|.*\|\s*$""")
 private val TABLE_RULE = Regex("""^\|[\s:|-]+\|\s*$""")
 private val FENCE = Regex("""^\s*(```|~~~)""")
 private val IMAGE_LINE = Regex("""^\s*(?:(?:!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\))\s*)+$""")
+private val TABLE_CELL = Regex("""(?<!\\)\|""")
+private val CALLOUT = Regex("""^\[!(\w+)][+-]?\s*(.*)$""")
 
 /** One line of a card: what kind it is, how deep it's nested, and its text (marker removed). */
 private sealed interface CardLine {
@@ -832,14 +841,14 @@ private fun cardLines(text: String): List<CardLine> {
         val l = raw.substring(lead.length)
         // Table rows as their cells; the |---| line under the header is dropped.
         if (TABLE_ROW.matches(l)) {
-            if (!TABLE_RULE.matches(l)) out += CardLine.Row(l.trim().removePrefix("|").removeSuffix("|").split(Regex("""(?<!\\)\|""")).map { it.trim().replace("\\|", "|") })
+            if (!TABLE_RULE.matches(l)) out += CardLine.Row(l.trim().removePrefix("|").removeSuffix("|").split(TABLE_CELL).map { it.trim().replace("\\|", "|") })
             continue
         }
         TASK.find(l)?.let { out += CardLine.Task(it.groupValues[1] != " ", it.groupValues[2], depth); continue }
         HEADING.find(l)?.let { out += CardLine.Heading(it.groupValues[1].length, it.groupValues[2]); continue }
         QUOTE.find(l)?.let { m ->
             // Callout header `[!tip] Title` reads as just the title (or the type when there isn't one).
-            val body = m.groupValues[1].replace(Regex("""^\[!(\w+)][+-]?\s*(.*)$""")) { c ->
+            val body = m.groupValues[1].replace(CALLOUT) { c ->
                 c.groupValues[2].ifEmpty { c.groupValues[1].replaceFirstChar(Char::uppercase) }
             }
             if (body.isNotBlank()) out += CardLine.Quote(body, depth)
@@ -862,7 +871,8 @@ fun Excerpt(text: String, small: Boolean = false) {
     val codeBg = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val markBg = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
     val oneLine = if (small) 1 else 4
-    fun inline(s: String) = inlineMarkdown(s, codeBg, markBg)
+    @Composable
+    fun inline(s: String) = remember(s, codeBg, markBg) { inlineMarkdown(s, codeBg, markBg) }
     Column(Modifier.heightIn(max = 220.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         for (line in lines) {
             val indent = Modifier.padding(start = (line.depth * 14).dp)
@@ -941,6 +951,12 @@ private val INLINE = Regex(
 
 // `\*`, `\[`, `\#`: the character itself, never formatting.
 private val ESCAPED = Regex("""\\([!-/:-@\[-`{-~])""")
+private val PRIVATE_USE_ESCAPED = Regex("[\uE021-\uE07E]")
+private val CLEAN_EMBEDS = Regex("""!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\)""")
+private val CLEAN_WIKILINK = Regex("""\[\[([^\]|]+)\|?([^\]]*)]]""")
+private val CLEAN_LINK = Regex("""\[([^\]]+)]\([^)]*\)""")
+private val CLEAN_TASK_FIELDS = Regex("""[📅⏳🛫✅➕❌]\uFE0F?\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)|(?:⏫|🔼|🔽|🔺|⏬)\uFE0F?|🔁\uFE0F?\s*every[^📅⏳🛫✅➕❌\n]*""")
+private val SNIPPET_MARK = Regex("""\[([^\]]+)]""")
 
 /** Inline markdown as styled text: links as their text, Tasks dates dropped, bold/italic/strike/code/highlight kept. */
 private fun inlineMarkdown(s: String, codeBg: Color, markBg: Color): AnnotatedString {
@@ -962,29 +978,31 @@ private fun inlineMarkdown(s: String, codeBg: Color, markBg: Color): AnnotatedSt
         append(plain.substring(at))
     }
     // Escaped marks back to themselves: one character each, so the styles' ranges still fit.
-    return AnnotatedString(styled.text.replace(Regex("[\uE021-\uE07E]")) { (it.value[0].code - 0xE000).toChar().toString() }, styled.spanStyles)
+    return AnnotatedString(styled.text.replace(PRIVATE_USE_ESCAPED) { (it.value[0].code - 0xE000).toChar().toString() }, styled.spanStyles)
 }
 
 /** Links as their text, embeds and Tasks fields (dates, reminders, priority, repeat) dropped. Formatting marks stay for [inlineMarkdown]. */
 private fun clean(s: String) = s
-    .replace(Regex("""!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\)"""), "")
-    .replace(Regex("""\[\[([^\]|]+)\|?([^\]]*)]]""")) { it.groupValues[2].ifEmpty { it.groupValues[1] } }
-    .replace(Regex("""\[([^\]]+)]\([^)]*\)"""), "$1")
-    .replace(Regex("""[📅⏳🛫✅➕❌]\uFE0F?\s*\d{4}-\d{2}-\d{2}|\(@[^)]*\)|(?:⏫|🔼|🔽|🔺|⏬)\uFE0F?|🔁\uFE0F?\s*every[^📅⏳🛫✅➕❌\n]*"""), "")
+    .replace(CLEAN_EMBEDS, "")
+    .replace(CLEAN_WIKILINK) { it.groupValues[2].ifEmpty { it.groupValues[1] } }
+    .replace(CLEAN_LINK, "$1")
+    .replace(CLEAN_TASK_FIELDS, "")
     .trim()
 
 @Composable
 private fun highlight(snippet: String): AnnotatedString {
     val mark = SpanStyle(background = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f), fontWeight = FontWeight.SemiBold)
-    return buildAnnotatedString {
-        var rest = snippet
-        while (true) {
-            val m = Regex("""\[([^\]]+)]""").find(rest) ?: break
-            append(rest.substring(0, m.range.first))
-            withStyle(mark) { append(m.groupValues[1]) }
-            rest = rest.substring(m.range.last + 1)
+    return remember(snippet, mark) {
+        buildAnnotatedString {
+            var rest = snippet
+            while (true) {
+                val m = SNIPPET_MARK.find(rest) ?: break
+                append(rest.substring(0, m.range.first))
+                withStyle(mark) { append(m.groupValues[1]) }
+                rest = rest.substring(m.range.last + 1)
+            }
+            append(rest)
         }
-        append(rest)
     }
 }
 
