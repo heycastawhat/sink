@@ -19,9 +19,13 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onVisibilityChanged
 import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
 
@@ -113,7 +117,8 @@ fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
     } else this
     if (key == null || morph == null) return rounded
     return with(morph.shared) {
-        rounded.sharedBounds(
+        @Composable
+        fun Modifier.bounds() = sharedBounds(
             rememberSharedContentState(key),
             nav,
             enter = fadeIn(motion.defaultEffectsSpec()),
@@ -122,6 +127,15 @@ fun Modifier.morphBounds(key: String?, note: Boolean = false): Modifier {
             resizeMode = SharedTransitionScope.ResizeMode.RemeasureToBounds,
             clipInOverlayDuringTransition = OverlayClip(RoundedCornerShape(corner)),
         )
+        if (note) rounded.bounds()
+        else {
+            // Cards are prefetched beyond the viewport while scrolling; only pay shared-transition
+            // coordinate tracking for ones that actually appear.
+            var visible by remember { mutableStateOf(false) }
+            rounded
+                .onVisibilityChanged(minFractionVisible = 0.001f) { visible = it }
+                .then(if (visible) Modifier.bounds() else Modifier)
+        }
     }
 }
 

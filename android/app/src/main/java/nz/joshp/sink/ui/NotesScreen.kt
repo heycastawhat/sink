@@ -377,20 +377,20 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                     ) {
                         // Folders sit as chips in a row; with none yet, home still offers "New folder".
                         if (!searching && (subfolders.isNotEmpty() || !inside)) {
-                            item(key = "folders-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
-                            item(key = "folders", span = StaggeredGridItemSpan.FullLine) {
+                            item(key = "folders-head", contentType = "head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
+                            item(key = "folders", contentType = "folders", span = StaggeredGridItemSpan.FullLine) {
                                 FolderChips(subfolders, { countIn(all, it) }, onOpen = { haptics.tick(); vm.setFolder(it) }, onNew = { haptics.tick(); naming = true })
                             }
                         }
                         if (showRecent) {
                             if (hideFoldered) {
-                                item(key = "recent-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Recent in folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
-                                item(key = "recent", span = StaggeredGridItemSpan.FullLine) { RecentFiledRow(recent, onOpen) }
-                            } else item(key = "recent", span = StaggeredGridItemSpan.FullLine) {
+                                item(key = "recent-head", contentType = "head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Recent in folders", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
+                                item(key = "recent", contentType = "recent", span = StaggeredGridItemSpan.FullLine) { RecentFiledRow(recent, onOpen) }
+                            } else item(key = "recent", contentType = "recent", span = StaggeredGridItemSpan.FullLine) {
                                 RecentStrip(recent, recentShut, onToggle = { recentShut = !recentShut }, onOpen = onOpen)
                             }
                             // Home with everything filed away: say where the notes are.
-                            if (list.isEmpty()) item(key = "filed", span = StaggeredGridItemSpan.FullLine) {
+                            if (list.isEmpty()) item(key = "filed", contentType = "message", span = StaggeredGridItemSpan.FullLine) {
                                 Text(
                                     "Everything's filed away in folders. New notes you take here stay on this page.",
                                     style = MaterialTheme.typography.bodyMedium,
@@ -409,15 +409,15 @@ fun NotesScreen(vm: NotesViewModel, onOpen: (String) -> Unit, onNew: (text: Stri
                             }
                         }
                         if (pinned.isNotEmpty()) {
-                            item(key = "pinned-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
-                            items(pinned, key = { it.path }) { card(it, Modifier.animateItem()) }
+                            item(key = "pinned-head", contentType = "head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Pinned", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
+                            items(pinned, key = { it.path }, contentType = { "card" }) { card(it, Modifier.animateItem()) }
                         }
                         if (pinned.isNotEmpty() && others.isNotEmpty()) {
-                            item(key = "others-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
+                            item(key = "others-head", contentType = "head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Others", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         } else if (unfiledHome && others.isNotEmpty() && (subfolders.isNotEmpty() || showRecent)) {
-                            item(key = "unfiled-head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Unfiled", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
+                            item(key = "unfiled-head", contentType = "head", span = StaggeredGridItemSpan.FullLine) { SectionLabel("Unfiled", Modifier.animateItem().padding(start = 6.dp, top = 8.dp)) }
                         }
-                        items(others, key = { it.path }) { card(it, Modifier.animateItem()) }
+                        items(others, key = { it.path }, contentType = { "card" }) { card(it, Modifier.animateItem()) }
                     }
                 }
                 // Cards slide under the title rather than butting into it.
@@ -695,7 +695,7 @@ private fun SwipeCard(n: NoteMeta, onPin: () -> Unit, onArchive: suspend () -> U
     }
     val shape = RoundedCornerShape(16.dp)
     SwipeToDismissBox(
-        modifier = modifier.clip(shape),
+        modifier = modifier,
         state = state,
         onDismiss = { value ->
             // Pinned, the card moves sections with the same key, so its state stays: slide it back at once. Archived,
